@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://devkit-for-strapi.paulrichez.fr/sitemap-index.xml

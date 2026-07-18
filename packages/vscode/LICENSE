@@ -1,0 +1,51 @@
+DevKit for Strapi — VS Code extension — Combined License
+
+The published extension (.vsix) is a BUNDLE. It statically embeds code under two
+different licenses, so the distribution as a whole is governed by BOTH:
+
+  SPDX-License-Identifier: MIT AND LicenseRef-PolyForm-Shield-1.0.0
+
+  - MIT — the extension's own code and the bundled `devkit-for-strapi-core`
+    and `devkit-for-strapi-mcp` engines (the free wedge).
+  - PolyForm Shield License 1.0.0 — the bundled `devkit-for-strapi-pro`
+    (the write/refactor engine: propagated rename, move/extract, schema edits,
+    plan apply). These portions are NOT redistributable under MIT.
+
+================================================================================
+MIT License — applies to the MIT-licensed portions
+================================================================================
+
+Copyright (c) 2026 Paul Richez
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PolyForm Shield License 1.0.0 — applies to the bundled `devkit-for-strapi-pro`
+================================================================================
+
+Required Notice: Copyright (c) 2026 Paul Richez — DevKit for Strapi (Pro)
+
+The Pro (write/refactor) components embedded in this distribution are licensed
+under the PolyForm Shield License 1.0.0, NOT under MIT. Full text:
+
+  https://polyformproject.org/licenses/shield/1.0.0
+
+(also reproduced in `packages/pro/LICENSE` in the source repository). In short:
+you may use and distribute the software for any purpose EXCEPT providing a product
+that competes with DevKit for Strapi. These terms govern the Pro code.

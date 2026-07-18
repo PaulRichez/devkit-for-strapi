@@ -1,0 +1,35 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.PaulRichez/devkit-for-strapi-mcp",
+  "description": "Accurate Strapi project facts (UIDs, schemas, references) for AI agents — no more guessed UIDs.",
+  "websiteUrl": "https://devkit-for-strapi.paulrichez.fr/mcp/",
+  "version": "0.1.3",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "devkit-for-strapi-mcp",
+      "version": "0.1.3",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "valueHint": "project_path",
+          "description": "Absolute path to your Strapi project (optional — defaults to the client's workspace roots or cwd)",
+          "isRequired": false
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "DEVKIT_LICENSE_KEY",
+          "description": "Pro licence key (optional) — unlocks the plan_*/apply_* refactor tools; all read/analyse tools work without it",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

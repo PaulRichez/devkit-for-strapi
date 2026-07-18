@@ -1,0 +1,8 @@
+{
+  "name": "v5-shop",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@strapi/strapi": "^5.4.0"
+  }
+}

@@ -1,0 +1,29 @@
+# DevKit for Strapi
+
+> Accurate, project-aware tooling for Strapi *magic strings* — for your editor **and** your AI agent. It reads your project's real `schema.json`, so it never invents a UID that doesn't exist. Where Copilot guesses, DevKit knows.
+
+DevKit for Strapi is a free VS Code extension plus an MCP server that share one engine. It gives autocomplete, diagnostics, go-to-definition, find-references and rename on Strapi "magic strings" — content-type UIDs (e.g. `api::article.article`), service / controller / policy / middleware refs, component UIDs, and route handlers. It supports Strapi v4 and v5, is multi-project, and behaves identically for JavaScript and TypeScript. Core thesis: **guarantee, don't guess** — when something can't be proven (a non-literal string, an unverifiable external plugin) it stays silent rather than show a false positive. No telemetry; your code never leaves your machine.
+
+## Docs
+
+- [Installation](https://devkit-for-strapi.paulrichez.fr/getting-started/): requirements, install in VS Code / Cursor / Windsurf / Antigravity, verify activation; the MCP server ships bundled and auto-registered.
+- [Configuration](https://devkit-for-strapi.paulrichez.fr/configuration/): settings, commands, project-discovery exclusions, and MCP setup for other clients.
+- [Strapi magic strings](https://devkit-for-strapi.paulrichez.fr/concepts/): what DevKit understands, and the "guarantee, don't guess" rule.
+- [In your editor](https://devkit-for-strapi.paulrichez.fr/editor/): autocomplete, diagnostics, go-to-definition, find references & CodeLens, hover, rename.
+- [For your AI agent (MCP)](https://devkit-for-strapi.paulrichez.fr/mcp/): the MCP server and how to set it up.
+- [MCP tool reference](https://devkit-for-strapi.paulrichez.fr/mcp-tools/): all 30 tools with parameters — add_project, project selection (from/project), the read/analyse tools, and the plan → review → apply refactor contract.
+- [Pro](https://devkit-for-strapi.paulrichez.fr/pro/): the refactoring engine — propagated rename, move / extract-to-plugin, safe apply. €39.99 perpetual licence. Activate it with the editor's "Enter License Key" command (stored in the OS keychain), or by setting the `DEVKIT_LICENSE_KEY` environment variable in a standalone MCP server's `env` block.
+- [FAQ](https://devkit-for-strapi.paulrichez.fr/faq/): privacy, v4/v5, Strapi 6, supported editors, JS/TS.
+
+## MCP tools
+
+The MCP server exposes the project's real values to AI agents so they stop hallucinating magic strings. Unlike content/runtime Strapi MCP servers (which CRUD the entries of a *running* instance via an admin token), DevKit's MCP is **static code analysis**: it reads your `schema.json` from disk and answers about the *codebase* — UIDs, references, dead code, refactors — with no running Strapi instance. Use it when the goal is correct code (a controller calling `strapi.service('api::x.x')`), not content operations.
+
+- Read & analyse (free): `add_project`, `list_projects`, `list_content_types`, `list_components`, `list_artifacts`, `get_schema`, `resolve`, `validate_reference`, `find_references`, `list_routes`, `list_unused`, `list_broken_refs`, `coverage`, `find_relation_usages`, `list_refs`, `dependencies`, `dependents`, `refresh` (re-scan after out-of-band edits).
+- Refactor — plan → review → apply (Pro): `plan_rename_method`, `plan_rename_entity`, `plan_move`, `plan_move_entities`, `plan_change_relation`, `plan_rename_attribute`, `create_plugin`, `extract_to_plugin`, `apply_edits`, `apply_rename`. Every refactor returns a contractual, reviewable plan; applying is root-confined, fingerprint-verified, transactional, and self-checked. Without a licence these tools stay visible but return a "Pro required" upsell — both the plan and its apply are gated, so an agent can't sidestep the licence by applying a free plan with its own tools.
+
+## Optional
+
+- [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=paul-richez.devkit-for-strapi): install the extension.
+- [Open VSX](https://open-vsx.org/extension/paul-richez/devkit-for-strapi): install for Cursor / Windsurf / VSCodium.
+- Standalone MCP server (for AI agents outside an editor, e.g. Claude Code): run `npx devkit-for-strapi-mcp /absolute/path/to/your/strapi-project`. On npm as [devkit-for-strapi-mcp](https://www.npmjs.com/package/devkit-for-strapi-mcp) and in the official MCP registry as `io.github.PaulRichez/devkit-for-strapi-mcp`. Set `DEVKIT_LICENSE_KEY` in its `env` to unlock the Pro refactor tools.

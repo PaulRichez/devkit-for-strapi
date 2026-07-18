@@ -1,0 +1,10 @@
+# Allowlist: ship only the bundle, assets, and metadata.
+**
+!package.json
+!README.md
+!LICENSE
+!CHANGELOG.md
+!dist/**
+!assets/**
+# …but never ship source maps.
+dist/**/*.map

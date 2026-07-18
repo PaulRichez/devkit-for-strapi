@@ -1,0 +1,27 @@
+{
+  "name": "devkit-for-strapi-core",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Pure, editor-agnostic engine that understands Strapi projects (discovery, indexing, analysis, resolution, validation, completion).",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "typescript": "^5.7.2"
+  },
+  "devDependencies": {
+    "devkit-for-strapi-test-fixtures": "workspace:*",
+    "@vitest/coverage-v8": "^2.1.8",
+    "vitest": "^2.1.8"
+  }
+}

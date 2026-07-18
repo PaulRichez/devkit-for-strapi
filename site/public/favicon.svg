@@ -1,0 +1,17 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="DevKit for Strapi">
+  <defs>
+    <linearGradient id="bg" x1="8" y1="8" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8A88FF"/>
+      <stop offset="1" stop-color="#4945FF"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <g stroke="#FFFFFF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- left brace: code -->
+    <path d="M46 30 C38 30 40 42 40 50 C40 58 34 62 28 64 C34 66 40 70 40 78 C40 86 38 98 46 98"/>
+    <!-- right brace: code -->
+    <path d="M82 30 C90 30 88 42 88 50 C88 58 94 62 100 64 C94 66 88 70 88 78 C88 86 90 98 82 98"/>
+    <!-- checkmark: accurate / validated reference -->
+    <path d="M53 65 L61 74 L77 52"/>
+  </g>
+</svg>

@@ -1,0 +1,229 @@
+---
+// DevKit for Strapi — post-checkout success page. Set this URL as the Polar
+// checkout link's "Success URL": https://devkit-for-strapi.paulrichez.fr/success/
+// NOTE: the activation steps below describe the Pro gating UX (Enter License Key
+// command + DEVKIT_LICENSE_KEY env). Keep this page in sync when the gating ships.
+const VSCODE_MARKETPLACE =
+  'https://marketplace.visualstudio.com/items?itemName=paul-richez.devkit-for-strapi';
+const SUPPORT = 'pro@paulrichez.fr';
+
+// Brand mark (matches /favicon.svg): braces + checkmark on a violet gradient.
+const LOGO = `<svg width="30" height="30" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <defs><linearGradient id="dkLogoGrad" x1="8" y1="8" x2="120" y2="120" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#8A88FF"/><stop offset="1" stop-color="#4945FF"/></linearGradient></defs>
+  <rect width="128" height="128" rx="28" fill="url(#dkLogoGrad)"/>
+  <g stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M46 30 C38 30 40 42 40 50 C40 58 34 62 28 64 C34 66 40 70 40 78 C40 86 38 98 46 98"/>
+    <path d="M82 30 C90 30 88 42 88 50 C88 58 94 62 100 64 C94 66 88 70 88 78 C88 86 90 98 82 98"/>
+    <path d="M53 65 L61 74 L77 52"/>
+  </g>
+</svg>`;
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Thank you — DevKit for Strapi Pro</title>
+    <meta
+      name="description"
+      content="Your DevKit for Strapi Pro licence is ready. Here's how to find your key and activate it in your editor and your AI agent."
+    />
+    <meta name="theme-color" content="#0a0a12" />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="backdrop" aria-hidden="true">
+      <div class="aurora"></div>
+      <div class="grid-bg"></div>
+    </div>
+
+    <header class="nav">
+      <a class="brand" href="/"><span class="logo" set:html={LOGO}></span> DevKit <span class="brand-sub">for Strapi</span></a>
+      <nav class="nav-links">
+        <a href="/getting-started/">Docs</a>
+        <a href="/pro/">Pro</a>
+      </nav>
+    </header>
+
+    <main class="success">
+      <div class="check" aria-hidden="true">✓</div>
+      <p class="eyebrow"><span class="dot"></span> Payment successful</p>
+      <h1>You’re <span class="grad">Pro</span>. Thank you! 🎉</h1>
+      <p class="lede">
+        Your <strong>DevKit for Strapi Pro</strong> licence is ready. Two quick steps and the
+        refactoring engine is unlocked — in your editor <em>and</em> your AI agent.
+      </p>
+
+      <ol class="steps">
+        <li>
+          <h3>1 · Get your licence key</h3>
+          <p>It’s in your <strong>Polar receipt email</strong> — and anytime in your <strong>Polar customer portal</strong> (the link is in that email), under your purchases.</p>
+        </li>
+        <li>
+          <h3>2 · Activate it</h3>
+          <p class="where">In your editor (VS Code · Cursor · Windsurf · Antigravity):</p>
+          <p>Open the Command Palette (<span class="kbd">Ctrl/Cmd</span> + <span class="kbd">Shift</span> + <span class="kbd">P</span>) → run <code>DevKit for Strapi: Enter License Key</code> → paste it. That unlocks rename <em>and</em> the bundled MCP’s Pro tools in one go.</p>
+          <p class="where">For Claude Code, Claude Desktop, or another standalone MCP client:</p>
+          <p>
+            Not set up yet? <a href="/mcp/#setup">Connect the MCP server to your agent</a> first — copy-paste configs for Claude Code &amp; Claude Desktop. Then add <code>DEVKIT_LICENSE_KEY</code> to its <code>env</code> block to unlock the Pro tools.
+          </p>
+        </li>
+      </ol>
+
+      <div class="cta-row">
+        <a class="btn btn-lg" href="/pro/#activating-your-licence">Activation guide →</a>
+        <a class="btn btn-ghost btn-lg" href={VSCODE_MARKETPLACE}>Open the extension</a>
+      </div>
+
+      <p class="sub">
+        The licence is checked once on activation, then works offline — no telemetry, no code
+        leaving your machine.
+      </p>
+      <p class="sub">No key in your inbox, or something off? Email <a href={`mailto:${SUPPORT}`}>{SUPPORT}</a> — 14-day money-back, no questions asked.</p>
+    </main>
+
+    <footer class="footer">
+      <p class="muted small disclaimer">
+        Independent, community-built tool — not affiliated with, endorsed by, or sponsored by
+        Strapi SAS. “Strapi” is a trademark of Strapi SAS. © 2026 Paul Richez.
+      </p>
+    </footer>
+
+    <style>
+      :root {
+        --bg: #0a0a12;
+        --line: rgba(255, 255, 255, 0.08);
+        --line-2: rgba(255, 255, 255, 0.14);
+        --text: #ededf6;
+        --muted: #a2a2c0;
+        --violet-soft: #a99bff;
+        --indigo: #4945ff;
+        --teal: #34e0cf;
+        --ok: #34d399;
+        --glass: rgba(255, 255, 255, 0.025);
+        --glass-2: rgba(255, 255, 255, 0.05);
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0; background: var(--bg); color: var(--text);
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 16px; line-height: 1.6; -webkit-font-smoothing: antialiased; overflow-x: hidden;
+      }
+      a { color: inherit; text-decoration: none; }
+      h1, h3 { font-family: 'Sora', 'Inter', system-ui, sans-serif; line-height: 1.14; letter-spacing: -0.02em; font-weight: 700; }
+      ::selection { background: rgba(124, 92, 255, 0.32); color: #fff; }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        background: rgba(124, 92, 255, 0.1); border: 1px solid rgba(124, 92, 255, 0.22);
+        color: var(--violet-soft); padding: 2px 7px; border-radius: 6px; font-size: 0.9em;
+      }
+
+      .backdrop { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+      .aurora {
+        position: absolute; inset: 0;
+        background:
+          radial-gradient(46rem 46rem at 14% -12%, rgba(124, 92, 255, 0.24), transparent 60%),
+          radial-gradient(40rem 40rem at 88% -6%, rgba(73, 69, 255, 0.2), transparent 56%),
+          radial-gradient(34rem 34rem at 60% 100%, rgba(52, 224, 207, 0.08), transparent 60%);
+      }
+      .grid-bg {
+        position: absolute; inset: 0;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+        background-size: 58px 58px;
+        -webkit-mask-image: radial-gradient(120% 80% at 50% 0%, black 35%, transparent 78%);
+        mask-image: radial-gradient(120% 80% at 50% 0%, black 35%, transparent 78%);
+      }
+      .grad {
+        background-image: linear-gradient(120deg, #ffffff 0%, #c7d2fe 38%, #9d86ff 72%, #4fe6d4 112%);
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+      }
+
+      /* Nav */
+      .nav { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 18px; max-width: 1120px; margin: 0 auto; padding: 16px 24px; }
+      .nav::before { content: ''; position: absolute; inset: 8px 16px auto; height: calc(100% - 16px); background: rgba(12, 12, 22, 0.6); border: 1px solid var(--line); border-radius: 16px; backdrop-filter: blur(14px); z-index: -1; }
+      .brand { display: inline-flex; align-items: center; gap: 10px; font-family: 'Sora', sans-serif; font-weight: 700; font-size: 17px; margin-right: auto; }
+      .brand .logo { display: inline-flex; line-height: 0; filter: drop-shadow(0 4px 12px rgba(73, 69, 255, 0.4)); }
+      .brand-sub { color: var(--muted); font-weight: 500; }
+      .nav-links { display: flex; align-items: center; gap: 24px; }
+      .nav-links a { color: var(--muted); font-size: 14px; transition: color .2s; }
+      .nav-links a:hover { color: var(--text); }
+
+      /* Buttons */
+      .btn {
+        display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+        background-image: linear-gradient(135deg, #6f6cff 0%, #4945ff 100%); color: #fff;
+        padding: 11px 22px; border-radius: 999px; font-weight: 600; font-size: 15px;
+        border: 1px solid transparent; box-shadow: 0 10px 36px -14px rgba(73, 69, 255, 0.7);
+        transition: transform .18s ease, box-shadow .25s ease;
+      }
+      .btn:hover { transform: translateY(-2px); box-shadow: 0 16px 50px -14px rgba(108, 92, 255, 0.85); }
+      .btn-lg { padding: 14px 28px; font-size: 16px; }
+      .btn-ghost { background: var(--glass); background-image: none; border-color: var(--line-2); color: var(--text); backdrop-filter: blur(6px); box-shadow: none; }
+      .btn-ghost:hover { background: var(--glass-2); border-color: rgba(255, 255, 255, 0.28); box-shadow: none; }
+
+      /* Success */
+      .success { max-width: 720px; margin: 0 auto; padding: 64px 24px 40px; text-align: center; }
+      .check {
+        width: 76px; height: 76px; margin: 0 auto 26px; border-radius: 50%;
+        background: rgba(52, 224, 207, 0.12); border: 1px solid var(--teal);
+        color: var(--teal); font-size: 40px; line-height: 76px;
+        box-shadow: 0 0 50px -10px rgba(52, 224, 207, 0.5);
+      }
+      .eyebrow {
+        display: inline-flex; align-items: center; gap: 8px;
+        border: 1px solid rgba(52, 224, 207, 0.32); background: rgba(52, 224, 207, 0.1);
+        color: var(--teal); font-weight: 600; font-size: 12px; letter-spacing: 0.14em;
+        text-transform: uppercase; padding: 7px 15px; border-radius: 999px; margin: 0 0 18px;
+      }
+      .eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 10px var(--teal); }
+      h1 { font-size: clamp(30px, 5vw, 48px); font-weight: 800; margin: 0 0 20px; }
+      .lede { font-size: clamp(16px, 2.4vw, 19px); color: var(--muted); max-width: 600px; margin: 0 auto 40px; }
+      .lede strong { color: var(--text); font-weight: 600; } .lede em { font-style: normal; color: var(--text); }
+
+      .steps { list-style: none; padding: 0; margin: 0 auto 36px; max-width: 600px; text-align: left; display: grid; gap: 16px; }
+      .steps li { background: var(--glass); border: 1px solid var(--line); border-radius: 16px; padding: 24px; backdrop-filter: blur(8px); }
+      .steps h3 { margin: 0 0 12px; font-size: 18px; }
+      .steps p { margin: 0 0 8px; color: var(--muted); }
+      .steps p:last-child { margin-bottom: 0; }
+      .steps .where { color: var(--text); font-size: 14px; margin-top: 16px; font-weight: 600; }
+      .steps em { font-style: normal; color: var(--text); }
+      .steps a { color: var(--violet-soft); border-bottom: 1px solid rgba(169, 155, 255, 0.35); }
+      .kbd {
+        display: inline-block; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--line-2);
+        border-bottom-width: 2px; border-radius: 6px; padding: 1px 7px; font-size: 12px;
+        font-family: ui-monospace, monospace; color: var(--text);
+      }
+
+      .cta-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 26px; }
+      .sub { color: var(--muted); font-size: 13px; margin: 8px auto 0; max-width: 540px; }
+      .sub a { color: var(--violet-soft); border-bottom: 1px solid rgba(169, 155, 255, 0.35); }
+
+      /* Footer */
+      .footer { border-top: 1px solid var(--line); padding: 40px 24px; max-width: 1120px; margin: 60px auto 0; text-align: center; }
+      .muted { color: var(--muted); } .small { font-size: 13px; }
+      .disclaimer { max-width: 640px; margin: 0 auto; line-height: 1.6; }
+
+      @media (max-width: 680px) { .nav-links { display: none; } }
+      @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .btn:hover { transform: none; } }
+    </style>
+
+    <script is:inline>
+      for (const a of document.querySelectorAll('a[href^="http"]')) {
+        if (a.host !== location.host) {
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+        }
+      }
+    </script>
+  </body>
+</html>

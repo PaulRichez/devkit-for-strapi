@@ -1,0 +1,688 @@
+---
+// DevKit for Strapi — marketing landing. Custom Astro page at the site root;
+// Starlight serves the docs at their own slugs (/getting-started, /mcp, …).
+// Visual system: deep-ink background, violet→indigo aurora, glassmorphism cards,
+// Sora/Inter type, scroll-reveal — all self-contained CSS (no Tailwind, so the
+// Starlight docs theme is untouched).
+
+const VSCODE_MARKETPLACE =
+  'https://marketplace.visualstudio.com/items?itemName=paul-richez.devkit-for-strapi';
+const OPEN_VSX = 'https://open-vsx.org/extension/paul-richez/devkit-for-strapi';
+
+// Polar checkout link for the Pro product. Becomes a working purchase once the
+// Polar account is approved; the `|| '#pricing'` fallback below stays as a guard.
+const PRO_CHECKOUT_URL = 'https://buy.polar.sh/polar_cl_SHTELpw7g7PN8ztymJ7rL2tErNrsTadIHxNdr47n4yf';
+const proHref = PRO_CHECKOUT_URL || '#pricing';
+
+// Brand mark (matches /favicon.svg): braces + checkmark on a violet gradient.
+const LOGO = `<svg width="30" height="30" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <defs><linearGradient id="dkLogoGrad" x1="8" y1="8" x2="120" y2="120" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#8A88FF"/><stop offset="1" stop-color="#4945FF"/></linearGradient></defs>
+  <rect width="128" height="128" rx="28" fill="url(#dkLogoGrad)"/>
+  <g stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M46 30 C38 30 40 42 40 50 C40 58 34 62 28 64 C34 66 40 70 40 78 C40 86 38 98 46 98"/>
+    <path d="M82 30 C90 30 88 42 88 50 C88 58 94 62 100 64 C94 66 88 70 88 78 C88 86 90 98 82 98"/>
+    <path d="M53 65 L61 74 L77 52"/>
+  </g>
+</svg>`;
+
+const ICONS: Record<string, string> = {
+  warning:
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 3.2 2.6 20h18.8L12 3.2z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 10v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="17.3" r="1" fill="currentColor"/></svg>',
+  unlink:
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M10.5 13.5a4 4 0 0 0 6 .3l2-2a4 4 0 0 0-5.6-5.6l-1 1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M13.5 10.5a4 4 0 0 0-6-.3l-2 2a4 4 0 0 0 5.6 5.6l1-1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 4l16 16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+  sparkles:
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 3l1.8 4.6L18.5 9l-4.7 1.4L12 15l-1.8-4.6L5.5 9l4.7-1.4L12 3z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M19 14l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+  shield:
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v6c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6l7-3z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  doc:
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M13 3v5h5" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M8.5 13.2l2 2 3.6-3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  lock:
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="5" y="10.4" width="14" height="9.6" rx="2.2" stroke="currentColor" stroke-width="1.7"/><path d="M8 10.4V8a4 4 0 0 1 8 0v2.4" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="15" r="1.2" fill="currentColor"/></svg>',
+  pen:
+    '<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M14.5 6.5l3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+  robot:
+    '<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="5" y="8" width="14" height="11" rx="2.6" stroke="currentColor" stroke-width="1.7"/><path d="M12 8V4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="3.4" r="1.2" fill="currentColor"/><circle cx="9.6" cy="13" r="1.2" fill="currentColor"/><circle cx="14.4" cy="13" r="1.2" fill="currentColor"/><path d="M9.8 16.3h4.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+};
+const icon = (name: string): string => ICONS[name] ?? '';
+
+const editorFeatures = [
+  ['Autocomplete', 'Inside a magic string, suggests the real UIDs, services, controllers, policies, middlewares, components and route actions for the context at your cursor.'],
+  ['Diagnostics', 'Underlines references that don’t exist (with a “did you mean” quick fix) and flags Strapi v4 patterns used in a v5 project.'],
+  ['Go to definition', 'Ctrl/Cmd-click a string to jump to the right target — a UID to its schema.json, a route handler to the controller method, a plugin chain to the plugin’s service.'],
+  ['Find references & CodeLens', 'A "N references (Strapi)" lens on every definition, including per-method usages the TypeScript server can’t see because strapi.service(...) is typed any.'],
+  ['Hover', 'Describes what a string resolves to, with the signature for service methods and usage insights (incoming relations, route handlers, data usages).'],
+];
+
+const mcpFree = ['add_project', 'list_projects', 'list_content_types', 'list_components', 'list_artifacts', 'get_schema', 'resolve', 'validate_reference', 'find_references', 'list_routes', 'list_unused', 'list_broken_refs', 'coverage', 'find_relation_usages', 'list_refs', 'dependencies', 'dependents'];
+
+const stats = [
+  ['29', 'MCP tools for your AI agent'],
+  ['v4 & v5', 'auto-detected per project'],
+  ['JS & TS', 'ESM + CommonJS, parity-tested'],
+  ['0', 'telemetry · config · network calls'],
+];
+
+const problems = [
+  ['warning', 'Typos fail at runtime', 'UIDs, service/controller refs, policy & middleware names, route handlers — a typo compiles fine and breaks silently in production.'],
+  ['unlink', 'No autocomplete, broken nav', 'They’re plain strings: no suggestions, no validation, and go-to-definition lands nowhere.'],
+  ['sparkles', 'AI agents hallucinate them', 'Copilot, Cursor & co. happily invent UIDs and method names that don’t exist in your project.'],
+];
+
+const trust = [
+  ['shield', 'Guarantee, don’t guess', 'When something can’t be proven (a non-literal string, an unverifiable external plugin), DevKit stays silent rather than show a false positive.'],
+  ['doc', 'Reads your real schema', 'Answers come from your project’s files — not from a model’s guess. Multi-project: it discovers every Strapi project in the workspace by content.'],
+  ['lock', 'No telemetry', 'No network calls, no analytics, no code leaving your machine. A licence key is checked once on activation, then works offline.'],
+];
+
+const faqs = [
+  ['Does it send my code anywhere?', 'No. DevKit reads your project files locally and answers from them. There is no telemetry and no network call to a backend — your code never leaves your machine.'],
+  ['Strapi v4 or v5?', 'Both. The version is detected per project, and v4-in-v5 patterns (e.g. entityService) are flagged.'],
+  ['Which editors?', 'VS Code and its forks — Cursor, Windsurf, Google Antigravity, VSCodium — via the VS Code Marketplace and Open VSX.'],
+  ['What about Strapi 6?', 'No Strapi 6 is announced yet — the CMS is on v5. DevKit reads your real schema.json and detects the version per project, so it’s built to adapt when v6 lands.'],
+  ['JavaScript or TypeScript?', 'Identical behavior for ESM and CommonJS projects — challenged by a JS⇄TS parity test in the engine.'],
+  ['Found a bug, or need help?', 'Email pro@paulrichez.fr — bug reports, questions and feedback are all welcome. There’s no public issue tracker, so this inbox is the way to reach me.'],
+];
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DevKit for Strapi — Strapi autocomplete, diagnostics and refactoring (VS Code + MCP)</title>
+    <meta
+      name="description"
+      content="Accurate autocomplete, diagnostics, go-to-definition and rename for Strapi magic strings (api::… UIDs, services, policies) in VS Code, Cursor and your AI agent — read from your real schema.json."
+    />
+    <meta name="keywords" content="strapi, strapi vscode, strapi autocomplete, strapi intellisense, strapi diagnostics, strapi go to definition, strapi rename, strapi mcp, strapi ai agent, api uid, cursor, copilot" />
+    <meta name="theme-color" content="#0a0a12" />
+    <link rel="canonical" href="https://devkit-for-strapi.paulrichez.fr/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="DevKit for Strapi" />
+    <meta property="og:url" content="https://devkit-for-strapi.paulrichez.fr/" />
+    <meta property="og:title" content="DevKit for Strapi — Strapi autocomplete, diagnostics and refactoring (VS Code + MCP)" />
+    <meta
+      property="og:description"
+      content="Accurate autocomplete, diagnostics, go-to-definition and rename for Strapi magic strings (api::… UIDs, services, policies) in VS Code, Cursor and your AI agent — read from your real schema.json."
+    />
+    <meta property="og:image" content="https://devkit-for-strapi.paulrichez.fr/screenshots/diagnostics.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="DevKit for Strapi — Strapi autocomplete, diagnostics and refactoring (VS Code + MCP)" />
+    <meta
+      name="twitter:description"
+      content="Where Copilot guesses, DevKit knows. Strapi autocomplete, diagnostics, go-to-def and rename in VS Code, Cursor and your AI agent — from your real schema.json."
+    />
+    <meta name="twitter:image" content="https://devkit-for-strapi.paulrichez.fr/screenshots/diagnostics.png" />
+    <script type="application/ld+json" is:inline set:html={JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "DevKit for Strapi",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Windows, macOS, Linux",
+      "url": "https://devkit-for-strapi.paulrichez.fr/",
+      "softwareVersion": "0.1.3",
+      "description": "Accurate autocomplete, diagnostics, go-to-definition and rename for Strapi magic strings (api:: UIDs, services, policies) in VS Code, Cursor and AI agents — read from your real schema.json.",
+      "keywords": "strapi, vscode, autocomplete, diagnostics, mcp, ai agent, refactoring",
+      "author": { "@type": "Person", "name": "Paul Richez" },
+      "offers": [
+        { "@type": "Offer", "price": "0", "priceCurrency": "EUR", "name": "Free" },
+        { "@type": "Offer", "price": "39.99", "priceCurrency": "EUR", "name": "Pro (one-time)" }
+      ]
+    })} />
+    <link rel="icon" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <script is:inline>
+      document.documentElement.classList.add('js');
+    </script>
+  </head>
+  <body>
+    <!-- Page-wide aurora + grid backdrop -->
+    <div class="backdrop" aria-hidden="true">
+      <div class="aurora"></div>
+      <div class="grid-bg"></div>
+    </div>
+
+    <header class="nav">
+      <a class="brand" href="/">
+        <span class="logo" set:html={LOGO}></span>
+        DevKit <span class="brand-sub">for Strapi</span>
+      </a>
+      <nav class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#pricing">Pricing</a>
+        <a href="/getting-started/">Docs</a>
+      </nav>
+      <a class="btn btn-sm" href={VSCODE_MARKETPLACE}>Install free</a>
+    </header>
+
+    <!-- Hero -->
+    <section class="hero">
+      <p class="eyebrow reveal"><span class="dot"></span> VS Code extension · MCP server · v4 &amp; v5</p>
+      <h1 class="reveal" data-delay="60">
+        Where Copilot <span class="guess">guesses</span>,<br />DevKit <span class="grad">knows</span>.
+      </h1>
+      <p class="lede reveal" data-delay="120">
+        Accurate autocomplete, diagnostics, navigation and references on Strapi <em>magic strings</em> —
+        for your editor <strong>and</strong> your AI agent. It reads your <span class="mono">real schema.json</span>,
+        so it never invents a UID that doesn’t exist.
+      </p>
+      <div class="cta-row reveal" data-delay="180">
+        <a class="btn btn-lg" href={VSCODE_MARKETPLACE}>Install free <span class="arr">→</span></a>
+        <a class="btn btn-ghost btn-lg" href="/getting-started/">Read the docs</a>
+      </div>
+      <p class="sub reveal" data-delay="220">Free · zero config · no telemetry · also on <a href={OPEN_VSX}>Open VSX</a> · <a href="#pricing">Pro €39.99 — propagated rename &amp; safe refactors →</a></p>
+
+      <div class="code-wrap reveal" data-delay="160">
+        <div class="code-card" aria-hidden="true">
+          <div class="code-head"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span> <span class="fname">article.ts</span></div>
+          <pre><code><span class="c">// typed `any` → your IDE is blind here. DevKit isn’t.</span>
+strapi.service(<span class="ok">'api::article.article'</span>).<span class="ok">find</span>()
+strapi.documents(<span class="bad">'api::article.artcle'</span>) <span class="cbad">// ✗ unknown UID — did you mean api::article.article?</span></code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Trust strip -->
+    <section class="strip reveal">
+      <div class="stats">
+        {stats.map(([v, l]) => (
+          <div class="stat">
+            <p class="stat-v grad">{v}</p>
+            <p class="stat-l">{l}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <!-- Problem -->
+    <section class="band">
+      <h2 class="reveal">Strapi runs on strings the compiler can’t see</h2>
+      <div class="grid-3">
+        {problems.map(([ic, t, d], i) => (
+          <div class="card reveal" data-delay={String(i * 80)}>
+            <div class="ic"><span set:html={icon(ic)}></span></div>
+            <h3>{t}</h3>
+            <p>{d}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <!-- Two surfaces -->
+    <section class="band alt" id="features">
+      <h2 class="reveal">Two surfaces, one engine</h2>
+      <p class="band-lede reveal" data-delay="60">The same engine that reads your project powers both — so a fact verified once is true everywhere.</p>
+
+      <div class="grid-2">
+        <div class="panel reveal">
+          <h3 class="panel-h"><span class="ic-chip" set:html={icon('pen')}></span> In your editor</h3>
+          <ul class="feat">
+            {editorFeatures.map(([t, d]) => (
+              <li><strong>{t}.</strong> {d}</li>
+            ))}
+          </ul>
+          <img class="shot" src="/screenshots/codelens-references.png" alt="A 'N references (Strapi)' CodeLens above a Strapi definition" loading="lazy" />
+          <a class="link" href="/editor/">Editor features →</a>
+        </div>
+
+        <div class="panel reveal" data-delay="80">
+          <h3 class="panel-h"><span class="ic-chip" set:html={icon('robot')}></span> For your AI agent (MCP)</h3>
+          <p class="muted">An <a href="https://modelcontextprotocol.io">MCP</a> server exposes the same ground truth so coding agents query your project’s real values instead of inventing them. Bundled in the extension and auto-registered — zero config.</p>
+          <p class="muted small caps">Free read &amp; analysis tools</p>
+          <div class="chips">
+            {mcpFree.map((t) => <code>{t}</code>)}
+          </div>
+          <img class="shot" src="/screenshots/mcp.png" alt="An AI agent calling DevKit MCP tools to get a Strapi project's real values" loading="lazy" />
+          <a class="link" href="/mcp/">MCP setup →</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Free vs Pro -->
+    <section class="band">
+      <h2 class="reveal">Understand for free. Pay only to <em>change</em>.</h2>
+      <p class="band-lede reveal" data-delay="60">Everything that reads and navigates your project is free. The refactoring automation — propagated rename, move/extract, safe apply — is Pro.</p>
+
+      <div class="table reveal" data-delay="80">
+        <div class="trow thead"><span>Capability</span><span>Free</span><span>Pro</span></div>
+        <div class="trow"><span>Autocomplete · diagnostics · go-to-def · hover</span><span class="y">✓</span><span class="y">✓</span></div>
+        <div class="trow"><span>Find references &amp; CodeLens (incl. per-method)</span><span class="y">✓</span><span class="y">✓</span></div>
+        <div class="trow"><span>MCP read &amp; analysis (schema, resolve, validate, graph, dead-code)</span><span class="y">✓</span><span class="y">✓</span></div>
+        <div class="trow"><span><strong>Propagated rename</strong> (entity &amp; method, call-sites + files)</span><span class="n">—</span><span class="y">✓</span></div>
+        <div class="trow"><span><strong>Move / extract-to-plugin</strong>, schema edits</span><span class="n">—</span><span class="y">✓</span></div>
+        <div class="trow"><span><strong>Safe apply</strong> — verified, root-confined, self-checked writes</span><span class="n">—</span><span class="y">✓</span></div>
+      </div>
+    </section>
+
+    <!-- Pricing -->
+    <section class="band alt" id="pricing">
+      <h2 class="reveal">Pricing</h2>
+      <div class="grid-2 price">
+        <div class="plan reveal">
+          <h3>Free</h3>
+          <p class="amount">€0</p>
+          <p class="muted">Free forever.</p>
+          <ul class="ticks">
+            <li>The full editor wedge (autocomplete, diagnostics, nav, references)</li>
+            <li>The MCP server — read, validate &amp; analyse for your agent</li>
+            <li>Multi-project · v4 &amp; v5 · JS &amp; TS · no telemetry</li>
+          </ul>
+          <a class="btn btn-lg block" href={VSCODE_MARKETPLACE}>Install free →</a>
+        </div>
+
+        <div class="plan featured reveal" data-delay="80">
+          <span class="badge">Pro</span>
+          <h3>Pro</h3>
+          <p class="amount">€39.99 <span class="once">one-time</span></p>
+          <p class="muted">Perpetual licence + 1 year of updates. Per developer.</p>
+          <ul class="ticks">
+            <li>Everything in Free</li>
+            <li>Propagated rename (entity &amp; method)</li>
+            <li>Move / extract-to-plugin · schema edits</li>
+            <li>Safe apply — verified, transactional, root-confined writes</li>
+            <li>For your editor <strong>and</strong> your AI agent</li>
+          </ul>
+          <a class="btn btn-lg block" href={proHref}>Get Pro →</a>
+          <p class="muted small center">Secure checkout via Polar · 14-day money-back</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Trust -->
+    <section class="band">
+      <h2 class="reveal">Accurate by design</h2>
+      <div class="grid-3">
+        {trust.map(([ic, t, d], i) => (
+          <div class="card reveal" data-delay={String(i * 80)}>
+            <div class="ic ok"><span set:html={icon(ic)}></span></div>
+            <h3>{t}</h3>
+            <p>{d}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="band alt">
+      <h2 class="reveal">FAQ</h2>
+      <div class="faq reveal" data-delay="60">
+        {faqs.map(([q, a]) => (
+          <details>
+            <summary>{q}</summary>
+            <p>{a}</p>
+          </details>
+        ))}
+      </div>
+    </section>
+
+    <!-- Final CTA -->
+    <section class="band cta-band">
+      <div class="cta-card reveal">
+        <div class="cta-aurora" aria-hidden="true"></div>
+        <h2>Stop guessing. <span class="grad">Start knowing.</span></h2>
+        <p>Install the free wedge in seconds — your editor and your AI agent get the truth about your Strapi project, today.</p>
+        <div class="cta-row center">
+          <a class="btn btn-lg" href={VSCODE_MARKETPLACE}>Install free <span class="arr">→</span></a>
+          <a class="btn btn-ghost btn-lg" href="/mcp/">Wire up the MCP</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="foot-cols">
+        <div class="foot-brand">
+          <a class="brand" href="/"><span class="logo" set:html={LOGO}></span> DevKit <span class="brand-sub">for Strapi</span></a>
+          <p class="muted small">The code-truth layer for Strapi — editor + AI agent.</p>
+        </div>
+        <nav>
+          <a href="/getting-started/">Docs</a>
+          <a href="/mcp/">MCP</a>
+          <a href="#pricing">Pricing</a>
+          <a href={VSCODE_MARKETPLACE}>Marketplace</a>
+          <a href="mailto:pro@paulrichez.fr">Support</a>
+        </nav>
+      </div>
+      <p class="muted small disclaimer">
+        Independent, community-built tool — <strong>not affiliated with, endorsed by, or sponsored by
+        Strapi SAS.</strong> “Strapi” is a trademark of Strapi SAS, used here only to describe
+        compatibility. © 2026 Paul Richez.
+      </p>
+    </footer>
+
+    <style>
+      :root {
+        --bg: #0a0a12;
+        --bg-alt: rgba(255, 255, 255, 0.015);
+        --line: rgba(255, 255, 255, 0.08);
+        --line-2: rgba(255, 255, 255, 0.14);
+        --text: #ededf6;
+        --muted: #a2a2c0;
+        --muted-2: #71718f;
+        --violet: #7c5cff;
+        --violet-soft: #a99bff;
+        --indigo: #4945ff;
+        --teal: #34e0cf;
+        --ok: #34d399;
+        --bad: #fb7185;
+        --glass: rgba(255, 255, 255, 0.025);
+        --glass-2: rgba(255, 255, 255, 0.05);
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 16px;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+        overflow-x: hidden;
+      }
+      a { color: inherit; text-decoration: none; }
+      h1, h2, h3 {
+        font-family: 'Sora', 'Inter', system-ui, sans-serif;
+        line-height: 1.12;
+        letter-spacing: -0.02em;
+        font-weight: 700;
+      }
+      .mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      ::selection { background: rgba(124, 92, 255, 0.32); color: #fff; }
+
+      /* Backdrop */
+      .backdrop { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+      .aurora {
+        position: absolute; inset: 0;
+        background:
+          radial-gradient(46rem 46rem at 12% -12%, rgba(124, 92, 255, 0.26), transparent 60%),
+          radial-gradient(40rem 40rem at 90% -6%, rgba(73, 69, 255, 0.22), transparent 56%),
+          radial-gradient(34rem 34rem at 78% 42%, rgba(52, 224, 207, 0.08), transparent 60%);
+      }
+      .grid-bg {
+        position: absolute; inset: 0;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+        background-size: 58px 58px;
+        -webkit-mask-image: radial-gradient(120% 80% at 50% 0%, black 35%, transparent 78%);
+        mask-image: radial-gradient(120% 80% at 50% 0%, black 35%, transparent 78%);
+      }
+
+      /* Nav */
+      .nav {
+        position: sticky; top: 0; z-index: 50;
+        display: flex; align-items: center; gap: 18px;
+        max-width: 1120px; margin: 0 auto; padding: 16px 24px;
+      }
+      .nav::before {
+        content: ''; position: absolute; inset: 8px 16px auto; height: calc(100% - 16px);
+        background: rgba(12, 12, 22, 0.6); border: 1px solid var(--line);
+        border-radius: 16px; backdrop-filter: blur(14px); z-index: -1;
+      }
+      .brand { display: inline-flex; align-items: center; gap: 10px; font-family: 'Sora', sans-serif; font-weight: 700; font-size: 17px; }
+      .nav .brand { margin-right: auto; }
+      .brand .logo { display: inline-flex; line-height: 0; filter: drop-shadow(0 4px 12px rgba(73, 69, 255, 0.4)); }
+      .brand .logo :global(svg) { border-radius: 8px; }
+      .brand-sub { color: var(--muted); font-weight: 500; }
+      .nav-links { display: flex; align-items: center; gap: 26px; }
+      .nav-links a { color: var(--muted); font-size: 14px; transition: color .2s; }
+      .nav-links a:hover { color: var(--text); }
+      .nav > .btn { flex-shrink: 0; }
+
+      /* Buttons */
+      .btn {
+        display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+        background-image: linear-gradient(135deg, #6f6cff 0%, #4945ff 100%);
+        color: #fff; padding: 11px 22px; border-radius: 999px; font-weight: 600; font-size: 15px;
+        border: 1px solid transparent; box-shadow: 0 10px 36px -14px rgba(73, 69, 255, 0.7);
+        transition: transform .18s ease, box-shadow .25s ease;
+      }
+      .btn:hover { transform: translateY(-2px); box-shadow: 0 16px 50px -14px rgba(108, 92, 255, 0.85); }
+      .btn .arr { transition: transform .2s ease; }
+      .btn:hover .arr { transform: translateX(3px); }
+      .btn-sm { padding: 8px 16px; font-size: 13px; }
+      .btn-lg { padding: 14px 28px; font-size: 16px; }
+      .btn-ghost {
+        background: var(--glass); background-image: none; border-color: var(--line-2);
+        color: var(--text); backdrop-filter: blur(6px); box-shadow: none;
+      }
+      .btn-ghost:hover { background: var(--glass-2); border-color: rgba(255, 255, 255, 0.28); box-shadow: none; }
+      .btn.block { display: flex; width: 100%; margin-top: 22px; }
+
+      /* Shared accents */
+      .eyebrow {
+        display: inline-flex; align-items: center; gap: 8px;
+        border: 1px solid rgba(124, 92, 255, 0.32); background: rgba(124, 92, 255, 0.1);
+        color: var(--violet-soft); font-weight: 600; font-size: 12px;
+        letter-spacing: 0.14em; text-transform: uppercase;
+        padding: 7px 15px; border-radius: 999px; margin: 0 0 22px;
+      }
+      .eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 10px var(--teal); }
+      .grad {
+        background-image: linear-gradient(120deg, #ffffff 0%, #c7d2fe 38%, #9d86ff 72%, #4fe6d4 112%);
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+      }
+
+      /* Hero */
+      .hero { max-width: 900px; margin: 0 auto; padding: 84px 24px 36px; text-align: center; }
+      .hero h1 { font-size: clamp(36px, 6.4vw, 66px); font-weight: 800; margin: 0 0 22px; }
+      .hero h1 .guess { color: var(--muted); text-decoration: wavy underline rgba(251, 113, 133, 0.65); text-underline-offset: 7px; text-decoration-thickness: 2px; }
+      .lede { font-size: clamp(16px, 2.2vw, 20px); color: var(--muted); max-width: 700px; margin: 0 auto 32px; }
+      .lede strong { color: var(--text); font-weight: 600; }
+      .lede em, .lede .mono { font-style: normal; color: var(--text); }
+      .lede .mono { color: var(--violet-soft); }
+      .cta-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+      .sub { color: var(--muted); font-size: 13px; margin-top: 20px; }
+      .sub a { color: var(--violet-soft); border-bottom: 1px solid rgba(169, 155, 255, 0.35); }
+
+      .code-wrap { position: relative; margin: 56px auto 0; max-width: 780px; }
+      .code-wrap::before {
+        content: ''; position: absolute; inset: -40px -10px auto; height: 140px;
+        background: radial-gradient(60% 100% at 50% 0%, rgba(108, 92, 255, 0.3), transparent 70%);
+        filter: blur(20px); z-index: -1;
+      }
+      .code-card {
+        text-align: left; background: rgba(13, 13, 26, 0.92); border: 1px solid var(--line-2);
+        border-radius: 16px; overflow: hidden; backdrop-filter: blur(8px);
+        box-shadow: 0 40px 90px -45px #000, 0 0 0 1px rgba(255, 255, 255, 0.02);
+      }
+      .code-head { display: flex; align-items: center; gap: 8px; padding: 13px 16px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+      .code-head .tl { width: 11px; height: 11px; border-radius: 50%; background: #2a2a44; }
+      .code-head .tl.r { background: #ff5f57; } .code-head .tl.y { background: #febc2e; } .code-head .tl.g { background: #28c840; }
+      .code-head .fname { margin-left: 6px; font-family: ui-monospace, monospace; }
+      .code-card pre { margin: 0; padding: 20px 18px; overflow-x: auto; font-size: 14px; line-height: 1.7; }
+      .code-card .c { color: #6b7280; }
+      .code-card .ok { color: var(--ok); }
+      .code-card .bad { color: var(--bad); text-decoration: wavy underline var(--bad); text-underline-offset: 3px; }
+      .code-card .cbad { color: var(--bad); }
+
+      /* Trust strip */
+      .strip { max-width: 1000px; margin: 18px auto 0; padding: 0 24px; }
+      .stats {
+        display: grid; grid-template-columns: repeat(4, 1fr);
+        border: 1px solid var(--line); border-radius: 18px; overflow: hidden;
+        background: var(--glass); backdrop-filter: blur(8px);
+      }
+      .stat { padding: 26px 18px; text-align: center; border-left: 1px solid var(--line); }
+      .stat:first-child { border-left: none; }
+      .stat-v { font-family: 'Sora', sans-serif; font-size: clamp(24px, 3.2vw, 34px); font-weight: 800; margin: 0; }
+      .stat-l { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
+
+      /* Bands */
+      .band { padding: 92px 24px; max-width: 1120px; margin: 0 auto; }
+      .band.alt { background: var(--bg-alt); max-width: none; border-block: 1px solid var(--line); }
+      .band.alt > * { max-width: 1120px; margin-inline: auto; }
+      .band h2 { font-size: clamp(27px, 4vw, 40px); text-align: center; margin: 0 0 16px; }
+      .band h2 em { font-style: normal; color: var(--violet-soft); }
+      .band-lede { text-align: center; color: var(--muted); max-width: 680px; margin: 0 auto 48px; }
+
+      .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+      .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
+
+      .card {
+        position: relative; background: var(--glass); border: 1px solid var(--line);
+        border-radius: 18px; padding: 28px; backdrop-filter: blur(8px); overflow: hidden;
+        transition: border-color .25s, transform .25s;
+      }
+      .card:hover { border-color: var(--line-2); transform: translateY(-3px); }
+      .card::after {
+        content: ''; position: absolute; right: -50px; top: -50px; width: 150px; height: 150px;
+        background: radial-gradient(circle, rgba(124, 92, 255, 0.14), transparent 70%);
+        opacity: 0; transition: opacity .4s; pointer-events: none;
+      }
+      .card:hover::after { opacity: 1; }
+      .card h3 { margin: 0 0 10px; font-size: 18px; }
+      .card p { margin: 0; color: var(--muted); }
+      .ic {
+        display: grid; place-items: center; width: 46px; height: 46px; margin-bottom: 18px;
+        border-radius: 13px; border: 1px solid rgba(124, 92, 255, 0.3);
+        background: rgba(124, 92, 255, 0.1); color: var(--violet-soft);
+      }
+      .ic.ok { border-color: rgba(52, 224, 207, 0.32); background: rgba(52, 224, 207, 0.1); color: var(--teal); }
+      .ic span { display: inline-flex; }
+
+      /* Panels (two surfaces) */
+      .panel {
+        background: var(--glass); border: 1px solid var(--line); border-radius: 22px;
+        padding: 30px; backdrop-filter: blur(8px);
+      }
+      .panel-h { display: flex; align-items: center; gap: 12px; margin: 0 0 18px; font-size: 21px; }
+      .ic-chip {
+        display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px;
+        border: 1px solid rgba(124, 92, 255, 0.3); background: rgba(124, 92, 255, 0.12); color: var(--violet-soft);
+      }
+      .panel > p { margin: 0 0 14px; }
+      .panel a { color: var(--violet-soft); }
+      .feat { list-style: none; padding: 0; margin: 0 0 20px; display: grid; gap: 13px; }
+      .feat li { color: var(--muted); padding-left: 26px; position: relative; }
+      .feat li::before {
+        content: '✓'; position: absolute; left: 0; top: 0; color: var(--teal); font-weight: 700;
+      }
+      .feat strong { color: var(--text); font-weight: 600; }
+      .link { display: inline-block; color: var(--violet-soft) !important; font-weight: 600; font-size: 14px; }
+      .muted { color: var(--muted); } .small { font-size: 13px; } .center { text-align: center; }
+      .caps { text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; margin: 18px 0 10px; color: var(--muted-2); }
+      .chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 20px; }
+      .chips code { background: rgba(124, 92, 255, 0.1); border: 1px solid rgba(124, 92, 255, 0.22); color: var(--violet-soft); padding: 4px 9px; border-radius: 8px; font-size: 12px; }
+      .shot { display: block; width: 100%; max-height: 340px; object-fit: cover; object-position: top; border: 1px solid var(--line-2); border-radius: 12px; margin: 4px 0 18px; box-shadow: 0 20px 50px -30px #000; }
+
+      /* Table */
+      .table { border: 1px solid var(--line); border-radius: 18px; overflow: hidden; max-width: 920px; margin: 0 auto; backdrop-filter: blur(8px); }
+      .trow { display: grid; grid-template-columns: 1fr 96px 96px; align-items: center; padding: 16px 22px; border-top: 1px solid var(--line); background: var(--glass); }
+      .trow:first-child { border-top: none; }
+      .trow.thead { background: rgba(255, 255, 255, 0.04); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+      .trow span:nth-child(2), .trow span:nth-child(3) { text-align: center; }
+      .trow strong { color: var(--text); }
+      .trow .y { color: var(--teal); font-weight: 700; } .trow .n { color: #4d4d6b; }
+
+      /* Pricing */
+      .price { align-items: start; max-width: 880px; margin: 0 auto; }
+      .plan { position: relative; background: var(--glass); border: 1px solid var(--line); border-radius: 20px; padding: 32px; backdrop-filter: blur(8px); }
+      .plan.featured { border-color: rgba(124, 92, 255, 0.5); box-shadow: 0 0 0 1px rgba(124, 92, 255, 0.4), 0 40px 90px -50px rgba(124, 92, 255, 0.9); }
+      .plan.featured::before {
+        content: ''; position: absolute; inset: 0; border-radius: 20px; pointer-events: none;
+        background: radial-gradient(80% 60% at 50% 0%, rgba(124, 92, 255, 0.12), transparent 70%);
+      }
+      .badge { position: absolute; top: -13px; right: 26px; background-image: linear-gradient(135deg, #7c5cff, #4945ff); color: #fff; font-size: 12px; font-weight: 700; padding: 5px 14px; border-radius: 999px; box-shadow: 0 8px 24px -10px rgba(124, 92, 255, 0.9); }
+      .plan h3 { margin: 0 0 8px; font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+      .amount { font-family: 'Sora', sans-serif; font-size: 46px; font-weight: 800; margin: 0; }
+      .amount .once { font-size: 15px; font-weight: 500; color: var(--muted); }
+      .ticks { list-style: none; padding: 0; margin: 20px 0 0; display: grid; gap: 11px; position: relative; }
+      .ticks li { padding-left: 26px; position: relative; color: var(--muted); }
+      .ticks li::before { content: '✓'; position: absolute; left: 0; color: var(--teal); font-weight: 700; }
+
+      /* FAQ */
+      .faq { max-width: 780px; margin: 0 auto; display: grid; gap: 12px; }
+      .faq details { background: var(--glass); border: 1px solid var(--line); border-radius: 14px; padding: 2px 22px; backdrop-filter: blur(8px); transition: border-color .2s; }
+      .faq details[open] { border-color: var(--line-2); }
+      .faq summary { cursor: pointer; font-weight: 600; padding: 18px 0; list-style: none; display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+      .faq summary::-webkit-details-marker { display: none; }
+      .faq summary::after { content: '+'; color: var(--violet-soft); font-size: 20px; font-weight: 400; flex-shrink: 0; }
+      .faq details[open] summary::after { content: '−'; }
+      .faq p { margin: 0 0 20px; color: var(--muted); }
+
+      /* Final CTA */
+      .cta-band { max-width: 1120px; }
+      .cta-card {
+        position: relative; overflow: hidden; text-align: center;
+        border: 1px solid var(--line-2); border-radius: 28px; padding: 72px 32px;
+        background: rgba(255, 255, 255, 0.02); backdrop-filter: blur(8px);
+      }
+      .cta-aurora {
+        position: absolute; inset: 0; z-index: -1;
+        background:
+          radial-gradient(40rem 30rem at 20% 0%, rgba(124, 92, 255, 0.28), transparent 60%),
+          radial-gradient(36rem 30rem at 85% 100%, rgba(73, 69, 255, 0.24), transparent 60%);
+      }
+      .cta-card h2 { font-size: clamp(28px, 4.4vw, 46px); margin: 0 0 16px; }
+      .cta-card p { color: var(--muted); max-width: 540px; margin: 0 auto 30px; }
+
+      /* Footer */
+      .footer { border-top: 1px solid var(--line); padding: 56px 24px 48px; max-width: 1120px; margin: 0 auto; }
+      .foot-cols { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 24px; margin-bottom: 32px; }
+      .foot-brand .brand { margin-bottom: 12px; }
+      .footer nav { display: flex; gap: 24px; flex-wrap: wrap; align-items: center; }
+      .footer nav a { color: var(--muted); font-size: 14px; transition: color .2s; }
+      .footer nav a:hover { color: var(--text); }
+      .disclaimer { max-width: 740px; line-height: 1.6; }
+
+      /* Scroll reveal (progressive enhancement — only hides when JS is on) */
+      html.js .reveal { opacity: 0; transform: translateY(26px); transition: opacity .7s cubic-bezier(.22,1,.36,1), transform .7s cubic-bezier(.22,1,.36,1); will-change: opacity, transform; }
+      html.js .reveal.is-visible { opacity: 1; transform: none; }
+
+      @media (max-width: 860px) {
+        .grid-3, .grid-2 { grid-template-columns: 1fr; }
+        .stats { grid-template-columns: repeat(2, 1fr); }
+        .stat:nth-child(3) { border-left: none; }
+        .stat:nth-child(n+3) { border-top: 1px solid var(--line); }
+      }
+      @media (max-width: 680px) {
+        .nav-links { display: none; }
+        .band { padding: 68px 22px; }
+        .hero { padding: 60px 22px 28px; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html.js .reveal { opacity: 1; transform: none; transition: none; }
+        html { scroll-behavior: auto; }
+        .btn:hover { transform: none; }
+      }
+    </style>
+
+    <script is:inline>
+      // External links open in a new tab (internal links stay in place).
+      for (const a of document.querySelectorAll('a[href^="http"]')) {
+        if (a.host !== location.host) {
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+        }
+      }
+
+      // Scroll reveal — fade-up as elements enter the viewport.
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const reveals = document.querySelectorAll('.reveal');
+      if (reduce || !('IntersectionObserver' in window)) {
+        reveals.forEach((el) => el.classList.add('is-visible'));
+      } else {
+        const io = new IntersectionObserver(
+          (entries) => {
+            for (const e of entries) {
+              if (e.isIntersecting) {
+                const d = e.target.getAttribute('data-delay');
+                if (d) e.target.style.transitionDelay = d + 'ms';
+                e.target.classList.add('is-visible');
+                io.unobserve(e.target);
+              }
+            }
+          },
+          { threshold: 0.12, rootMargin: '0px 0px -40px 0px' },
+        );
+        reveals.forEach((el) => io.observe(el));
+      }
+    </script>
+  </body>
+</html>

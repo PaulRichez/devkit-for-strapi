@@ -1,0 +1,40 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build-extension",
+      "type": "process",
+      "command": "node",
+      "args": ["esbuild.mjs"],
+      "options": { "cwd": "${workspaceFolder}/packages/vscode" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "dedicated" },
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "watch-extension",
+      "type": "process",
+      "command": "node",
+      "args": ["esbuild.mjs", "--watch"],
+      "options": { "cwd": "${workspaceFolder}/packages/vscode" },
+      "isBackground": true,
+      "presentation": { "reveal": "never", "panel": "dedicated" },
+      "problemMatcher": {
+        "owner": "esbuild",
+        "fileLocation": ["relative", "${workspaceFolder}/packages/vscode"],
+        "pattern": {
+          "regexp": "^✘ \\[ERROR\\] (.+):(\\d+):(\\d+): (.+)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "message": 4
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\[watch\\] build started$",
+          "endsPattern": "^\\[watch\\] build finished$"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "kind": "collectionType",
+  "collectionName": "posts",
+  "info": {
+    "singularName": "post",
+    "pluralName": "posts",
+    "displayName": "Post"
+  },
+  "attributes": {
+    "title": {
+      "type": "string"
+    }
+  }
+}

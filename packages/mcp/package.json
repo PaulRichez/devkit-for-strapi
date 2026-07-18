@@ -1,0 +1,33 @@
+{
+  "name": "devkit-for-strapi-mcp",
+  "version": "0.1.3",
+  "mcpName": "io.github.PaulRichez/devkit-for-strapi-mcp",
+  "description": "MCP server exposing accurate Strapi project facts (UIDs, schemas, references) to AI coding agents — reads your real schema.json so the model stops guessing.",
+  "license": "MIT AND LicenseRef-PolyForm-Shield-1.0.0",
+  "type": "module",
+  "main": "./dist/cli.cjs",
+  "bin": {
+    "devkit-for-strapi-mcp": "./dist/cli.cjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/node": "^20.14.0",
+    "devkit-for-strapi-core": "workspace:*",
+    "devkit-for-strapi-pro": "workspace:*",
+    "devkit-for-strapi-test-fixtures": "workspace:*",
+    "esbuild": "^0.24.0",
+    "vitest": "^2.1.8",
+    "zod": "^4.4.3"
+  }
+}

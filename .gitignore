@@ -1,0 +1,18 @@
+node_modules/
+dist/
+out/
+*.vsix
+*.tsbuildinfo
+coverage/
+.DS_Store
+.vscode-test/
+
+# Private, local-only notes (strategy / business / legal). Never committed.
+private/
+
+# Local MCP client config (points at the local build; per-machine).
+.mcp.json
+
+# Keep the intentional fake node_modules used by discovery/pruning tests.
+!packages/test-fixtures/fixtures/**/node_modules/
+!packages/test-fixtures/fixtures/**/node_modules/**

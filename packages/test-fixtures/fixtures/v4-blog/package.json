@@ -1,0 +1,8 @@
+{
+  "name": "v4-blog",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@strapi/strapi": "^4.25.0"
+  }
+}
