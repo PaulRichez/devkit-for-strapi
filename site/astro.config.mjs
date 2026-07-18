@@ -18,6 +18,11 @@ function rehypeExternalLinks() {
     if (node.type === 'element' && node.tagName === 'a' && isExternal(node.properties?.href)) {
       node.properties.target = '_blank';
       node.properties.rel = ['noopener', 'noreferrer'];
+      // Track Pro checkout clicks originating from the docs (Polar links) in Umami.
+      if (String(node.properties.href).includes('buy.polar.sh')) {
+        node.properties['dataUmamiEvent'] = 'pro-checkout';
+        node.properties['dataUmamiEventCta'] = 'docs';
+      }
     }
     for (const child of node.children ?? []) walk(child);
   };
@@ -45,6 +50,16 @@ export default defineConfig({
           attrs: {
             rel: 'stylesheet',
             href: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap',
+          },
+        },
+        // Umami — privacy-friendly, self-hosted analytics. Injected into every
+        // Starlight docs page; the hand-built index/success pages add it in their own <head>.
+        {
+          tag: 'script',
+          attrs: {
+            defer: true,
+            src: 'https://analytics.paulrichez.fr/script.js',
+            'data-website-id': '6966158d-16d2-47b1-a802-20fb2eb71e19',
           },
         },
       ],

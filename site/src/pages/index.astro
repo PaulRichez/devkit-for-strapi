@@ -135,6 +135,8 @@ const faqs = [
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap"
       rel="stylesheet"
     />
+    <!-- Umami — privacy-friendly, self-hosted analytics (landing). -->
+    <script is:inline defer src="https://analytics.paulrichez.fr/script.js" data-website-id="6966158d-16d2-47b1-a802-20fb2eb71e19"></script>
     <script is:inline>
       document.documentElement.classList.add('js');
     </script>
@@ -156,7 +158,7 @@ const faqs = [
         <a href="#pricing">Pricing</a>
         <a href="/getting-started/">Docs</a>
       </nav>
-      <a class="btn btn-sm" href={VSCODE_MARKETPLACE}>Install free</a>
+      <a class="btn btn-sm" href={VSCODE_MARKETPLACE} data-umami-event="install-free" data-umami-event-cta="nav">Install free</a>
     </header>
 
     <!-- Hero -->
@@ -171,10 +173,10 @@ const faqs = [
         so it never invents a UID that doesn’t exist.
       </p>
       <div class="cta-row reveal" data-delay="180">
-        <a class="btn btn-lg" href={VSCODE_MARKETPLACE}>Install free <span class="arr">→</span></a>
+        <a class="btn btn-lg" href={VSCODE_MARKETPLACE} data-umami-event="install-free" data-umami-event-cta="hero">Install free <span class="arr">→</span></a>
         <a class="btn btn-ghost btn-lg" href="/getting-started/">Read the docs</a>
       </div>
-      <p class="sub reveal" data-delay="220">Free · zero config · no telemetry · also on <a href={OPEN_VSX}>Open VSX</a> · <a href="#pricing">Pro €39.99 — propagated rename &amp; safe refactors →</a></p>
+      <p class="sub reveal" data-delay="220">Free · zero config · no telemetry · also on <a href={OPEN_VSX} data-umami-event="install-free" data-umami-event-cta="open-vsx">Open VSX</a> · <a href="#pricing" data-umami-event="pro-interest" data-umami-event-cta="hero">Pro €39.99 — propagated rename &amp; safe refactors →</a></p>
 
       <div class="code-wrap reveal" data-delay="160">
         <div class="code-card" aria-hidden="true">
@@ -271,7 +273,7 @@ strapi.documents(<span class="bad">'api::article.artcle'</span>) <span class="cb
             <li>The MCP server — read, validate &amp; analyse for your agent</li>
             <li>Multi-project · v4 &amp; v5 · JS &amp; TS · no telemetry</li>
           </ul>
-          <a class="btn btn-lg block" href={VSCODE_MARKETPLACE}>Install free →</a>
+          <a class="btn btn-lg block" href={VSCODE_MARKETPLACE} data-umami-event="install-free" data-umami-event-cta="pricing">Install free →</a>
         </div>
 
         <div class="plan featured reveal" data-delay="80">
@@ -286,7 +288,7 @@ strapi.documents(<span class="bad">'api::article.artcle'</span>) <span class="cb
             <li>Safe apply — verified, transactional, root-confined writes</li>
             <li>For your editor <strong>and</strong> your AI agent</li>
           </ul>
-          <a class="btn btn-lg block" href={proHref}>Get Pro →</a>
+          <a class="btn btn-lg block" href={proHref} data-umami-event="pro-checkout" data-umami-event-cta="pricing">Get Pro →</a>
           <p class="muted small center">Secure checkout via Polar · 14-day money-back</p>
         </div>
       </div>
@@ -326,7 +328,7 @@ strapi.documents(<span class="bad">'api::article.artcle'</span>) <span class="cb
         <h2>Stop guessing. <span class="grad">Start knowing.</span></h2>
         <p>Install the free wedge in seconds — your editor and your AI agent get the truth about your Strapi project, today.</p>
         <div class="cta-row center">
-          <a class="btn btn-lg" href={VSCODE_MARKETPLACE}>Install free <span class="arr">→</span></a>
+          <a class="btn btn-lg" href={VSCODE_MARKETPLACE} data-umami-event="install-free" data-umami-event-cta="cta">Install free <span class="arr">→</span></a>
           <a class="btn btn-ghost btn-lg" href="/mcp/">Wire up the MCP</a>
         </div>
       </div>
