@@ -42,6 +42,31 @@ schemas, references, routes, dead code, broken refs and the dependency graph.
 
 ![An AI agent querying the project's real values through the bundled DevKit MCP server](https://devkit-for-strapi.paulrichez.fr/screenshots/mcp.png)
 
+### Use it — no setup
+
+**In VS Code, Cursor, Windsurf, Antigravity:** nothing to configure. Open your agent
+(Copilot Chat in **Agent** mode, or your editor's agent) — DevKit's tools are already
+there. Try:
+
+- *"Which content types exist in this project?"*
+- *"What uses `api::article.article`?"*
+- *"Is `api::article.artcle` a valid reference?"*
+
+The agent answers from your real `schema.json` — not from a guess.
+
+**In Claude Code / Claude Desktop** (or any standalone MCP client), point it at the server:
+
+```json
+{
+  "mcpServers": {
+    "devkit-for-strapi": {
+      "command": "npx",
+      "args": ["-y", "devkit-for-strapi-mcp", "/absolute/path/to/your/strapi-project"]
+    }
+  }
+}
+```
+
 → See [For your AI agent (MCP)](https://devkit-for-strapi.paulrichez.fr/mcp/) and the
 [tool reference](https://devkit-for-strapi.paulrichez.fr/mcp-tools/).
 

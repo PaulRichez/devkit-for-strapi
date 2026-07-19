@@ -85,6 +85,29 @@ pas deviner — applied to writes too.
   also accepts the workspace folder via the client's `roots` capability (so it just works wherever you
   open it), and a tool (`add_project`) to register a project on demand.
 
+For Claude Code, Claude Desktop, or any standalone MCP client:
+
+```json
+{
+  "mcpServers": {
+    "devkit-for-strapi": {
+      "command": "npx",
+      "args": ["-y", "devkit-for-strapi-mcp", "/absolute/path/to/your/strapi-project"]
+    }
+  }
+}
+```
+
+### Try it
+
+Once it's wired, ask your agent:
+
+- *"Which content types exist in this project?"*
+- *"What uses `api::article.article`?"*
+- *"Is `api::article.artcle` a valid reference?"*
+
+It answers from your real `schema.json` — not from a guess.
+
 ---
 
 ## Accurate by design
