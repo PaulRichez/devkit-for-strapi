@@ -21,10 +21,19 @@ import { registerTools } from './tools';
  * Indexing runs off the critical path — tool handlers `await ready` so the first
  * calls block until the index is built rather than answering empty.
  */
+/**
+ * The running package version, injected at build time by esbuild from
+ * `package.json` (see esbuild.mjs). The MCP handshake must report the version
+ * that is *actually* running — clients display it, and a bug report is useless
+ * without it. Guarded with `typeof` so an unbundled run (vitest) can't throw.
+ */
+declare const __DEVKIT_MCP_VERSION__: string | undefined;
+const VERSION = typeof __DEVKIT_MCP_VERSION__ === 'string' ? __DEVKIT_MCP_VERSION__ : '0.0.0-dev';
+
 export async function runServer(argv: string[]): Promise<void> {
   const fs = new NodeFileSystem();
   const engine = createEngine(fs);
-  const server = new McpServer({ name: 'devkit-for-strapi', version: '0.1.0' });
+  const server = new McpServer({ name: 'devkit-for-strapi', version: VERSION });
 
   const cliRoots = explicitRoots(argv);
   // The roots actually indexed — surfaced to the tools so a "no project found"

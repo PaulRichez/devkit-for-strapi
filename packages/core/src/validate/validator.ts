@@ -108,7 +108,7 @@ function validateContentType(project: StrapiProject, ref: ReferenceContext): Dia
   if (project.version === 5 && ref.apiStyle === 'entityService') {
     return diag(
       ref,
-      `'strapi.entityService' was removed in Strapi v5. Use 'strapi.documents()' instead.`,
+      `'strapi.entityService' is deprecated in Strapi v5. Use 'strapi.documents()' instead.`,
       DiagnosticCode.V4InV5,
       'warning',
     );

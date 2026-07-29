@@ -1,14 +1,22 @@
 import * as esbuild from 'esbuild';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const watch = process.argv.includes('--watch');
 
+// Single source of truth for the version the server reports in the MCP handshake:
+// package.json. Hard-coding it in server.ts silently drifted (it still said 0.1.0
+// at 0.1.3), which made every client — and every bug report — name the wrong version.
+const pkg = JSON.parse(readFileSync(resolve(here, 'package.json'), 'utf8'));
+
 // Neutralise the DEVKIT_DEV dogfood override in the published bin so it can't be
 // flipped on via an env var. A --watch dev build keeps it live (local dogfood).
-const define = watch ? {} : { 'process.env.DEVKIT_DEV': '"0"' };
+const define = {
+  __DEVKIT_MCP_VERSION__: JSON.stringify(pkg.version),
+  ...(watch ? {} : { 'process.env.DEVKIT_DEV': '"0"' }),
+};
 
 // Bundle core + the MCP SDK into a single Node file. CJS (`.cjs`) — `typescript`
 // (bundled, for AST parsing) does dynamic `require()`, which an ESM bundle can't

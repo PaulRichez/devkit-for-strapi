@@ -45,7 +45,7 @@ export function describeHover(
   switch (ctx.kind) {
     case 'content-type-uid': {
       if (ctx.apiStyle === 'entityService' && project.version === 5) {
-        md = `⚠️ \`strapi.entityService\` was removed in **Strapi v5** — use \`strapi.documents()\`.`;
+        md = `⚠️ \`strapi.entityService\` is deprecated in **Strapi v5** — use \`strapi.documents()\`.`;
         break;
       }
       const ct = idx.contentTypes.get(qualifyPluginRef(ctx.text, ctx.pluginName));
