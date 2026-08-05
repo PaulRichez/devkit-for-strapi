@@ -5,9 +5,15 @@
 // Sora/Inter type, scroll-reveal — all self-contained CSS (no Tailwind, so the
 // Starlight docs theme is untouched).
 
+import vscodeManifest from '../../../packages/vscode/package.json';
+
 const VSCODE_MARKETPLACE =
   'https://marketplace.visualstudio.com/items?itemName=paul-richez.devkit-for-strapi';
 const OPEN_VSX = 'https://open-vsx.org/extension/paul-richez/devkit-for-strapi';
+
+// Resolved at build time from the extension manifest — a hard-coded version here
+// goes stale silently on every release, exactly like the MCP server's did.
+const VERSION: string = vscodeManifest.version;
 
 // Polar checkout link for the Pro product. Becomes a working purchase once the
 // Polar account is approved; the `|| '#pricing'` fallback below stays as a guard.
@@ -53,10 +59,10 @@ const editorFeatures = [
   ['Hover', 'Describes what a string resolves to, with the signature for service methods and usage insights (incoming relations, route handlers, data usages).'],
 ];
 
-const mcpFree = ['add_project', 'list_projects', 'list_content_types', 'list_components', 'list_artifacts', 'get_schema', 'resolve', 'validate_reference', 'find_references', 'list_routes', 'list_unused', 'list_broken_refs', 'coverage', 'find_relation_usages', 'list_refs', 'dependencies', 'dependents'];
+const mcpFree = ['add_project', 'refresh', 'list_projects', 'list_content_types', 'list_components', 'list_artifacts', 'get_schema', 'resolve', 'validate_reference', 'find_references', 'list_routes', 'list_unused', 'list_broken_refs', 'coverage', 'find_relation_usages', 'list_refs', 'dependencies', 'dependents'];
 
 const stats = [
-  ['29', 'MCP tools for your AI agent'],
+  ['30', 'MCP tools for your AI agent'],
   ['v4 & v5', 'auto-detected per project'],
   ['JS & TS', 'ESM + CommonJS, parity-tested'],
   ['0', 'telemetry · config · network calls'],
@@ -119,7 +125,7 @@ const faqs = [
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "Windows, macOS, Linux",
       "url": "https://devkit-for-strapi.paulrichez.fr/",
-      "softwareVersion": "0.1.3",
+      "softwareVersion": VERSION,
       "description": "Accurate autocomplete, diagnostics, go-to-definition and rename for Strapi magic strings (api:: UIDs, services, policies) in VS Code, Cursor and AI agents — read from your real schema.json.",
       "keywords": "strapi, vscode, autocomplete, diagnostics, mcp, ai agent, refactoring",
       "author": { "@type": "Person", "name": "Paul Richez" },

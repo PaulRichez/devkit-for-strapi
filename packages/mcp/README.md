@@ -37,7 +37,7 @@ Run the client from your project directory (or pass the path: `"args": ["-y", "d
 
 ### VS Code
 
-Install the **DevKit for Strapi** extension — it bundles this server and registers it automatically (no config). It also passes your workspace folders, so multi-root works out of the box.
+Install the **[DevKit for Strapi](https://marketplace.visualstudio.com/items?itemName=paul-richez.devkit-for-strapi)** extension — it bundles this server and registers it automatically (no config). It also passes your workspace folders, so multi-root works out of the box.
 
 ## License
 

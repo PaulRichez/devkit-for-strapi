@@ -14,7 +14,7 @@ support for Strapi [magic strings](/concepts/) — by reading your real `schema.
 
 ## Install the extension
 
-- **VS Code** — search **"DevKit for Strapi"** in the Extensions view (VS Code Marketplace) and install.
+- **VS Code** — install from the **[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=paul-richez.devkit-for-strapi)**, or search **"DevKit for Strapi"** in the Extensions view.
 - **Cursor / Windsurf / Antigravity / VSCodium** — install from **[Open VSX](https://open-vsx.org/extension/paul-richez/devkit-for-strapi)**.
 
 Open a Strapi project and it works immediately.

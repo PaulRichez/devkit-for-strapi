@@ -3,7 +3,7 @@ title: MCP tool reference
 description: Every MCP tool an AI agent can call — read, analyse, and refactor a Strapi project with verified, real values.
 ---
 
-The MCP server exposes **29 stdio tools** (27 active + 2 deprecated aliases) so an AI agent works from your project's
+The MCP server exposes **30 stdio tools** (28 active + 2 deprecated aliases) so an AI agent works from your project's
 **real values** instead of grepping for them. Three layers: **Know** (read the truth),
 **Understand** (health & graph), **Refactor** (plan → review → apply).
 
@@ -40,6 +40,16 @@ survives server respawns. Returns the projects now known.
 | `validate_reference` | `ref` | `valid` \| `unknown` (+ `didYouMean`) \| `external` (a plugin not in the workspace — unverifiable). Call before writing a magic string. |
 | `find_references` | `ref` \| `refs[]`, `compact?`, `limit?`, `offset?` | Every call-site of a UID / service / controller / handler (or `ref#method`). Returns `total`, then a page of up to `limit` hits (default 50; `truncated: true` when more remain): `path:line:col [via] snippet`. |
 | `list_routes` | — | The HTTP route table (method, path, handler, policies, middlewares) — explicit + auto-CRUD from `createCoreRouter`. Static, no Strapi boot. |
+| `refresh` | — | Re-scan every discovered project from disk and rebuild the index. Returns the projects now known. |
+
+:::caution[Changes made outside the session]
+The server **does not watch the filesystem**. Files created, edited or deleted
+outside it — a manual edit, another tool, a `git checkout`/`pull`, a branch switch —
+stay invisible to every other tool until **`refresh`** runs. Call it before
+`find_references` / `list_broken_refs` / `list_unused` / `coverage` whenever files
+may have changed outside `apply_edits`/`apply_rename`, or they reason over a stale
+snapshot and can wrongly report 0 references. It's cheap to call defensively.
+:::
 
 Each reference is tagged with a **`via`** — how the call reaches the entity: the
 call form (`service`, `documents`, `query`, `schema` relation, `route` handler,

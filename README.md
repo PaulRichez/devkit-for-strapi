@@ -56,7 +56,7 @@ Inside a Strapi project — zero config, no type generation:
 
 The same engine, exposed over the [Model Context Protocol](https://modelcontextprotocol.io) so coding
 agents (Claude Code, Copilot agent mode, Cursor, …) **query your project's real values instead of
-grepping for them**. 29 stdio tools, in three layers:
+grepping for them**. 30 stdio tools, in three layers:
 
 **Know** — read the project's truth
 `list_projects` · `list_content_types` · `list_components` · `list_artifacts` · `get_schema` · `resolve` ·
@@ -129,8 +129,14 @@ It answers from your real `schema.json` — not from a guess.
 
 ## Install
 
-**Editor** — search **“DevKit for Strapi”** in the Extensions view (VS Code Marketplace), or install from
-[Open VSX](https://open-vsx.org) for Cursor / Windsurf / VSCodium. Open a Strapi project and it works.
+**Editor** — install from the
+[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=paul-richez.devkit-for-strapi),
+or from [Open VSX](https://open-vsx.org/extension/paul-richez/devkit-for-strapi) for Cursor / Windsurf /
+VSCodium (or just search **“DevKit for Strapi”** in the Extensions view). Open a Strapi project and it works.
+
+**AI agent, outside an editor** — the MCP server is on npm as
+[`devkit-for-strapi-mcp`](https://www.npmjs.com/package/devkit-for-strapi-mcp) (and in the official MCP
+registry as `io.github.PaulRichez/devkit-for-strapi-mcp`): `npx -y devkit-for-strapi-mcp /path/to/project`.
 
 **Requirements** — a Strapi **v4** or **v5** project, and VS Code `1.101+` (or a compatible fork). No
 configuration, no type generation, no extra setup.

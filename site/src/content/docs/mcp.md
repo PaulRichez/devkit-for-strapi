@@ -71,9 +71,11 @@ If your client reports `npx` was not found, wrap it:
 :::
 
 :::note
-The standalone `devkit-for-strapi-mcp` npm package publishes with the public
-release. Until then, the VS Code-family editors above ship the server **bundled**
-(zero-config) — that's the supported path today.
+The standalone server is published on npm as
+[`devkit-for-strapi-mcp`](https://www.npmjs.com/package/devkit-for-strapi-mcp), and
+listed in the official MCP registry as `io.github.PaulRichez/devkit-for-strapi-mcp`.
+In the VS Code-family editors above you don't need it — the same server ships
+**bundled** in the extension (zero-config).
 :::
 
 ## Tools
