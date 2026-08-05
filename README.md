@@ -9,6 +9,21 @@
   Where Copilot <strong>guesses</strong>, DevKit for Strapi <strong>knows</strong>: it reads your real <code>schema.json</code>.
 </p>
 
+<p align="center">
+  <a href="https://marketplace.visualstudio.com/items?itemName=paul-richez.devkit-for-strapi"><img alt="VS Code Marketplace" src="https://img.shields.io/visual-studio-marketplace/v/paul-richez.devkit-for-strapi?label=VS%20Code%20Marketplace&color=4945FF"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=paul-richez.devkit-for-strapi"><img alt="Installs" src="https://img.shields.io/visual-studio-marketplace/i/paul-richez.devkit-for-strapi?label=installs&color=4945FF"></a>
+  <a href="https://open-vsx.org/extension/paul-richez/devkit-for-strapi"><img alt="Open VSX" src="https://img.shields.io/open-vsx/v/paul-richez/devkit-for-strapi?label=Open%20VSX&color=7c5cff"></a>
+  <a href="https://www.npmjs.com/package/devkit-for-strapi-mcp"><img alt="npm — MCP server" src="https://img.shields.io/npm/v/devkit-for-strapi-mcp?label=npm%20(MCP)&color=cb3837"></a>
+  <a href="#license"><img alt="License" src="https://img.shields.io/badge/license-MIT%20%2B%20PolyForm-blue"></a>
+</p>
+
+<p align="center">
+  <a href="https://devkit-for-strapi.paulrichez.fr">Docs</a> ·
+  <a href="https://marketplace.visualstudio.com/items?itemName=paul-richez.devkit-for-strapi">Install for VS Code</a> ·
+  <a href="https://open-vsx.org/extension/paul-richez/devkit-for-strapi">Cursor / Windsurf</a> ·
+  <a href="https://www.npmjs.com/package/devkit-for-strapi-mcp">MCP server on npm</a>
+</p>
+
 ---
 
 ## Why

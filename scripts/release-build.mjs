@@ -184,6 +184,18 @@ const tgz = readdirSync(mcpDir).filter((f) => f.endsWith('.tgz'));
 if (!vsix.length) die('No .vsix produced.');
 if (!tgz.length) die('No npm tarball produced.');
 
+// `vsce package` re-runs `vscode:prepublish`, which rebuilds the bundle — so the
+// check in step 7 validated a file that has since been regenerated. Re-check the
+// bundle as it stands *after* packaging: that is the one inside the .vsix.
+step(9, 'Re-verifying after packaging…');
+for (const bundle of bundles) {
+  const stubbed = readFileSync(bundle, 'utf8').includes(STUB_MARKER);
+  const name = bundle.replace(RELEASE_DIR, '').replace(/\\/g, '/');
+  if (!FREE && stubbed) die(`${name} was rebuilt as a STUB during packaging. Aborting.`);
+  if (FREE && !stubbed) die(`${name} lost its stub marker during packaging, but --free was requested.`);
+  log(`  ✓ ${name} — still ${stubbed ? 'free tier (stub)' : 'Pro engine'}`);
+}
+
 const size = (p) => `${(statSync(p).size / 1024 / 1024).toFixed(2)} MB`;
 
 // ---------------------------------------------------------------------------
