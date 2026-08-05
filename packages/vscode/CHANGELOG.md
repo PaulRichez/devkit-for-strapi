@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.1.4
+
+Accuracy and plumbing — no new features. Both fixes were found by running the
+engine against real public Strapi v5 projects rather than the test fixtures.
+
+**Corrections**
+
+- The v4-in-v5 warning claimed `strapi.entityService` **"was removed in Strapi
+  v5"**. It is *deprecated*, not removed — it still runs. Telling someone their
+  working code was removed is the kind of false positive "guarantee, don't
+  guess" exists to prevent; the wording now matches Strapi's own docs.
+- The MCP server announced version **`0.1.0`** in its handshake regardless of
+  what was actually running — it was hard-coded and never bumped. It now reports
+  the real version, injected at build time from `package.json`, so a client can
+  display it and a bug report can name it.
+
+**Docs**
+
+- Both READMEs now show how to *use* the bundled MCP server — agent mode, example
+  prompts, and a copy-paste config for Claude Code / Claude Desktop. It was
+  described but never explained, so installers had no path to it.
+- Bug reports and questions now go to **[GitHub issues](https://github.com/PaulRichez/devkit-for-strapi/issues)**
+  (the repository is public); anything about a Pro licence stays on email.
+- Corrected the documented MCP tool count (30 = 28 active + 2 deprecated
+  aliases), documented the previously missing `refresh` tool, and warned that the
+  server does not watch the filesystem — after a `git pull` or branch switch the
+  index is stale until `refresh` runs.
+
 ## 0.1.3
 
 Bug-fix release — accuracy hardening (from two internal audits). Versions are now
