@@ -15,8 +15,9 @@
 
 Strapi runs on _magic strings_ — UIDs like `api::article.article`, service/controller refs, policy and
 middleware names, component UIDs, route `handler`s. In most editors they have **no autocomplete, no
-validation, and broken navigation**, and a typo fails **silently at runtime**. AI coding assistants make
-it worse: they happily **hallucinate** UIDs and method names that don't exist in your project.
+validation, and broken navigation**, and a typo fails **silently at runtime**. AI coding assistants don't
+close the gap: an inline completion is a plausible guess, not a lookup — and an agent that greps for
+references inherits the same blind spots you do.
 
 DevKit for Strapi reads the **real** content-types, components, services, controllers, policies,
 middlewares and routes of every Strapi project in your workspace, and turns those strings into
@@ -55,7 +56,7 @@ Inside a Strapi project — zero config, no type generation:
 
 The same engine, exposed over the [Model Context Protocol](https://modelcontextprotocol.io) so coding
 agents (Claude Code, Copilot agent mode, Cursor, …) **query your project's real values instead of
-inventing them**. 29 stdio tools, in three layers:
+grepping for them**. 29 stdio tools, in three layers:
 
 **Know** — read the project's truth
 `list_projects` · `list_content_types` · `list_components` · `list_artifacts` · `get_schema` · `resolve` ·

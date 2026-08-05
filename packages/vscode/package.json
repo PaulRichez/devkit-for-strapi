@@ -28,8 +28,12 @@
     "cursor",
     "copilot"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PaulRichez/devkit-for-strapi.git"
+  },
   "bugs": {
-    "email": "pro@paulrichez.fr"
+    "url": "https://github.com/PaulRichez/devkit-for-strapi/issues"
   },
   "homepage": "https://devkit-for-strapi.paulrichez.fr",
   "main": "./dist/extension.js",

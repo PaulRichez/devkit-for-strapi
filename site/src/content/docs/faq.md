@@ -39,6 +39,9 @@ Strapi SAS, used only to describe compatibility.
 
 ## Found a bug, or need help?
 
-Email **[pro@paulrichez.fr](mailto:pro@paulrichez.fr)** — bug reports, questions
-and feedback are all welcome. There’s no public issue tracker, so this inbox is
-the way to reach me.
+**Bugs, questions and feature ideas** →
+[open an issue on GitHub](https://github.com/PaulRichez/devkit-for-strapi/issues).
+A missed magic-string pattern or a v4/v5 quirk is exactly what I want to hear about.
+
+**Anything about a [Pro](/pro/) licence** (key not received, refund, billing) →
+email **[pro@paulrichez.fr](mailto:pro@paulrichez.fr)** — that stays private.

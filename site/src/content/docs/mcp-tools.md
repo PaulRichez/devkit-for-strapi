@@ -4,7 +4,7 @@ description: Every MCP tool an AI agent can call — read, analyse, and refactor
 ---
 
 The MCP server exposes **29 stdio tools** (27 active + 2 deprecated aliases) so an AI agent works from your project's
-**real values** instead of inventing them. Three layers: **Know** (read the truth),
+**real values** instead of grepping for them. Three layers: **Know** (read the truth),
 **Understand** (health & graph), **Refactor** (plan → review → apply).
 
 See [For your AI agent (MCP)](/mcp/) for setup. In VS Code, Cursor, Windsurf and

@@ -5,7 +5,7 @@ description: The MCP server that gives AI coding agents the real values of your 
 
 The same engine, exposed over the [Model Context Protocol](https://modelcontextprotocol.io)
 so coding agents (Claude Code, Copilot agent mode, Cursor, …) **query your
-project’s real values instead of inventing them.**
+project’s real values instead of grepping for them.**
 
 ## Setup
 

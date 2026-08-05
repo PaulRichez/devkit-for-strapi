@@ -5,7 +5,8 @@ Accurate, project-aware editor support for Strapi **magic strings** — UIDs lik
 Where Copilot **guesses**, DevKit for Strapi **knows**: it reads your real `schema.json`.
 
 Works in VS Code and its forks (Cursor, Windsurf, Google Antigravity). Same engine powers
-a bundled **MCP server**, so your AI agent answers from the same truth instead of hallucinating.
+a bundled **MCP server**, so your AI agent answers from the same truth — one deterministic lookup
+instead of grepping your project.
 
 📖 Full docs & guides → **[devkit-for-strapi.paulrichez.fr](https://devkit-for-strapi.paulrichez.fr)**
 

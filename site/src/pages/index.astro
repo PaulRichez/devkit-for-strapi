@@ -65,7 +65,7 @@ const stats = [
 const problems = [
   ['warning', 'Typos fail at runtime', 'UIDs, service/controller refs, policy & middleware names, route handlers — a typo compiles fine and breaks silently in production.'],
   ['unlink', 'No autocomplete, broken nav', 'They’re plain strings: no suggestions, no validation, and go-to-definition lands nowhere.'],
-  ['sparkles', 'AI agents hallucinate them', 'Copilot, Cursor & co. happily invent UIDs and method names that don’t exist in your project.'],
+  ['sparkles', 'AI agents work blind too', 'An inline completion is a plausible guess, not a lookup — and an agent that greps for references inherits the same blind spots.'],
 ];
 
 const trust = [
@@ -233,7 +233,7 @@ strapi.documents(<span class="bad">'api::article.artcle'</span>) <span class="cb
 
         <div class="panel reveal" data-delay="80">
           <h3 class="panel-h"><span class="ic-chip" set:html={icon('robot')}></span> For your AI agent (MCP)</h3>
-          <p class="muted">An <a href="https://modelcontextprotocol.io">MCP</a> server exposes the same ground truth so coding agents query your project’s real values instead of inventing them. Bundled in the extension and auto-registered — zero config.</p>
+          <p class="muted">An <a href="https://modelcontextprotocol.io">MCP</a> server exposes the same ground truth so coding agents query your project’s real values instead of grepping for them. Bundled in the extension and auto-registered — zero config.</p>
           <p class="muted small caps">Free read &amp; analysis tools</p>
           <div class="chips">
             {mcpFree.map((t) => <code>{t}</code>)}

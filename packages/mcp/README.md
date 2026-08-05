@@ -1,6 +1,6 @@
 # devkit-for-strapi-mcp
 
-An **MCP server** that gives AI coding agents the *truth* about your Strapi project. It reads your real `schema.json` files and exposes the actual UIDs, schemas, and references — so the model stops guessing magic strings like `api::article.article`, service names, or field names.
+An **MCP server** that gives AI coding agents the *truth* about your Strapi project. It reads your real `schema.json` files and exposes the actual UIDs, schemas, and references — so an agent looks up magic strings like `api::article.article`, service names, or field names instead of grepping for them.
 
 Same engine as the [DevKit for Strapi](https://github.com/PaulRichez/devkit-for-strapi) VS Code extension, exposed to agents instead of humans. The read/analyse tools are free; the refactor tools (rename, move, extract) are Pro. Works on Strapi v4 and v5, in JS and TS, with no codegen.
 
