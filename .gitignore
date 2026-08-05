@@ -13,6 +13,10 @@ private/
 # Local MCP client config (points at the local build; per-machine).
 .mcp.json
 
+# Release staging (scripts/release-build.mjs) — a throwaway export of HEAD with
+# the private Pro engine overlaid. Must never be committed.
+.release/
+
 # Keep the intentional fake node_modules used by discovery/pruning tests.
 !packages/test-fixtures/fixtures/**/node_modules/
 !packages/test-fixtures/fixtures/**/node_modules/**
