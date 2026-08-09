@@ -70,7 +70,7 @@ Inside a Strapi project — zero config, no type generation:
 
 The same engine, exposed over the [Model Context Protocol](https://modelcontextprotocol.io) so coding
 agents (Claude Code, Copilot agent mode, Cursor, …) **query your project's real values instead of
-grepping for them**. 30 stdio tools, in three layers:
+grepping for them**. 31 stdio tools, in three layers:
 
 **Know** — read the project's truth
 `list_projects` · `list_content_types` · `list_components` · `list_artifacts` · `get_schema` · `resolve` ·

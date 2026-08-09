@@ -6,10 +6,10 @@ Same engine as the [DevKit for Strapi](https://github.com/PaulRichez/devkit-for-
 
 ## Tools
 
-30 stdio tools in three layers. The **read/analyse** tools are free; the **refactor** tools are Pro (without a licence they return a "Pro required" upsell).
+31 stdio tools in three layers. The **read/analyse** tools are free; the **refactor** tools are Pro (without a licence they return a "Pro required" upsell).
 
 **Know** — the project's truth *(free)*
-`list_projects` · `list_content_types` · `list_components` · `list_artifacts` · `get_schema` · `resolve` · `validate_reference` · `find_references` · `list_routes` · `refresh`
+`server_info` (version, licence tier, which tools actually run) · `list_projects` · `list_content_types` · `list_components` · `list_artifacts` · `get_schema` · `resolve` · `validate_reference` · `find_references` · `list_routes` · `refresh`
 
 **Understand** — health & impact *(free)*
 `list_unused` (dead code) · `list_broken_refs` · `coverage` · `find_relation_usages` · `list_refs` (glob) · `dependencies` / `dependents` (the dependency graph)

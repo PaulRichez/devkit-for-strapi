@@ -8,6 +8,7 @@ import { NodeFileSystem } from './nodeFileSystem';
 import { explicitRoots } from './roots';
 import { loadRootsCache } from './rootsCache';
 import { registerTools } from './tools';
+import { VERSION } from './version';
 
 /**
  * Start the Strapi DevKit MCP server over stdio: discover & index the workspace,
@@ -21,15 +22,6 @@ import { registerTools } from './tools';
  * Indexing runs off the critical path — tool handlers `await ready` so the first
  * calls block until the index is built rather than answering empty.
  */
-/**
- * The running package version, injected at build time by esbuild from
- * `package.json` (see esbuild.mjs). The MCP handshake must report the version
- * that is *actually* running — clients display it, and a bug report is useless
- * without it. Guarded with `typeof` so an unbundled run (vitest) can't throw.
- */
-declare const __DEVKIT_MCP_VERSION__: string | undefined;
-const VERSION = typeof __DEVKIT_MCP_VERSION__ === 'string' ? __DEVKIT_MCP_VERSION__ : '0.0.0-dev';
-
 export async function runServer(argv: string[]): Promise<void> {
   const fs = new NodeFileSystem();
   const engine = createEngine(fs);

@@ -89,9 +89,13 @@ function cacheFile(): string {
  * re-checked next call so a transient offline — or a key added mid-session —
  * isn't sticky.
  *
+ * With no key at all this resolves locally and makes **no network call** — the
+ * free tier never contacts Polar.
+ *
  * `DEVKIT_DEV=1` enables the `dev` override key, to dogfood the gate without
- * Polar. ⚠️ Dev-only backdoor — harden it out of the published bundle before
- * commercial launch (e.g. an esbuild `define` that neutralizes the env read).
+ * Polar. It cannot be flipped on in a published build: esbuild replaces
+ * `process.env.DEVKIT_DEV` with `"0"` in every non-watch build (see
+ * esbuild.mjs), so the check below is dead code once bundled for release.
  */
 export function createLicenseCheck(): () => Promise<boolean> {
   let pending: Promise<boolean> | undefined;

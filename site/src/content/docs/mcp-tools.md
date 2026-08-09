@@ -3,7 +3,7 @@ title: MCP tool reference
 description: Every MCP tool an AI agent can call — read, analyse, and refactor a Strapi project with verified, real values.
 ---
 
-The MCP server exposes **30 stdio tools** (28 active + 2 deprecated aliases) so an AI agent works from your project's
+The MCP server exposes **31 stdio tools** (29 active + 2 deprecated aliases) so an AI agent works from your project's
 **real values** instead of grepping for them. Three layers: **Know** (read the truth),
 **Understand** (health & graph), **Refactor** (plan → review → apply).
 
@@ -41,6 +41,7 @@ survives server respawns. Returns the projects now known.
 | `find_references` | `ref` \| `refs[]`, `compact?`, `limit?`, `offset?` | Every call-site of a UID / service / controller / handler (or `ref#method`). Returns `total`, then a page of up to `limit` hits (default 50; `truncated: true` when more remain): `path:line:col [via] snippet`. |
 | `list_routes` | — | The HTTP route table (method, path, handler, policies, middlewares) — explicit + auto-CRUD from `createCoreRouter`. Static, no Strapi boot. |
 | `refresh` | — | Re-scan every discovered project from disk and rebuild the index. Returns the projects now known. |
+| `server_info` | — | The running server: `version`, licence `tier`, how many tools are actually callable, the Pro-only tool names, and the indexed roots. `tools/list` advertises the Pro tools too — this says which ones will really run. Also the only way for an agent to name a version in a bug report (the version lives in the MCP handshake, which clients don't always display). |
 
 :::caution[Changes made outside the session]
 The server **does not watch the filesystem**. Files created, edited or deleted

@@ -32,7 +32,7 @@ describe('MCP tools (engine-backed handlers)', () => {
     registerTools(fakeServer, engine, fs, Promise.resolve());
   });
 
-  it('registers all thirty tools (read + graph + move/extract/rename/schema/apply; schema helpers are plan_* + deprecated aliases)', () => {
+  it('registers all thirty-one tools (server_info + read + graph + move/extract/rename/schema/apply; schema helpers are plan_* + deprecated aliases)', () => {
     expect([...handlers.keys()].sort()).toEqual(
       [
         'add_project',
@@ -64,6 +64,7 @@ describe('MCP tools (engine-backed handlers)', () => {
         'refresh',
         'rename_attribute', // deprecated alias
         'resolve',
+        'server_info',
         'validate_reference',
       ].sort(),
     );

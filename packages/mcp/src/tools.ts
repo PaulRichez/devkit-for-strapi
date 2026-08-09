@@ -40,6 +40,7 @@ import {
 import { z } from 'zod';
 import { applyWorkspaceEdit, type ApplyResult } from './apply';
 import { saveRootsCache } from './rootsCache';
+import { VERSION } from './version';
 
 /** Render any value as the MCP text result agents read. */
 const json = (data: unknown): CallToolResult => ({
@@ -206,8 +207,39 @@ export function registerTools(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const gate = (cb: (...a: any[]) => unknown, name: string) =>
     async (...a: unknown[]): Promise<unknown> => ((await isLicensed()) ? cb(...a) : json(proRequired(name)));
-  const reg: typeof server.registerTool = (name, config, cb) =>
-    server['registerTool'](name, config, (GATED.has(name) ? gate(cb as never, name) : cb) as typeof cb);
+  // Counted as they register, so `server_info` reports the real total instead of
+  // a hard-coded one that drifts on the next tool added.
+  let registered = 0;
+  const reg: typeof server.registerTool = (name, config, cb) => {
+    registered++;
+    return server['registerTool'](name, config, (GATED.has(name) ? gate(cb as never, name) : cb) as typeof cb);
+  };
+
+  reg(
+    'server_info',
+    {
+      title: 'DevKit version, licence tier and which tools actually run',
+      description:
+        'Identify the running DevKit server: its version, whether a Pro licence is active, how many tools are genuinely callable, and the roots being indexed. `tools/list` advertises the Pro tools too, but without a licence they return an upsell instead of running — this reports which ones will really work, so an agent stops guessing. Also the only way to name a version in a bug report: the version lives in the MCP handshake, which the client consumes and does not always display.',
+    },
+    async () => {
+      const licensed = await isLicensed();
+      const proTools = proToolNames();
+      return json({
+        version: VERSION,
+        tier: licensed ? 'pro' : 'free',
+        tools: {
+          total: registered,
+          available: licensed ? registered : registered - proTools.length,
+          proOnly: proTools.length,
+        },
+        // Named so an agent can avoid a pointless call, or tell the user exactly
+        // what a licence would unlock.
+        proTools,
+        roots: [...roots()],
+      });
+    },
+  );
 
   reg(
     'list_projects',
