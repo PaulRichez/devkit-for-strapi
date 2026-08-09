@@ -7,6 +7,28 @@ The same engine, exposed over the [Model Context Protocol](https://modelcontextp
 so coding agents (Claude Code, Copilot agent mode, Cursor, …) **query your
 project’s real values instead of grepping for them.**
 
+## Is this Strapi’s MCP server?
+
+No — and they don’t compete. Strapi ships its
+[own MCP server](https://docs.strapi.io/cms/features/strapi-mcp-server) (GA since
+5.49), and it’s good at something DevKit deliberately doesn’t do.
+
+| | **Strapi MCP** (official) | **DevKit MCP** |
+|---|---|---|
+| Acts on | your **content** — entries in a running app | your **codebase** — the files in your editor |
+| Reads | the live API, over HTTP | your real `schema.json` and source files |
+| Needs | a **running** instance + an admin token | nothing: no server, no token, no network |
+| Requires | Strapi **≥ 5.47**, enabled explicitly | Strapi **v4 or v5**, zero config |
+| Typical ask | *"create an article draft and publish it"* | *"what code uses `api::article.article`?"* |
+| Tools | CRUD per content-type (list, get, create, update, publish…) | resolve, validate, find references, dependency graph, dead code, broken refs, routes |
+| Can change | your content | your code (rename, move, schema edits — [Pro](/pro/)) |
+
+> **Use Strapi’s MCP to work _with_ your content. Use DevKit to work _on_ your code.**
+
+Plenty of projects want both — they answer different questions, and nothing stops
+an agent from having the two connected at once. DevKit also keeps working when the
+app doesn’t: mid-migration, on a failing build, in CI, or on a Strapi v4 project.
+
 ## Setup
 
 ### In your editor — nothing to configure

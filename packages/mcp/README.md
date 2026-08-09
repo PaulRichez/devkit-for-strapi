@@ -4,6 +4,20 @@ An **MCP server** that gives AI coding agents the *truth* about your Strapi proj
 
 Same engine as the [DevKit for Strapi](https://github.com/PaulRichez/devkit-for-strapi) VS Code extension, exposed to agents instead of humans. The read/analyse tools are free; the refactor tools (rename, move, extract) are Pro. Works on Strapi v4 and v5, in JS and TS, with no codegen.
 
+### Not Strapi's own MCP server — they do different jobs
+
+Strapi ships an [official MCP server](https://docs.strapi.io/cms/features/strapi-mcp-server) that
+acts on your **content**: CRUD on entries in a **running** instance, over HTTP, with an admin token
+(Strapi ≥ 5.47).
+
+This one acts on your **codebase**: it reads your `schema.json` and source files — no server, no
+token, no network — and answers *"what code uses `api::article.article`?"*, *"is this ref valid?"*,
+*"what breaks if I move this?"*. It also keeps working when the app doesn't: mid-migration, on a
+failing build, in CI, or on Strapi v4.
+
+> **Use Strapi's MCP to work _with_ your content. Use DevKit to work _on_ your code.**
+> Many projects want both connected at once.
+
 ## Tools
 
 31 stdio tools in three layers. The **read/analyse** tools are free; the **refactor** tools are Pro (without a licence they return a "Pro required" upsell).

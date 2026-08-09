@@ -70,11 +70,18 @@ Inside a Strapi project — zero config, no type generation:
 
 The same engine, exposed over the [Model Context Protocol](https://modelcontextprotocol.io) so coding
 agents (Claude Code, Copilot agent mode, Cursor, …) **query your project's real values instead of
-grepping for them**. 31 stdio tools, in three layers:
+grepping for them**. 31 stdio tools, in three layers.
+
+> **Not Strapi's own MCP server** — they do different jobs. Strapi's
+> [official MCP](https://docs.strapi.io/cms/features/strapi-mcp-server) acts on your **content**
+> (CRUD on entries in a *running* instance, admin token, Strapi ≥ 5.47). DevKit acts on your
+> **codebase** (reads `schema.json` and source files — no server, no token, no network; v4 and v5).
+> *Use Strapi's MCP to work **with** your content; use DevKit to work **on** your code.* Many
+> projects want both.
 
 **Know** — read the project's truth
-`list_projects` · `list_content_types` · `list_components` · `list_artifacts` · `get_schema` · `resolve` ·
-`validate_reference` · `find_references` · `list_routes`
+`server_info` · `list_projects` · `list_content_types` · `list_components` · `list_artifacts` · `get_schema` ·
+`resolve` · `validate_reference` · `find_references` · `list_routes` · `refresh`
 
 **Understand** — health & impact analysis
 `list_unused` (dead code) · `list_broken_refs` · `coverage` · `find_relation_usages` · `list_refs` (glob) ·
