@@ -1,14 +1,14 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.PaulRichez/devkit-for-strapi-mcp",
-  "description": "Accurate Strapi project facts (UIDs, schemas, references) for AI agents — no more guessed UIDs.",
+  "description": "Strapi CODEBASE intelligence for AI agents (not content CRUD): real UIDs, schemas, references, dependency graph and safe refactors, read from your project's schema.json files.",
   "websiteUrl": "https://devkit-for-strapi.paulrichez.fr/mcp/",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "devkit-for-strapi-mcp",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

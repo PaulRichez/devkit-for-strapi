@@ -106,6 +106,27 @@ if (FREE) {
 }
 
 // ---------------------------------------------------------------------------
+// 2b. The MCP registry manifest carries its own copy of the version, in two
+//     places. It silently stayed at 0.1.3 while npm moved to 0.1.4 — the same
+//     drift as the hard-coded handshake version, and invisible because nothing
+//     reads it at build time. Check it here rather than after publishing.
+// ---------------------------------------------------------------------------
+step('2b', 'Checking the MCP registry manifest is in step…');
+{
+  const pkgVersion = JSON.parse(readFileSync(join(REPO, 'packages/mcp/package.json'), 'utf8')).version;
+  const manifest = JSON.parse(readFileSync(join(REPO, 'packages/mcp/server.json'), 'utf8'));
+  const declared = [manifest.version, ...(manifest.packages ?? []).map((p) => p.version)];
+  const wrong = declared.filter((v) => v !== pkgVersion);
+  if (wrong.length) {
+    die(
+      `packages/mcp/server.json still says ${[...new Set(wrong)].join(', ')} but the package is ${pkgVersion}.\n` +
+        `Update every "version" in server.json, or the MCP registry will advertise a stale release.`,
+    );
+  }
+  log(`  ✓ server.json matches package.json (${pkgVersion})`);
+}
+
+// ---------------------------------------------------------------------------
 // 3. Pristine copy of HEAD (tracked files only). Not a git repo → the
 //    proprietary overlay below can never be committed from here.
 // ---------------------------------------------------------------------------
