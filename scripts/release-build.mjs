@@ -133,9 +133,12 @@ step('2b', 'Checking the MCP registry manifest is in step…');
 step(3, 'Exporting a clean copy of HEAD…');
 rmSync(RELEASE_DIR, { recursive: true, force: true });
 mkdirSync(RELEASE_DIR, { recursive: true });
+// Relative paths on purpose: GNU tar (Git Bash) reads an absolute "C:\..."
+// argument as a remote host:path and fails with "Cannot connect to C:", while
+// Windows' bsdtar accepts it. Staying relative works under both shells.
 const tarball = join(RELEASE_DIR, '_head.tar');
-run(`git archive --format=tar HEAD -o "${tarball}"`, REPO);
-run(`tar -xf "${tarball}" -C "${RELEASE_DIR}"`, REPO);
+run('git archive --format=tar HEAD -o .release/_head.tar', REPO);
+run('tar -xf _head.tar', RELEASE_DIR);
 rmSync(tarball, { force: true });
 if (existsSync(join(RELEASE_DIR, '.git'))) die('The export unexpectedly contains .git — aborting.');
 log(`  ✓ exported to ${RELEASE_DIR}`);
