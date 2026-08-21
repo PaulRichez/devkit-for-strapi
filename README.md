@@ -114,7 +114,7 @@ For Claude Code, Claude Desktop, or any standalone MCP client:
   "mcpServers": {
     "devkit-for-strapi": {
       "command": "npx",
-      "args": ["-y", "devkit-for-strapi-mcp", "/absolute/path/to/your/strapi-project"]
+      "args": ["-y", "devkit-for-strapi-mcp@latest", "/absolute/path/to/your/strapi-project"]
     }
   }
 }
@@ -157,7 +157,7 @@ VSCodium (or just search **“DevKit for Strapi”** in the Extensions view). Op
 
 **AI agent, outside an editor** — the MCP server is on npm as
 [`devkit-for-strapi-mcp`](https://www.npmjs.com/package/devkit-for-strapi-mcp) (and in the official MCP
-registry as `io.github.PaulRichez/devkit-for-strapi-mcp`): `npx -y devkit-for-strapi-mcp /path/to/project`.
+registry as `io.github.PaulRichez/devkit-for-strapi-mcp`): `npx -y devkit-for-strapi-mcp@latest /path/to/project`.
 
 **Requirements** — a Strapi **v4** or **v5** project, and VS Code `1.101+` (or a compatible fork). No
 configuration, no type generation, no extra setup.

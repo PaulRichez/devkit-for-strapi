@@ -66,7 +66,7 @@ extension), set the **`DEVKIT_LICENSE_KEY`** environment variable in its `env` b
   "mcpServers": {
     "devkit-for-strapi": {
       "command": "npx",
-      "args": ["-y", "devkit-for-strapi-mcp", "/absolute/path/to/your/strapi-project"],
+      "args": ["-y", "devkit-for-strapi-mcp@latest", "/absolute/path/to/your/strapi-project"],
       "env": { "DEVKIT_LICENSE_KEY": "polar_xxx" }
     }
   }

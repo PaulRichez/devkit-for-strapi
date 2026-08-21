@@ -59,7 +59,7 @@ works on every client):
   "mcpServers": {
     "devkit-for-strapi": {
       "command": "npx",
-      "args": ["-y", "devkit-for-strapi-mcp", "/absolute/path/to/your/strapi-project"]
+      "args": ["-y", "devkit-for-strapi-mcp@latest", "/absolute/path/to/your/strapi-project"]
     }
   }
 }

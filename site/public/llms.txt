@@ -35,4 +35,4 @@ The MCP server exposes the project's real values to AI agents so they stop hallu
 
 - [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=paul-richez.devkit-for-strapi): install the extension.
 - [Open VSX](https://open-vsx.org/extension/paul-richez/devkit-for-strapi): install for Cursor / Windsurf / VSCodium.
-- Standalone MCP server (for AI agents outside an editor, e.g. Claude Code): run `npx devkit-for-strapi-mcp /absolute/path/to/your/strapi-project`. On npm as [devkit-for-strapi-mcp](https://www.npmjs.com/package/devkit-for-strapi-mcp) and in the official MCP registry as `io.github.PaulRichez/devkit-for-strapi-mcp`. Set `DEVKIT_LICENSE_KEY` in its `env` to unlock the Pro refactor tools.
+- Standalone MCP server (for AI agents outside an editor, e.g. Claude Code): run `npx -y devkit-for-strapi-mcp@latest /absolute/path/to/your/strapi-project`. On npm as [devkit-for-strapi-mcp](https://www.npmjs.com/package/devkit-for-strapi-mcp) and in the official MCP registry as `io.github.PaulRichez/devkit-for-strapi-mcp`. Set `DEVKIT_LICENSE_KEY` in its `env` to unlock the Pro refactor tools.

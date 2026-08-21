@@ -47,8 +47,9 @@ for the editor features and wire the standalone server below for your agent.
 Skip this section. The bundled server (above) is the **same engine**, already
 auto-registered — adding the `npx` config too would just run a second copy. Use
 `npx` only for a client that **isn't** a VS Code-family editor (Claude Desktop, the
-Claude Code CLI, …). If you run both, pin the version
-(`devkit-for-strapi-mcp@x.y.z`) to match your installed extension and avoid drift.
+Claude Code CLI, …). If you run both, keep the extension up to date — the
+`@latest` below keeps the standalone server in step with it. Avoid pinning an
+exact version: it freezes you out of fixes.
 :::
 
 Point the client at the `devkit-for-strapi-mcp` stdio server. The recommended
@@ -60,7 +61,7 @@ path:
   "mcpServers": {
     "devkit-for-strapi": {
       "command": "npx",
-      "args": ["-y", "devkit-for-strapi-mcp", "/absolute/path/to/your/strapi-project"]
+      "args": ["-y", "devkit-for-strapi-mcp@latest", "/absolute/path/to/your/strapi-project"]
     }
   }
 }
@@ -74,7 +75,7 @@ the client's `roots` capability or the cwd, or register the project later with t
 Where this config file lives:
 
 - **Claude Code** — a `.mcp.json` at your project root, or run
-  `claude mcp add devkit-for-strapi -- npx -y devkit-for-strapi-mcp .`
+  `claude mcp add devkit-for-strapi -- npx -y devkit-for-strapi-mcp@latest .`
   (the trailing `.` is the current directory — Claude Code runs the server from
   your project root, so it resolves correctly via the cwd fallback)
 - **Claude Desktop** — `claude_desktop_config.json` (then restart the app):
@@ -89,7 +90,7 @@ env block — `"env": { "DEVKIT_LICENSE_KEY": "polar_xxx" }` (see
 
 :::caution[Windows]
 If your client reports `npx` was not found, wrap it:
-`"command": "cmd"`, `"args": ["/c", "npx", "-y", "devkit-for-strapi-mcp", "<path>"]`.
+`"command": "cmd"`, `"args": ["/c", "npx", "-y", "devkit-for-strapi-mcp@latest", "<path>"]`.
 :::
 
 :::note
@@ -98,6 +99,24 @@ The standalone server is published on npm as
 listed in the official MCP registry as `io.github.PaulRichez/devkit-for-strapi-mcp`.
 In the VS Code-family editors above you don't need it — the same server ships
 **bundled** in the extension (zero-config).
+:::
+
+:::caution[Set this up earlier? You may be stuck on an old version]
+`npx` caches what it downloads and will keep running that copy — for months, and
+even without a version pin. If you configured the server before reading this, it
+may still be an early build, with bugs that are long fixed.
+
+**Check what's actually running:** ask your agent to call **`server_info`**, which
+reports the real version, and compare it with the
+[latest on npm](https://www.npmjs.com/package/devkit-for-strapi-mcp).
+
+**If it's behind**, clear the npx cache and restart your MCP client:
+
+- macOS / Linux — `rm -rf ~/.npm/_npx`
+- Windows — `rmdir /s /q "%LOCALAPPDATA%\npm-cache\_npx"`
+
+The `@latest` in the config above resolves the tag from the registry on every
+start, so this won't happen again.
 :::
 
 ## Tools

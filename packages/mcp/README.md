@@ -42,12 +42,22 @@ The server indexes the **workspace root** and discovers the Strapi project(s) in
 ```jsonc
 {
   "mcpServers": {
-    "devkit-for-strapi": { "command": "npx", "args": ["-y", "devkit-for-strapi-mcp"] }
+    "devkit-for-strapi": { "command": "npx", "args": ["-y", "devkit-for-strapi-mcp@latest"] }
   }
 }
 ```
 
-Run the client from your project directory (or pass the path: `"args": ["-y", "devkit-for-strapi-mcp", "/path/to/workspace"]`).
+Run the client from your project directory (or pass the path: `"args": ["-y", "devkit-for-strapi-mcp@latest", "/path/to/workspace"]`).
+
+> [!IMPORTANT]
+> **Keep the `@latest`.** `npx` caches what it downloads and will keep running that copy for
+> months — even with no version pin. If you set this server up earlier, you may still be on an
+> early build with bugs that are long fixed.
+>
+> Ask your agent to call **`server_info`**: it reports the version actually running. If it is
+> behind, clear the npx cache and restart your client — `rm -rf ~/.npm/_npx` on macOS/Linux,
+> `rmdir /s /q "%LOCALAPPDATA%\npm-cache\_npx"` on Windows. With `@latest` the tag is resolved
+> from the registry on every start, so it will not drift again.
 
 ### VS Code
 
