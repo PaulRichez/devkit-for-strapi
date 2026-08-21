@@ -36,7 +36,15 @@
  */
 
 import { execFileSync, execSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -74,7 +82,10 @@ log(`DevKit release build — ${FREE ? 'FREE tier (explicit --free)' : 'PRO (rea
 //    work would be silently missing from the artifact you publish.
 // ---------------------------------------------------------------------------
 step(1, 'Checking the working tree is clean…');
-const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: REPO, encoding: 'utf8' }).trim();
+const dirty = execFileSync('git', ['status', '--porcelain'], {
+  cwd: REPO,
+  encoding: 'utf8',
+}).trim();
 if (dirty && !ALLOW_DIRTY) {
   die(
     `Uncommitted changes — they would NOT be in the build (git archive exports HEAD):\n${dirty}\n\n` +
@@ -98,7 +109,8 @@ if (FREE) {
     );
   }
   const proEntry = join(PRO_SRC, 'src', 'rename', 'rename.ts');
-  if (!existsSync(proEntry)) die(`${PRO_SRC} exists but has no src/rename/rename.ts — wrong folder?`);
+  if (!existsSync(proEntry))
+    die(`${PRO_SRC} exists but has no src/rename/rename.ts — wrong folder?`);
   if (readFileSync(proEntry, 'utf8').includes(STUB_MARKER)) {
     die(`${PRO_SRC} is itself a STUB, not the real engine. Point --pro at the private package.`);
   }
@@ -113,7 +125,9 @@ if (FREE) {
 // ---------------------------------------------------------------------------
 step('2b', 'Checking the MCP registry manifest is in step…');
 {
-  const pkgVersion = JSON.parse(readFileSync(join(REPO, 'packages/mcp/package.json'), 'utf8')).version;
+  const pkgVersion = JSON.parse(
+    readFileSync(join(REPO, 'packages/mcp/package.json'), 'utf8'),
+  ).version;
   const manifest = JSON.parse(readFileSync(join(REPO, 'packages/mcp/server.json'), 'utf8'));
   const declared = [manifest.version, ...(manifest.packages ?? []).map((p) => p.version)];
   const wrong = declared.filter((v) => v !== pkgVersion);
@@ -216,7 +230,8 @@ for (const bundle of bundles) {
   const stubbed = readFileSync(bundle, 'utf8').includes(STUB_MARKER);
   const name = bundle.replace(RELEASE_DIR, '').replace(/\\/g, '/');
   if (!FREE && stubbed) die(`${name} was rebuilt as a STUB during packaging. Aborting.`);
-  if (FREE && !stubbed) die(`${name} lost its stub marker during packaging, but --free was requested.`);
+  if (FREE && !stubbed)
+    die(`${name} lost its stub marker during packaging, but --free was requested.`);
   log(`  ✓ ${name} — still ${stubbed ? 'free tier (stub)' : 'Pro engine'}`);
 }
 
@@ -236,12 +251,20 @@ console.log(`  mcp       : ${tgzPath}  (${size(tgzPath)})`);
 if (FREE) {
   console.log(`\n⚠ This is a FREE-TIER artifact — do NOT publish it.`);
 } else {
-  console.log(`\nPublish (run these yourself — they need your tokens and are irreversible):\n`);
-  console.log(`  cd "${vscodeDir}"`);
-  console.log(`  npx vsce publish --packagePath "${vsix[0]}"`);
-  console.log(`  npx ovsx publish "${vsix[0]}" -p <OPEN_VSX_TOKEN>\n`);
-  console.log(`  cd "${mcpDir}"`);
-  console.log(`  npm publish "${tgz[0]}" --access public\n`);
+  console.log(`\nPublish yourself — these are public and irreversible.\n`);
+  // Paul uploads the .vsix through the web UIs rather than the CLI; the CLI
+  // equivalents stay below for CI, or if a portal is ever down.
+  console.log(`  Extension — upload the .vsix (web UI):`);
+  console.log(
+    `    Marketplace : https://marketplace.visualstudio.com/manage/publishers/paul-richez`,
+  );
+  console.log(`    Open VSX    : https://open-vsx.org/user-settings/extensions`);
+  console.log(`    file        : ${vsixPath}\n`);
+  console.log(`  MCP server — npm has no upload page, so this one stays CLI:`);
+  console.log(`    cd "${mcpDir}" && npm publish "${tgz[0]}" --access public\n`);
+  console.log(`  (CLI equivalents for the extension, if needed:`);
+  console.log(`     npx vsce publish --packagePath "${vsix[0]}"`);
+  console.log(`     npx ovsx publish "${vsix[0]}" -p <OPEN_VSX_TOKEN>)\n`);
   console.log(`Then: git tag v<version> && git push --tags, and delete ${RELEASE_DIR}`);
 }
 console.log(`${'─'.repeat(70)}\n`);
