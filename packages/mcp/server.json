@@ -3,12 +3,12 @@
   "name": "io.github.PaulRichez/devkit-for-strapi-mcp",
   "description": "Strapi CODEBASE intelligence for AI agents (not content CRUD): real UIDs, schemas, references, dependency graph and safe refactors, read from your project's schema.json files.",
   "websiteUrl": "https://devkit-for-strapi.paulrichez.fr/mcp/",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "devkit-for-strapi-mcp",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

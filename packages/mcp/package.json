@@ -1,6 +1,6 @@
 {
   "name": "devkit-for-strapi-mcp",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "mcpName": "io.github.PaulRichez/devkit-for-strapi-mcp",
   "description": "MCP server exposing accurate Strapi project facts (UIDs, schemas, references) to AI coding agents — reads your real schema.json, so an agent looks values up instead of grepping for them.",
   "license": "MIT AND LicenseRef-PolyForm-Shield-1.0.0",

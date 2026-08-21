@@ -2,7 +2,7 @@
   "name": "devkit-for-strapi",
   "displayName": "DevKit for Strapi",
   "description": "Accurate, project-aware autocomplete, diagnostics, navigation and references for Strapi magic strings (v4 & v5) — in your editor and for your AI agent (MCP).",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "paul-richez",
   "license": "MIT AND LicenseRef-PolyForm-Shield-1.0.0",
   "icon": "assets/icon-128.png",
@@ -13,7 +13,7 @@
   "engines": {
     "vscode": "^1.101.0"
   },
-  "categories": ["Programming Languages", "Linters", "Other"],
+  "categories": ["Programming Languages", "Linters", "AI"],
   "keywords": [
     "strapi",
     "strapi v5",
@@ -35,6 +35,7 @@
   "bugs": {
     "url": "https://github.com/PaulRichez/devkit-for-strapi/issues"
   },
+  "qna": "https://github.com/PaulRichez/devkit-for-strapi/issues",
   "homepage": "https://devkit-for-strapi.paulrichez.fr",
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -124,7 +125,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "compile-tests": "node esbuild.mjs --tests",
     "test:integration": "node esbuild.mjs --tests && vscode-test",
-    "package": "node esbuild.mjs --production && vsce package --no-dependencies --allow-missing-repository",
+    "package": "node esbuild.mjs --production && vsce package --no-dependencies",
     "vscode:prepublish": "node esbuild.mjs --production"
   },
   "dependencies": {
