@@ -35,7 +35,9 @@ In a multi-project workspace, pass `from` (a path inside the project you're work
 
 ## Use it
 
-The server indexes the **workspace root** and discovers the Strapi project(s) inside it (a monorepo with several apps works). It takes the root from explicit path arguments, otherwise the current working directory.
+The server indexes the **workspace root** and discovers the Strapi project(s) inside it (a monorepo with several apps works).
+
+The path argument is **optional**. Roots are resolved in this order: explicit path arguments, then the client's `roots` capability (Claude Code and Cursor advertise the folder you opened), then the current working directory. Passing the path explicitly is the most reliable — it's indexed at startup, so the first tool call already works on any client.
 
 ### Claude Code / Cursor / Claude Desktop
 

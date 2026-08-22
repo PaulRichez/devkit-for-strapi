@@ -68,6 +68,9 @@ The agent answers from your real `schema.json` — not from a guess.
 }
 ```
 
+The path is **optional** — without it the server uses the client's `roots` capability, then the cwd.
+Passing it is the most reliable: it's indexed at startup, so the first tool call already works.
+
 → See [For your AI agent (MCP)](https://devkit-for-strapi.paulrichez.fr/mcp/) and the
 [tool reference](https://devkit-for-strapi.paulrichez.fr/mcp-tools/).
 

@@ -103,9 +103,11 @@ pas deviner — applied to writes too.
 - **VS Code, Cursor, Windsurf, Antigravity** — the server is **bundled in the extension and
   auto-registered** with the editor's MCP support. Nothing to configure: install the extension and your
   agent can use the tools.
-- **Other MCP clients** — run `devkit-for-strapi-mcp` as a stdio server, passing your project path. It
-  also accepts the workspace folder via the client's `roots` capability (so it just works wherever you
-  open it), and a tool (`add_project`) to register a project on demand.
+- **Other MCP clients** — run `devkit-for-strapi-mcp` as a stdio server. The project path is
+  **optional**: without it the server falls back to the client's `roots` capability (Claude Code and
+  Cursor advertise the folder you opened), then to the cwd. Passing it explicitly is still the most
+  reliable — it's indexed at startup, so the first tool call already works on any client. There's also
+  an `add_project` tool to register a project on demand.
 
 For Claude Code, Claude Desktop, or any standalone MCP client:
 
