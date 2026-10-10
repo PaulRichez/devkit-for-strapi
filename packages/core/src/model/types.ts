@@ -174,6 +174,13 @@ export interface StrapiProject {
   installedFullStamp?: string;
   /** What the project's own code rewrites in plugins at runtime (kept per file, updated on edits). */
   rewrites?: import('../plugins/rewrites').ProjectRewrites;
+  /** When the project code was indexed (ms epoch). */
+  indexedAt?: number;
+  /** When its installed plugins were last read, and how many of them came from the read cache. */
+  installedAt?: number;
+  pluginReads?: { read: number; reused: number };
+  /** The project's files and mtimes, for clients without a file watcher (see `refreshIfStale`). */
+  snapshot?: import('../workspace/sourceSnapshot').SourceSnapshot;
 }
 
 export function emptyIndex(): StrapiIndex {
@@ -441,6 +448,18 @@ export interface ProjectSummary {
     controllers: number;
     policies: number;
     middlewares: number;
+  };
+  /** How current the answers are. */
+  freshness: {
+    /** The project code was last indexed in full (ISO). */
+    indexedAt?: string;
+    /** Files last compared with the disk, changes re-indexed (ISO; clients without a watcher). */
+    diskCheckedAt?: string;
+    /** Installed plugins last read (ISO); `pluginsLoading` while the first read runs. */
+    pluginsReadAt?: string;
+    pluginsLoading?: boolean;
+    /** Plugins read from node_modules on that read vs reused unchanged from the read cache. */
+    pluginReads?: { read: number; fromCache: number };
   };
 }
 

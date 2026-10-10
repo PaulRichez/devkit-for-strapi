@@ -70,6 +70,17 @@ describe('MCP tools (engine-backed handlers)', () => {
     );
   });
 
+  it('server_info and refresh say how current the index is; refresh can drop every cache', async () => {
+    const info = await call('server_info');
+    expect(info.freshness.policy).toMatch(/re-indexed/);
+    expect(info.freshness.projects.length).toBeGreaterThan(0);
+    expect(info.freshness.projects[0].indexedAt).toMatch(/^\d{4}-/);
+    const r = await call('refresh', { cold: true });
+    expect(r.refreshed).toBe(true);
+    expect(r.cold).toBe(true);
+    expect(r.projects[0].freshness.indexedAt).toMatch(/^\d{4}-/);
+  });
+
   it('list_projects tags projects under a fixtures folder (#16 — prefer untagged candidates)', async () => {
     const data = await call('list_projects');
     // The test fixture itself lives under packages/test-fixtures/fixtures/… → tagged.

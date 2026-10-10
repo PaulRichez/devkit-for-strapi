@@ -40,16 +40,18 @@ survives server respawns. Returns the projects now known.
 | `validate_reference` | `ref` | `valid` \| `unknown` (+ `didYouMean`) \| `external` (a plugin DevKit could not read completely, e.g. not installed — unverifiable). Installed plugins read from `node_modules` are verified. Call before writing a magic string. |
 | `find_references` | `ref` \| `refs[]`, `compact?`, `limit?`, `offset?` | Every call-site of a UID / service / controller / handler (or `ref#method`). Returns `total`, then a page of up to `limit` hits (default 50; `truncated: true` when more remain): `path:line:col [via] snippet`. |
 | `list_routes` | `plugins?`, `admin?` | The HTTP route table: method, path, mounted `fullPath`, handler, policies, middlewares, `public` (`auth: false`) and where each route is declared (`filePath`/`offset`). Explicit routes, auto-CRUD from `createCoreRouter`, and the routes local and installed plugins declare (`origin`; `plugins: false` to leave them out). Admin-panel routes only with `admin: true`. Static, no Strapi boot. |
-| `refresh` | — | Re-scan every discovered project from disk and rebuild the index. Returns the projects now known. |
-| `server_info` | — | The running server: `version`, licence `tier`, how many tools are actually callable, the Pro-only tool names, and the indexed roots. `tools/list` advertises the Pro tools too — this says which ones will really run. Also the only way for an agent to name a version in a bug report (the version lives in the MCP handshake, which clients don't always display). |
+| `refresh` | `cold?` | Re-scan every discovered project from disk and rebuild the index; `cold: true` also drops the cached plugin reads and reads every installed plugin again. Rarely needed (see below). Returns the projects with their `freshness`. |
+| `server_info` | — | The running server: `version`, licence `tier`, how many tools are actually callable, the Pro-only tool names, the indexed roots, and how current each project's index is (`freshness`). `tools/list` advertises the Pro tools too — this says which ones will really run. Also the only way for an agent to name a version in a bug report (the version lives in the MCP handshake, which clients don't always display). |
 
-:::caution[Changes made outside the session]
-The server **does not watch the filesystem**. Files created, edited or deleted
-outside it — a manual edit, another tool, a `git checkout`/`pull`, a branch switch —
-stay invisible to every other tool until **`refresh`** runs. Call it before
-`find_references` / `list_broken_refs` / `list_unused` / `coverage` whenever files
-may have changed outside `apply_edits`/`apply_rename`, or they reason over a stale
-snapshot and can wrongly report 0 references. It's cheap to call defensively.
+:::note[Changes made outside the session]
+The server has no file watcher, so before answering each call it compares the
+project's files with the disk (at most every 2 s, a few milliseconds) and
+re-indexes what was created, edited or deleted outside it: a manual edit, another
+tool, a `git checkout`/`pull`, a branch switch. Installed plugins are re-read after
+an install. `server_info` and `list_projects` report each project's `freshness`
+(when it was indexed, last compared with the disk, when its plugins were read and
+how many came from the read cache). `refresh` forces a full rescan;
+`refresh({ cold: true })` reads every installed plugin again too.
 :::
 
 Each reference is tagged with a **`via`** — how the call reaches the entity: the

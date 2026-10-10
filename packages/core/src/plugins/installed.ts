@@ -85,6 +85,8 @@ export interface InstalledPluginsResult {
   rewritten: string[];
   /** Artifact refs / content-type UIDs (or `plugin::x.*`, `'*'`) extended in place — partial method/attribute lists. */
   extended: string[];
+  /** Plugin servers read from node_modules on this read vs reused unchanged from the read cache. */
+  reads: { read: number; reused: number };
   /** `node_modules/@strapi/strapi` directory the plugins were resolved from. */
   strapiDir: string;
   strapiVersion: string;
@@ -620,7 +622,20 @@ interface ServerRead {
 const serverReadsByFs = new WeakMap<FileSystem, Map<string, { key: string; stamp: string; read: ServerRead }>>();
 const SERVER_READS_MAX = 400;
 
-async function readServerCached(fs: FileSystem, name: string, dir: string, entry: string, apiPrefix: string | undefined, major: number): Promise<ServerRead> {
+/** Drop every cached plugin read of a file system (the next read starts cold). */
+export function forgetPluginReads(fs: FileSystem): void {
+  serverReadsByFs.delete(fs);
+}
+
+async function readServerCached(
+  fs: FileSystem,
+  name: string,
+  dir: string,
+  entry: string,
+  apiPrefix: string | undefined,
+  major: number,
+  counts: { read: number; reused: number },
+): Promise<ServerRead> {
   let reads = serverReadsByFs.get(fs);
   if (!reads) serverReadsByFs.set(fs, (reads = new Map()));
   const key = [name, entry, apiPrefix ?? '', major].join('\n');
@@ -628,8 +643,10 @@ async function readServerCached(fs: FileSystem, name: string, dir: string, entry
   if (hit && hit.key === key && (await pathsStamp(fs, pluginReadPaths(hit.read.files))) === hit.stamp) {
     reads.delete(dir); // most recently used last
     reads.set(dir, hit);
+    counts.reused++;
     return hit.read;
   }
+  counts.read++;
   const read = await readServer(fs, name, dir, entry, apiPrefix);
   reads.delete(dir);
   if (read.timedOut) return read; // cut by the time budget: depends on the load, never reused
@@ -724,6 +741,7 @@ export async function readInstalledPlugins(fs: FileSystem, root: string, project
   }
 
   const plugins: InstalledPlugin[] = [];
+  const reads = { read: 0, reused: 0 };
   /** Plugins the installed plugins' own server code rewrites at runtime. */
   const rewritten = new Set<string>();
   const extended = new Set<string>();
@@ -767,7 +785,7 @@ export async function readInstalledPlugins(fs: FileSystem, root: string, project
     }
     if ((await fs.stat(entry))?.type === FileType.File) {
       plugin.hasServer = true;
-      const server = Date.now() - startedAt > TOTAL_BUDGET_MS ? undefined : await readServerCached(fs, name, c.dir, entry, apiPrefix, major);
+      const server = Date.now() - startedAt > TOTAL_BUDGET_MS ? undefined : await readServerCached(fs, name, c.dir, entry, apiPrefix, major, reads);
       if (!server) {
         plugin.complete = false;
         plugin.gaps.push('not read (overall time budget)');
@@ -805,6 +823,17 @@ export async function readInstalledPlugins(fs: FileSystem, root: string, project
     p.contentTypes = p.contentTypes.map((ct) => (isExtended(ct.uid, p.name, 'ct:') && !ct.partialAttributes ? { ...ct, partialAttributes: true } : ct));
   }
   const frameworkMiddlewares = await readFrameworkMiddlewares(fs, strapiDir, major);
-  return { strapiDir, strapiVersion, major, plugins, config, apiPrefix, rewritten: [...rewritten], extended: [...extended], ...(frameworkMiddlewares ? { frameworkMiddlewares } : {}) };
+  return {
+    strapiDir,
+    strapiVersion,
+    major,
+    plugins,
+    config,
+    apiPrefix,
+    rewritten: [...rewritten],
+    extended: [...extended],
+    reads,
+    ...(frameworkMiddlewares ? { frameworkMiddlewares } : {}),
+  };
 }
 

@@ -24,7 +24,8 @@ import { VERSION } from './version';
  */
 export async function runServer(argv: string[]): Promise<void> {
   const fs = new NodeFileSystem();
-  const engine = createEngine(fs);
+  // No file watcher here: the engine compares the project files with the disk on each call (throttled).
+  const engine = createEngine(fs, { trackDiskChanges: true });
   const server = new McpServer({ name: 'devkit-for-strapi', version: VERSION });
 
   const cliRoots = explicitRoots(argv);

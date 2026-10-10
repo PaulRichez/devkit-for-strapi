@@ -213,9 +213,10 @@ export function registerTools(
   const reg: typeof server.registerTool = (name, config, cb) => {
     registered++;
     const inner = (GATED.has(name) ? gate(cb as never, name) : cb) as (...a: unknown[]) => unknown;
-    // No file watcher in the MCP server: pick up an `npm install` (installed plugins) on the next call.
+    // No file watcher in the MCP server: before answering, pick up what changed on disk since
+    // the last call (edits, a git checkout, an `npm install`) — a few ms, at most every 2 s.
     const fresh = (async (...a: unknown[]) => {
-      await engine.refreshInstalledIfStale();
+      await engine.refreshIfStale();
       return inner(...a);
     }) as unknown as typeof cb;
     return server['registerTool'](name, config, fresh);
@@ -226,7 +227,7 @@ export function registerTools(
     {
       title: 'DevKit version, licence tier and which tools actually run',
       description:
-        'Identify the running DevKit server: its version, whether a Pro licence is active, how many tools are genuinely callable, and the roots being indexed. `tools/list` advertises the Pro tools too, but without a licence they return an upsell instead of running — this reports which ones will really work, so an agent stops guessing. Also the only way to name a version in a bug report: the version lives in the MCP handshake, which the client consumes and does not always display.',
+        'Identify the running DevKit server: its version, whether a Pro licence is active, how many tools are genuinely callable, the roots being indexed, and how current the index is (`freshness`). `tools/list` advertises the Pro tools too, but without a licence they return an upsell instead of running — this reports which ones will really work, so an agent stops guessing. Also the only way to name a version in a bug report: the version lives in the MCP handshake, which the client consumes and does not always display.',
     },
     async () => {
       const licensed = await isLicensed();
@@ -243,6 +244,11 @@ export function registerTools(
         // what a licence would unlock.
         proTools,
         roots: [...roots()],
+        // How current every answer is: what changed on disk is re-indexed before each call.
+        freshness: {
+          policy: 'Before each call, project files created, edited or deleted on disk are re-indexed (checked at most every 2 s) and installed plugins are re-read after an install; refresh({ cold: true }) reads everything again without cache.',
+          projects: engine.getProjects().map((p) => ({ name: paths.basename(p.root), ...p.freshness })),
+        },
       });
     },
   );
@@ -291,15 +297,19 @@ export function registerTools(
   reg(
     'refresh',
     {
-      title: 'Re-index projects from disk (pick up external changes)',
+      title: 'Re-index projects from disk (full rescan)',
       description:
-        'Re-scan every discovered Strapi project from disk and rebuild the index. The server does not watch the filesystem: files created, edited, or deleted OUTSIDE this MCP session (a manual edit, another tool, git checkout/pull, a branch switch) are invisible to every other tool until this runs — call it before find_references/list_broken_refs/list_unused/coverage whenever files may have changed outside apply_edits/apply_rename, or those tools reason over a stale snapshot and can wrongly report 0 references. Cheap to call defensively.',
+        'Re-scan every discovered Strapi project from disk and rebuild the index from scratch. Rarely needed: before every call the server already compares the project files with the disk (at most every 2 s) and re-indexes what was created, edited or deleted outside this session (manual edits, git checkout/pull, another tool), and re-reads installed plugins after an install. Use it to discover a project added since startup, or with `cold: true` to also drop the cached plugin reads and read every installed plugin from node_modules again (slower). Returns the projects with their `freshness`.',
+      inputSchema: {
+        cold: z.boolean().optional().describe('Also drop the cached plugin reads: every installed plugin is read again from node_modules (default false).'),
+      },
     },
-    async () => {
+    async (args) => {
       await ready;
-      await engine.rescan();
+      await engine.rescan({ cold: args.cold === true });
+      await engine.whenInstalledReady();
       await engine.whenReferencesReady();
-      return json({ refreshed: true, projects: engine.getProjects().map((p) => tagFixture({ name: paths.basename(p.root), ...p })) });
+      return json({ refreshed: true, cold: args.cold === true, projects: engine.getProjects().map((p) => tagFixture({ name: paths.basename(p.root), ...p })) });
     },
   );
 

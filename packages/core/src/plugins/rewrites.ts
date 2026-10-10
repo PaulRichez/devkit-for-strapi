@@ -864,6 +864,11 @@ function isAdminDir(dir: string, roots: string[]): boolean {
 /** Per file system, per file: the last scan and the mtime it was made at. */
 const fileScans = new WeakMap<FileSystem, Map<string, { mtime: number; rewrites: PluginRewrites | undefined }>>();
 
+/** Drop every cached file scan of a file system. */
+export function forgetFileScans(fs: FileSystem): void {
+  fileScans.delete(fs);
+}
+
 /** What one file rewrites (undefined: nothing). Unreadable files count as nothing (they don't run either). */
 export async function rewritesOfFile(fs: FileSystem, file: string): Promise<PluginRewrites | undefined> {
   let cache = fileScans.get(fs);

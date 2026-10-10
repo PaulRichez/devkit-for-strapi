@@ -32,9 +32,10 @@ import {
   updateReferencesForFile,
 } from './reference/references';
 import { resolveDefinition, resolveMember } from './resolve/resolver';
-import { readInstalledPlugins } from './plugins/installed';
+import { forgetPluginReads, readInstalledPlugins } from './plugins/installed';
 import { applyRewrites, clearInstalled, installedStamp, mergeInstalled } from './plugins/merge';
-import { inRewriteScope, type ProjectRewrites, rewritesKey, rewritesOfFile, scanProjectRewrites, unionRewrites } from './plugins/rewrites';
+import { forgetFileScans, inRewriteScope, type ProjectRewrites, rewritesKey, rewritesOfFile, scanProjectRewrites, unionRewrites } from './plugins/rewrites';
+import { diffSnapshots, takeSourceSnapshot } from './workspace/sourceSnapshot';
 import { matchesAnyGlob } from './util/glob';
 import { withTimeout } from './util/timeout';
 import { asRecord, asString, safeParse } from './util/json';
@@ -52,8 +53,8 @@ export interface StrapiEngine {
   init(workspaceFolders: string[], options?: { waitForInstalled?: boolean }): Promise<void>;
   /** Resolves once the installed plugins of every project have been read (see {@link init}). */
   whenInstalledReady(): Promise<void>;
-  /** Re-discover and re-index everything. */
-  rescan(): Promise<void>;
+  /** Re-discover and re-index everything; `cold` also drops the cached plugin reads (everything is read again). */
+  rescan(options?: { cold?: boolean }): Promise<void>;
   /**
    * Register an additional search root on demand from any path (a file → walk up
    * to its Strapi project; a directory → scan down for projects) and index what
@@ -101,6 +102,12 @@ export interface StrapiEngine {
    * a watcher on node_modules.
    */
   refreshInstalledIfStale(): Promise<void>;
+  /**
+   * {@link refreshInstalledIfStale}, plus — for clients without a file watcher
+   * (`createEngine(fs, { trackDiskChanges: true })`) — re-index the project files
+   * created, edited or deleted on disk since the last check. Throttled.
+   */
+  refreshIfStale(): Promise<void>;
   /** Every project's HTTP routes (see `listRoutes`), for the editor's Routes view. */
   getRoutes(opts?: ListRoutesOptions): Promise<Array<{ root: string; routes: RouteInfo[] }>>;
 }
@@ -112,6 +119,8 @@ const INSTALLED_FULL_CHECK_MS = 60_000;
 const INSTALLED_READ_TIMEOUT_MS = 30_000;
 /** Hard ceiling on the project-code rewrite scan; past it, every plugin counts as rewritten. */
 const REWRITE_SCAN_TIMEOUT_MS = 20_000;
+/** Minimum delay between two comparisons of the project files with the disk (no-watcher clients). */
+export const DISK_CHECK_MS = 2_000;
 
 /** The project's own code rewrites (src/**, local plugins) — bounded; on timeout, anything may be rewritten. */
 function scanRewrites(fs: FileSystem, root: string): Promise<ProjectRewrites> {
@@ -152,8 +161,14 @@ class Engine implements StrapiEngine {
   private loadingInstalled = false;
   /** Paths changed while installed plugins were loading, replayed once they land. */
   private dirtyDuringLoad = { changed: new Set<string>(), deleted: new Set<string>() };
+  private lastDiskCheck = 0;
+  private diskCheck: Promise<void> | undefined;
 
-  constructor(private readonly fs: FileSystem) {}
+  constructor(
+    private readonly fs: FileSystem,
+    /** No file watcher: compare the project files with the disk on queries (see refreshIfStale). */
+    private readonly trackDiskChanges = false,
+  ) {}
 
   onReferencesChanged(listener: () => void): void {
     this.referencesListener = listener;
@@ -182,7 +197,11 @@ class Engine implements StrapiEngine {
     return this.installedLoad;
   }
 
-  rescan(): Promise<void> {
+  rescan(options?: { cold?: boolean }): Promise<void> {
+    if (options?.cold) {
+      forgetPluginReads(this.fs);
+      forgetFileScans(this.fs);
+    }
     return this.serialize(() => this.rescanImpl());
   }
 
@@ -305,6 +324,7 @@ class Engine implements StrapiEngine {
     // Installed plugins and plugin rewrites are read in the background (loadInstalledInBackground):
     // until then, no plugin is verifiable.
     index.rewrittenPlugins = new Set(['*']);
+    const snapshot = this.trackDiskChanges ? await takeSourceSnapshot(this.fs, [srcDir, join(root, 'config')], [join(root, 'package.json')]) : undefined;
     // Exact installed version (package.json only declares a range) — best-effort.
     let strapiVersion: string | undefined;
     try {
@@ -323,6 +343,8 @@ class Engine implements StrapiEngine {
       ...(strapiVersion ? { strapiVersion } : {}),
       index,
       references: new Map(),
+      indexedAt: Date.now(),
+      ...(snapshot ? { snapshot } : {}),
     };
   }
 
@@ -339,6 +361,13 @@ class Engine implements StrapiEngine {
         controllers: p.index.controllers.size,
         policies: p.index.policies.size,
         middlewares: p.index.middlewares.size,
+      },
+      freshness: {
+        ...(p.indexedAt ? { indexedAt: new Date(p.indexedAt).toISOString() } : {}),
+        ...(p.snapshot ? { diskCheckedAt: new Date(p.snapshot.takenAt).toISOString() } : {}),
+        ...(p.installedAt ? { pluginsReadAt: new Date(p.installedAt).toISOString() } : {}),
+        ...(!p.installedAt && this.loadingInstalled ? { pluginsLoading: true } : {}),
+        ...(p.pluginReads ? { pluginReads: { read: p.pluginReads.read, fromCache: p.pluginReads.reused } } : {}),
       },
     }));
   }
@@ -363,6 +392,39 @@ class Engine implements StrapiEngine {
       }
     }
     return out;
+  }
+
+  async refreshIfStale(): Promise<void> {
+    await this.refreshInstalledIfStale();
+    await this.refreshDiskIfStale();
+  }
+
+  private refreshDiskIfStale(): Promise<void> {
+    if (!this.trackDiskChanges) return Promise.resolve();
+    if (this.diskCheck) return this.diskCheck;
+    if (Date.now() - this.lastDiskCheck < DISK_CHECK_MS) return Promise.resolve();
+    this.lastDiskCheck = Date.now();
+    this.diskCheck = this.checkDisk().finally(() => {
+      this.diskCheck = undefined;
+    });
+    return this.diskCheck;
+  }
+
+  /** Re-index what changed on disk since each project's last snapshot (git checkout, manual edits…). */
+  private async checkDisk(): Promise<void> {
+    const changed: string[] = [];
+    const deleted: string[] = [];
+    for (const project of [...this.projects]) {
+      const before = project.snapshot;
+      const outside = (project.rewrites?.dirs ?? []).filter((d) => !isPathInside(project.root, d));
+      const after = await takeSourceSnapshot(this.fs, [project.srcDir, join(project.root, 'config'), ...outside], [join(project.root, 'package.json')]);
+      project.snapshot = after;
+      if (!before || before.truncated || after.truncated) continue;
+      const diff = diffSnapshots(before, after);
+      changed.push(...diff.changed);
+      deleted.push(...diff.deleted);
+    }
+    if (changed.length || deleted.length) await this.onFilesChanged(changed, deleted);
   }
 
   refreshInstalledIfStale(): Promise<void> {
@@ -414,6 +476,9 @@ class Engine implements StrapiEngine {
     }
     clearInstalled(project.index);
     mergeInstalled(project.index, installed);
+    project.installedAt = Date.now();
+    if (installed) project.pluginReads = installed.reads;
+    else delete project.pluginReads;
     project.rewrites = rewrites;
     applyRewrites(project.index, installed, unionRewrites(rewrites));
     if (installed) project.installed = installed;
@@ -702,6 +767,6 @@ class Engine implements StrapiEngine {
   }
 }
 
-export function createEngine(fs: FileSystem): StrapiEngine {
-  return new Engine(fs);
+export function createEngine(fs: FileSystem, options?: { trackDiskChanges?: boolean }): StrapiEngine {
+  return new Engine(fs, options?.trackDiskChanges ?? false);
 }

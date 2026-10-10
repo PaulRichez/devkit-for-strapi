@@ -33,6 +33,13 @@
 - The MCP `list_routes` tool returns the same table, with `fullPath`, `public`, the
   declaration location and plugin routes; admin routes with `admin: true`.
 
+**MCP: always answers on the current files**
+
+- The MCP server re-indexes what changed on disk before answering (edits made
+  outside the session, a `git checkout`, an `npm install`), so `refresh` is no
+  longer needed to avoid stale answers. `server_info` and `list_projects` say how
+  current each project's index is; `refresh({ cold: true })` reads everything again.
+
 **Fixes**
 
 - Local plugins scaffolded with the Strapi 5 plugin SDK (`server/src`) were invisible,
