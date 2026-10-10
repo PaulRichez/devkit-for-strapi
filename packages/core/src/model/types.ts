@@ -455,6 +455,8 @@ export interface ProjectSummary {
     indexedAt?: string;
     /** Files last compared with the disk, changes re-indexed (ISO; clients without a watcher). */
     diskCheckedAt?: string;
+    /** Clients without a watcher: `off` when the project is too large to compare (call refresh after external edits). */
+    diskTracking?: 'on' | 'off';
     /** Installed plugins last read (ISO); `pluginsLoading` while the first read runs. */
     pluginsReadAt?: string;
     pluginsLoading?: boolean;

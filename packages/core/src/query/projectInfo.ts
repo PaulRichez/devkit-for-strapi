@@ -13,7 +13,7 @@ import { isFrameworkRef, parseRef } from '../model/uid';
 import { StaticEvaluator } from '../plugins/evaluate';
 import { readApiPrefix } from '../plugins/installed';
 import { isVerifiablePlugin } from '../plugins/merge';
-import { listBrokenRefs } from './refQuery';
+import { listBrokenRefs, validateRef } from './refQuery';
 
 export interface PluginInfo {
   name: string;
@@ -53,7 +53,7 @@ export interface ProjectInfo {
   health: {
     /** Refs that resolve to nothing (see list_broken_refs). */
     brokenRefs: number;
-    /** Refs into plugins DevKit can't verify, by plugin. */
+    /** Distinct refs into plugins DevKit can't verify (answered `external`), by plugin. */
     unverifiedPluginRefs: number;
     unverifiedByPlugin?: Record<string, number>;
   };
@@ -116,7 +116,7 @@ export async function projectInfo(fs: FileSystem, project: StrapiProject, summar
 
   // Plugins, and why each one DevKit can't verify isn't.
   const rewritten = idx.rewrittenPlugins;
-  const loading = !project.rewrites;
+  const loading = summary.freshness.pluginsLoading === true;
   const rewriteSources = (name: string): string[] => {
     const out: string[] = [];
     for (const [file, r] of project.rewrites?.files ?? []) if (r.plugins.has(name) || r.plugins.has('*')) out.push(rel(file));
@@ -125,6 +125,7 @@ export async function projectInfo(fs: FileSystem, project: StrapiProject, summar
   const whyNot = (name: string, gaps: string[]): string[] => {
     const why: string[] = [];
     if (loading) why.push('plugins are still being read (a few seconds after startup)');
+    else if (!project.rewrites) why.push('the plugins could not be read (see refresh)');
     else if (rewritten?.has(name) || rewritten?.has('*')) {
       const files = rewriteSources(name);
       if (files.length) why.push(`rewritten at boot by ${files.slice(0, 3).join(', ')}${files.length > 3 ? ` (+${files.length - 3})` : ''}`);
@@ -160,28 +161,36 @@ export async function projectInfo(fs: FileSystem, project: StrapiProject, summar
 
   // Health: broken refs, and refs DevKit can't check because their plugin isn't verified.
   const brokenRefs = listBrokenRefs(project).length;
+  // Refs into unverified plugins that validate_reference really answers `external` for (each ref once,
+  // whatever forms it is used under; field keys aside).
   const unverifiedByPlugin: Record<string, number> = {};
   let unverifiedPluginRefs = 0;
+  const seen = new Set<string>();
   for (const [key, locations] of project.references) {
-    if (!locations.length) continue;
-    const ref = key.slice(key.indexOf(':') + 1);
-    if (isFrameworkRef(ref)) continue;
+    if (!locations.length || key.startsWith('relation-field:') || key.startsWith('plugin:')) continue;
+    const ref = key.slice(key.indexOf(':') + 1).split('#')[0]!;
+    if (seen.has(ref) || isFrameworkRef(ref)) continue;
+    seen.add(ref);
     const parsed = parseRef(ref);
     if (!parsed || parsed.namespace !== 'plugin' || isVerifiablePlugin(idx, parsed.scope)) continue;
-    unverifiedByPlugin[parsed.scope] = (unverifiedByPlugin[parsed.scope] ?? 0) + locations.length;
-    unverifiedPluginRefs += locations.length;
+    if (validateRef(project, ref).status !== 'external') continue;
+    unverifiedByPlugin[parsed.scope] = (unverifiedByPlugin[parsed.scope] ?? 0) + 1;
+    unverifiedPluginRefs++;
   }
 
-  const nodeModules = project.strapiVersion !== undefined;
+  // Installed plugins were found (node_modules may be hoisted above the project, in a monorepo).
+  const installedVersion = project.installed?.strapiVersion ?? project.strapiVersion;
+  const nodeModules = project.installed !== undefined || project.strapiVersion !== undefined;
   const notes: string[] = [];
   if (!nodeModules) notes.push('@strapi/strapi is not installed (no node_modules): refs into installed plugins (users-permissions, upload, i18n…) come back `external`, never checked. Install the dependencies to verify them.');
   if (loading) notes.push('Installed plugins are still being read: plugin refs come back `external` for a few more seconds.');
-  if (unverifiedPluginRefs) notes.push(`${unverifiedPluginRefs} ref(s) point into unverified plugins: they are neither confirmed nor reported (see plugins[].why).`);
+  if (unverifiedPluginRefs) notes.push(`${unverifiedPluginRefs} distinct ref(s) into unverified plugins come back \`external\`: neither confirmed nor reported (see plugins[].why).`);
+  if (summary.freshness.diskTracking === 'off') notes.push('Too many files to compare with the disk on each call: call refresh after editing files outside this session.');
 
   return {
     name: basename(root),
     root,
-    strapi: { major: project.version, ...(project.strapiVersion ? { installed: project.strapiVersion } : {}), ...(project.versionSignals.spec ? { declared: project.versionSignals.spec } : {}) },
+    strapi: { major: project.version, ...(installedVersion ? { installed: installedVersion } : {}), ...(project.versionSignals.spec ? { declared: project.versionSignals.spec } : {}) },
     language: (await isFile(join(root, 'tsconfig.json'))) ? 'typescript' : 'javascript',
     ...(packageManager ? { packageManager } : {}),
     nodeModules,

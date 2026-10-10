@@ -599,6 +599,20 @@ export class StaticEvaluator {
   // -------------------------------------------------------------------------
 
   private readonly loading = new Map<string, Promise<ts.SourceFile | null>>();
+  /** Each file's type:mtime just before it was read. */
+  private readonly readMtimes = new Map<string, string>();
+  /** A read file failed (I/O error, not a size limit): the result depends on a transient state. */
+  private ioFailed = false;
+
+  /** The type:mtime each parsed file had when it was read (to detect a change during the read). */
+  mtimesAtRead(): ReadonlyMap<string, string> {
+    return this.readMtimes;
+  }
+
+  /** Some file could not be read (an I/O error): don't trust this read beyond this moment. */
+  get hadIoErrors(): boolean {
+    return this.ioFailed;
+  }
 
   private source(file: string): Promise<ts.SourceFile | null> {
     const inFlight = this.loading.get(file);
@@ -609,6 +623,9 @@ export class StaticEvaluator {
     const p = (async (): Promise<ts.SourceFile | null> => {
       let sf: ts.SourceFile | null = null;
       try {
+        // stat BEFORE reading: a later change always shows as a newer mtime than the one recorded
+        const st = await this.fs.stat(file);
+        if (st) this.readMtimes.set(file, `${st.type}:${st.mtime ?? 'x'}`);
         const text = await this.fs.readFile(file);
         if (text.length <= MAX_PARSE_CHARS && this.bytes + text.length <= this.limits.maxBytes) {
           this.bytes += text.length;
@@ -616,6 +633,7 @@ export class StaticEvaluator {
         }
       } catch {
         sf = null;
+        this.ioFailed = true;
       }
       this.sources.set(file, sf);
       this.loading.delete(file);
@@ -650,10 +668,13 @@ export class StaticEvaluator {
   async resolveRelative(fromFile: string, spec: string): Promise<string | undefined> {
     const base = resolveDots(join(dirname(fromFile), spec));
     if (!this.inRoots(base)) return undefined;
-    let pending = this.resolveCache.get(base);
+    // `require('.')`, `require('..')`, `require('./dir/')`: Node only looks for the folder's index.
+    const folderOnly = spec === '.' || spec === '..' || spec.endsWith('/') || /\/\.\.?$/.test(spec);
+    const key = folderOnly ? `${base}/` : base;
+    let pending = this.resolveCache.get(key);
     if (!pending) {
-      pending = this.resolveBase(base);
-      this.resolveCache.set(base, pending);
+      pending = this.resolveBase(base, folderOnly);
+      this.resolveCache.set(key, pending);
     }
     return pending;
   }
@@ -686,12 +707,14 @@ export class StaticEvaluator {
   }
 
   /** Node's resolution of a relative path: the file, `base` + an extension, or the folder's index. */
-  private async resolveBase(base: string): Promise<string | undefined> {
+  private async resolveBase(base: string, folderOnly = false): Promise<string | undefined> {
     const dir = dirname(base);
     const name = base.slice(dir.length + 1);
-    for (const ext of RESOLVE_EXT) {
-      if (name + ext === '') continue;
-      if (await this.isEntry(dir, name + ext, FileType.File)) return (await this.inRealRoots(base + ext)) ? base + ext : undefined;
+    if (!folderOnly) {
+      for (const ext of RESOLVE_EXT) {
+        if (name + ext === '' || !this.inRoots(base + ext)) continue; // `<root>.js` is a sibling of the root, outside it
+        if (await this.isEntry(dir, name + ext, FileType.File)) return (await this.inRealRoots(base + ext)) ? base + ext : undefined;
+      }
     }
     if (await this.isEntry(dir, name, FileType.Directory)) {
       for (const idx of INDEX_FILES) {

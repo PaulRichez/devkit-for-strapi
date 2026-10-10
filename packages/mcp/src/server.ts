@@ -35,7 +35,7 @@ export async function runServer(argv: string[]): Promise<void> {
         "2. Before writing a magic string (UID, service/controller ref, route handler, policy), call validate_reference: `unknown` comes with didYouMean; `external` means the plugin can't be verified (project_info says why). Never invent a UID.",
         '3. Read the real shape: get_schema for fields, list_routes for routes, find_references / dependents before changing something.',
         '4. Refactor in two steps: a plan_* tool (dry-run) → review → apply_edits with its planId; then list_broken_refs should return nothing.',
-        'Answers reflect the files on disk: what changed outside this session is re-indexed before each call. server_info says which tools need a Pro licence.',
+        "Answers reflect the files on disk: what changed outside this session is re-indexed before each call (unless a project's freshness.diskTracking is 'off' — then call refresh). server_info says which tools need a Pro licence.",
       ].join('\n'),
     },
   );

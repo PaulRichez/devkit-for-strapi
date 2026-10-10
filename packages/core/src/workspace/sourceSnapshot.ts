@@ -17,6 +17,8 @@ const STAT_CONCURRENCY = 32;
 
 export interface SourceSnapshot {
   files: Map<string, number>;
+  /** The folders it covers. */
+  dirs: string[];
   /** Too many files: changes on disk are not detected. */
   truncated: boolean;
   takenAt: number;
@@ -54,7 +56,17 @@ export async function takeSourceSnapshot(fs: FileSystem, dirs: readonly string[]
     }
   };
   await Promise.all(Array.from({ length: Math.min(STAT_CONCURRENCY, paths.length) }, worker));
-  return { files, truncated, takenAt: Date.now() };
+  return { files, dirs: [...dirs], truncated, takenAt: Date.now() };
+}
+
+/** `snapshot` extended with folders it doesn't cover yet (their files as they are now). */
+export async function extendSnapshot(fs: FileSystem, snapshot: SourceSnapshot, dirs: readonly string[]): Promise<SourceSnapshot> {
+  const missing = dirs.filter((d) => !snapshot.dirs.includes(d));
+  if (!missing.length) return snapshot;
+  const more = await takeSourceSnapshot(fs, missing, []);
+  const files = new Map(snapshot.files);
+  for (const [p, m] of more.files) if (!files.has(p)) files.set(p, m);
+  return { files, dirs: [...snapshot.dirs, ...missing], truncated: snapshot.truncated || more.truncated || files.size > SNAPSHOT_MAX_FILES, takenAt: snapshot.takenAt };
 }
 
 /** What changed from `before` to `after`. */

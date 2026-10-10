@@ -71,6 +71,14 @@ describe('MCP tools (engine-backed handlers)', () => {
     );
   });
 
+  it('every answer says how current it is in _meta, with no visible noise when nothing limits it', async () => {
+    const res = await handlers.get('list_content_types')!({ from: cmsARoot });
+    const meta = (res._meta as Record<string, { answeredAt: string; projects: Array<{ indexedAt?: string }> }>)['devkit-for-strapi/freshness']!;
+    expect(meta.answeredAt).toMatch(/^\d{4}-/);
+    expect(meta.projects.length).toBeGreaterThan(0);
+    expect(res.content).toHaveLength(1);
+  });
+
   it('project_info describes the project, its plugins and its health', async () => {
     const info = await call('project_info', { from: cmsARoot });
     expect(info.root).toBe(cmsARoot);

@@ -51,6 +51,28 @@ const json = (data: unknown): CallToolResult => ({
 /** Human-readable text for a thrown value (for structured apply-failure reasons). */
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/**
+ * Every answer carries how current it is in `_meta` (machine-readable, no format
+ * change); a visible line is added only when the answer may NOT reflect the disk.
+ */
+export function withFreshness(engine: StrapiEngine, res: CallToolResult): CallToolResult {
+  const projects = engine.getProjects();
+  const caveats: string[] = [];
+  for (const p of projects) {
+    const name = paths.basename(p.root);
+    if (p.freshness.diskTracking === 'off') caveats.push(`${name} has too many files to compare with the disk on each call: call refresh after editing files outside this session`);
+    if (p.freshness.pluginsLoading) caveats.push(`${name}'s installed plugins are still being read: plugin refs come back external for a few seconds`);
+  }
+  return {
+    ...res,
+    _meta: {
+      ...res._meta,
+      'devkit-for-strapi/freshness': { answeredAt: new Date().toISOString(), projects: projects.map((p) => ({ name: paths.basename(p.root), ...p.freshness })) },
+    },
+    ...(caveats.length ? { content: [...res.content, { type: 'text' as const, text: `Freshness: ${caveats.join('; ')}.` }] } : {}),
+  };
+}
+
 /** One reference as a compact, token-cheap line: `path:line:col [via]  snippet` (1-based). */
 const compactRef = (r: ReferenceLocation): string =>
   `${r.filePath}:${r.start.line + 1}:${r.start.character + 1}${r.via ? ` [${r.via}]` : ''}${r.snippet ? `  ${r.snippet}` : ''}`;
@@ -215,10 +237,10 @@ export function registerTools(
     registered++;
     const inner = (GATED.has(name) ? gate(cb as never, name) : cb) as (...a: unknown[]) => unknown;
     // No file watcher in the MCP server: before answering, pick up what changed on disk since
-    // the last call (edits, a git checkout, an `npm install`) — a few ms, at most every 2 s.
+    // the last call (edits, a git checkout, an `npm install`) — a few ms.
     const fresh = (async (...a: unknown[]) => {
       await engine.refreshIfStale();
-      return inner(...a);
+      return withFreshness(engine, (await inner(...a)) as CallToolResult);
     }) as unknown as typeof cb;
     return server['registerTool'](name, config, fresh);
   };
@@ -251,7 +273,8 @@ export function registerTools(
         roots: [...roots()],
         // How current every answer is: what changed on disk is re-indexed before each call.
         freshness: {
-          policy: 'Before each call, project files created, edited or deleted on disk are re-indexed (checked at most every 2 s) and installed plugins are re-read after an install; refresh({ cold: true }) reads everything again without cache.',
+          policy:
+            "Before each call, project files created, edited or deleted on disk are re-indexed and installed plugins are re-read after an install (`diskTracking: 'off'` on a project too large to compare: call refresh after external edits); refresh({ cold: true }) reads everything again without cache.",
           projects: engine.getProjects().map((p) => ({ name: paths.basename(p.root), ...p.freshness })),
         },
       });
@@ -284,7 +307,8 @@ export function registerTools(
       await engine.whenReferencesReady();
       const p = pick(engine, args, roots());
       if ('result' in p) return p.result;
-      const summary = engine.getProjects().find((s) => s.root === p.project.root)!;
+      const summary = engine.getProjects().find((s) => s.root === p.project.root);
+      if (!summary) return json({ error: 'The project was re-indexed meanwhile: call project_info again.' });
       return json(await projectInfo(fs, p.project, summary));
     },
   );
@@ -322,7 +346,7 @@ export function registerTools(
     {
       title: 'Re-index projects from disk (full rescan)',
       description:
-        'Re-scan every discovered Strapi project from disk and rebuild the index from scratch. Rarely needed: before every call the server already compares the project files with the disk (at most every 2 s) and re-indexes what was created, edited or deleted outside this session (manual edits, git checkout/pull, another tool), and re-reads installed plugins after an install. Use it to discover a project added since startup, or with `cold: true` to also drop the cached plugin reads and read every installed plugin from node_modules again (slower). Returns the projects with their `freshness`.',
+        "Re-scan every discovered Strapi project from disk and rebuild the index from scratch. Rarely needed: before every call the server already compares the project files with the disk and re-indexes what was created, edited or deleted outside this session (manual edits, git checkout/pull, another tool), and re-reads installed plugins after an install. Use it to discover a project added since startup, after external edits on a project whose `freshness.diskTracking` is 'off' (too many files), or with `cold: true` to also drop the cached plugin reads and read every installed plugin from node_modules again (slower). Returns the projects with their `freshness`.",
       inputSchema: {
         cold: z.boolean().optional().describe('Also drop the cached plugin reads: every installed plugin is read again from node_modules (default false).'),
       },

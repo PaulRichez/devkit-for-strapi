@@ -21,7 +21,7 @@
 
 import { type FileSystem, FileType } from '../fs/FileSystem';
 import { dirname, join, normalize } from '../fs/paths';
-import { pathsStamp } from '../fs/stamp';
+import { pathsStamp, pathsStampParts } from '../fs/stamp';
 import { parseMajor } from '../workspace/version';
 import type { AttributeInfo, CodeArtifact, ContentType, ControllerAction, ArtifactKind } from '../model/types';
 import { asRecord, asString, safeParse } from '../util/json';
@@ -87,6 +87,8 @@ export interface InstalledPluginsResult {
   extended: string[];
   /** Plugin servers read from node_modules on this read vs reused unchanged from the read cache. */
   reads: { read: number; reused: number };
+  /** Some plugin changed while being read (or a read failed): read it again at the next freshness check. */
+  unsettled?: boolean;
   /** `node_modules/@strapi/strapi` directory the plugins were resolved from. */
   strapiDir: string;
   strapiVersion: string;
@@ -612,6 +614,8 @@ interface ServerRead {
   rewrites: PluginRewrites;
   /** Cut by the time budget. */
   timedOut?: boolean;
+  /** A file changed while it was being read, or a read failed: valid now, but not reusable. */
+  unsettled?: boolean;
 }
 
 /**
@@ -640,7 +644,7 @@ async function readServerCached(
   if (!reads) serverReadsByFs.set(fs, (reads = new Map()));
   const key = [name, entry, apiPrefix ?? '', major].join('\n');
   const hit = reads.get(dir);
-  if (hit && hit.key === key && (await pathsStamp(fs, pluginReadPaths(hit.read.files))) === hit.stamp) {
+  if (hit && hit.key === key && (await pathsStamp(fs, pluginReadPaths([entry, ...hit.read.files]))) === hit.stamp) {
     reads.delete(dir); // most recently used last
     reads.set(dir, hit);
     counts.reused++;
@@ -649,8 +653,8 @@ async function readServerCached(
   counts.read++;
   const read = await readServer(fs, name, dir, entry, apiPrefix);
   reads.delete(dir);
-  if (read.timedOut) return read; // cut by the time budget: depends on the load, never reused
-  reads.set(dir, { key, stamp: await pathsStamp(fs, pluginReadPaths(read.files)), read });
+  if (read.timedOut || read.unsettled) return read; // depends on the load / on a moment: never reused
+  reads.set(dir, { key, stamp: await pathsStamp(fs, pluginReadPaths([entry, ...read.files])), read });
   while (reads.size > SERVER_READS_MAX) reads.delete(reads.keys().next().value!);
   return read;
 }
@@ -695,6 +699,12 @@ async function readServer(fs: FileSystem, name: string, dir: string, entry: stri
     for (const x of r.artifacts) rewrites.artifacts.add(x);
   }
   const files = pev.parsedFiles().map((sf) => sf.fileName);
+  // Did a file change while it was being read (a rebuild, an install in progress)? Then this read
+  // mixes two states: report it, never cache it, and let the next freshness check read again.
+  const atRead = pev.mtimesAtRead();
+  const recorded = files.filter((f) => atRead.has(f));
+  const now = await pathsStampParts(fs, recorded);
+  const unsettled = pev.hadIoErrors || files.length === 0 || recorded.some((f, i) => now[i] !== atRead.get(f));
   return {
     complete: scratch.complete,
     gaps: scratch.gaps,
@@ -704,6 +714,7 @@ async function readServer(fs: FileSystem, name: string, dir: string, entry: stri
     files,
     rewrites,
     ...(pev.exhausted ? { timedOut: true } : {}),
+    ...(unsettled ? { unsettled: true } : {}),
   };
 }
 
@@ -742,6 +753,7 @@ export async function readInstalledPlugins(fs: FileSystem, root: string, project
 
   const plugins: InstalledPlugin[] = [];
   const reads = { read: 0, reused: 0 };
+  let unsettled = false;
   /** Plugins the installed plugins' own server code rewrites at runtime. */
   const rewritten = new Set<string>();
   const extended = new Set<string>();
@@ -796,6 +808,7 @@ export async function readInstalledPlugins(fs: FileSystem, root: string, project
         plugin.artifacts = server.artifacts;
         plugin.routes = server.routes;
         plugin.files = server.files;
+        if (server.unsettled) unsettled = true;
         addRewrites(server.rewrites);
       }
     }
@@ -833,6 +846,7 @@ export async function readInstalledPlugins(fs: FileSystem, root: string, project
     rewritten: [...rewritten],
     extended: [...extended],
     reads,
+    ...(unsettled ? { unsettled: true } : {}),
     ...(frameworkMiddlewares ? { frameworkMiddlewares } : {}),
   };
 }

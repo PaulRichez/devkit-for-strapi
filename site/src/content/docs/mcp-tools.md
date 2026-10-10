@@ -46,13 +46,17 @@ survives server respawns. Returns the projects now known.
 
 :::note[Changes made outside the session]
 The server has no file watcher, so before answering each call it compares the
-project's files with the disk (at most every 2 s, a few milliseconds) and
-re-indexes what was created, edited or deleted outside it: a manual edit, another
-tool, a `git checkout`/`pull`, a branch switch. Installed plugins are re-read after
-an install. `server_info` and `list_projects` report each project's `freshness`
+project's files with the disk (a few milliseconds) and re-indexes what was
+created, edited or deleted outside it: a manual edit, another tool, a
+`git checkout`/`pull`, a branch switch. Installed plugins are re-read after an
+install. `server_info` and `list_projects` report each project's `freshness`
 (when it was indexed, last compared with the disk, when its plugins were read and
-how many came from the read cache). `refresh` forces a full rescan;
-`refresh({ cold: true })` reads every installed plugin again too.
+how many came from the read cache). On a project too large to compare (over
+20,000 files) `freshness.diskTracking` is `off`: call `refresh` after editing
+files outside the session. `refresh({ cold: true })` also reads every installed
+plugin again. Every answer carries the same `freshness` in its MCP `_meta`
+(`devkit-for-strapi/freshness`), and a visible `Freshness:` line is appended only
+when something limits it.
 :::
 
 Each reference is tagged with a **`via`** — how the call reaches the entity: the

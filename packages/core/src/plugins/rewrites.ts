@@ -54,7 +54,7 @@ const ITERATORS = new Set(['forEach', 'map', 'filter', 'find', 'findLast', 'some
 // Only syntax that can yield a plugin handle: `.plugin(` / `['plugin']`, a bare or destructured
 // `plugin`, `plugins`, a getter call (`service(`…), a registry `.get('controllers')`.
 export const MAY_REWRITE_PLUGINS =
-  /\.plugins?\b|\[\s*['"`]plugins?['"`]\s*\]|\bplugin\s*[(:,}]|[{,]\s*plugin\b|\bplugins\b|\b(controller|service|policy|middleware|contentType)\s*\(|\.get\(\s*['"`](content-types|controllers|services|policies|middlewares)['"`]/;
+  /\.plugins?\b|\[\s*['"`]plugins?['"`]\s*\]|\bplugin\s*[(:,}]|[{,]\s*plugin\b|\bplugins\b|\b(controller|service|policy|middleware|contentType)\b|\.get\(\s*['"`](content-types|controllers|services|policies|middlewares)['"`]/;
 
 /** Files above this size aren't parsed — they count as rewriting anything. */
 const MAX_FILE_BYTES = 2_000_000;
@@ -876,18 +876,22 @@ export async function rewritesOfFile(fs: FileSystem, file: string): Promise<Plug
   const mtime = (await fs.stat(file))?.mtime;
   const hit = mtime !== undefined ? cache.get(file) : undefined;
   if (hit && hit.mtime === mtime) return hit.rewrites;
-  const rewrites = await scanFile(fs, file);
-  if (mtime !== undefined) cache.set(file, { mtime, rewrites });
-  return rewrites;
+  const scan = await scanFile(fs, file);
+  if (mtime !== undefined && scan.read) cache.set(file, { mtime, rewrites: scan.rewrites });
+  return scan.rewrites;
 }
 
-async function scanFile(fs: FileSystem, file: string): Promise<PluginRewrites | undefined> {
+async function scanFile(fs: FileSystem, file: string): Promise<{ rewrites: PluginRewrites | undefined; read: boolean }> {
   let text: string;
   try {
     text = await fs.readFile(file);
   } catch {
-    return undefined;
+    return { rewrites: undefined, read: false };
   }
+  return { rewrites: rewritesOfText(file, text), read: true };
+}
+
+function rewritesOfText(file: string, text: string): PluginRewrites | undefined {
   if (text.length > MAX_FILE_BYTES) return { plugins: new Set(['*']), artifacts: new Set() };
   if (!MAY_REWRITE_PLUGINS.test(text)) return undefined;
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKindFor(file));

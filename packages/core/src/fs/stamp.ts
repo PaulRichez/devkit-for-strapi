@@ -10,6 +10,11 @@ const STAT_CONCURRENCY = 32;
  * is added or removed).
  */
 export async function pathsStamp(fs: FileSystem, paths: readonly string[]): Promise<string> {
+  return (await pathsStampParts(fs, paths)).join('|');
+}
+
+/** Each path's `type:mtime` (`-` when absent), in the given order. */
+export async function pathsStampParts(fs: FileSystem, paths: readonly string[]): Promise<string[]> {
   const parts = new Array<string>(paths.length);
   let next = 0;
   const worker = async (): Promise<void> => {
@@ -20,5 +25,5 @@ export async function pathsStamp(fs: FileSystem, paths: readonly string[]): Prom
     }
   };
   await Promise.all(Array.from({ length: Math.min(STAT_CONCURRENCY, paths.length) }, worker));
-  return parts.join('|');
+  return parts;
 }

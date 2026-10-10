@@ -35,7 +35,7 @@ import { resolveDefinition, resolveMember } from './resolve/resolver';
 import { forgetPluginReads, readInstalledPlugins } from './plugins/installed';
 import { applyRewrites, clearInstalled, installedStamp, mergeInstalled } from './plugins/merge';
 import { forgetFileScans, inRewriteScope, type ProjectRewrites, rewritesKey, rewritesOfFile, scanProjectRewrites, unionRewrites } from './plugins/rewrites';
-import { diffSnapshots, takeSourceSnapshot } from './workspace/sourceSnapshot';
+import { diffSnapshots, extendSnapshot, takeSourceSnapshot } from './workspace/sourceSnapshot';
 import { matchesAnyGlob } from './util/glob';
 import { withTimeout } from './util/timeout';
 import { asRecord, asString, safeParse } from './util/json';
@@ -119,8 +119,14 @@ const INSTALLED_FULL_CHECK_MS = 60_000;
 const INSTALLED_READ_TIMEOUT_MS = 30_000;
 /** Hard ceiling on the project-code rewrite scan; past it, every plugin counts as rewritten. */
 const REWRITE_SCAN_TIMEOUT_MS = 20_000;
-/** Minimum delay between two comparisons of the project files with the disk (no-watcher clients). */
-export const DISK_CHECK_MS = 2_000;
+/**
+ * The disk check runs before every query; a slow one (a huge project) is spaced
+ * out to 10× its duration, never more than this.
+ */
+const DISK_CHECK_MAX_INTERVAL_MS = 2_000;
+const DISK_CHECK_SLOW_MS = 50;
+/** A full fingerprint that never matches: the next full check re-reads the plugins. */
+const UNSETTLED = 'unsettled';
 
 /** The project's own code rewrites (src/**, local plugins) — bounded; on timeout, anything may be rewritten. */
 function scanRewrites(fs: FileSystem, root: string): Promise<ProjectRewrites> {
@@ -162,7 +168,10 @@ class Engine implements StrapiEngine {
   /** Paths changed while installed plugins were loading, replayed once they land. */
   private dirtyDuringLoad = { changed: new Set<string>(), deleted: new Set<string>() };
   private lastDiskCheck = 0;
+  private diskCheckInterval = 0;
   private diskCheck: Promise<void> | undefined;
+  /** The token of the installed-plugin load in flight (see loadInstalledInBackground). */
+  private loadToken = 0;
 
   constructor(
     private readonly fs: FileSystem,
@@ -255,6 +264,7 @@ class Engine implements StrapiEngine {
    * plugin refs are unverifiable (silent), never wrongly reported.
    */
   private async loadInstalledInBackground(token: number): Promise<void> {
+    this.loadToken = token;
     this.loadingInstalled = true;
     this.dirtyDuringLoad = { changed: new Set(), deleted: new Set() };
     try {
@@ -262,6 +272,12 @@ class Engine implements StrapiEngine {
         if (token !== this.rescanToken) return;
         try {
           await this.reloadInstalled(project);
+          // Edited while it was being read (a rewrite in src, a config, an extension, a lockfile)?
+          // Read it again (unchanged plugins come from the cache) before anyone is told.
+          const dirty = [...this.dirtyDuringLoad.changed, ...this.dirtyDuringLoad.deleted];
+          const affects = (p: string): boolean =>
+            (affectsInstalledPlugins(p) && this.projectForFile(p) === project) || (!!project.rewrites && inRewriteScope(project.rewrites, p));
+          if (dirty.some(affects)) await this.reloadInstalled(project);
         } catch {
           /* stays unverifiable */
         }
@@ -269,12 +285,16 @@ class Engine implements StrapiEngine {
         this.referencesListener?.();
       }
     } finally {
-      if (token === this.rescanToken) {
+      // The latest load resets the flag even when a newer rescan failed before starting its own.
+      if (token === this.loadToken) {
         this.loadingInstalled = false;
         const { changed, deleted } = this.dirtyDuringLoad;
         this.dirtyDuringLoad = { changed: new Set(), deleted: new Set() };
-        // Edits made while loading: re-apply them on the loaded state.
-        if (changed.size || deleted.size) await this.onFilesChanged([...changed], [...deleted]);
+        // Edits made while loading: re-apply them on the loaded state, then tell the client.
+        if (token === this.rescanToken && (changed.size || deleted.size)) {
+          await this.onFilesChanged([...changed], [...deleted]);
+          this.referencesListener?.();
+        }
       }
     }
   }
@@ -320,11 +340,12 @@ class Engine implements StrapiEngine {
     if (!asRecord(pkg)) return undefined;
     const { version, signals } = detectVersion(pkg);
     const srcDir = join(root, 'src');
+    // Taken BEFORE indexing: a file edited meanwhile shows up as changed at the next check.
+    const snapshot = this.trackDiskChanges ? await takeSourceSnapshot(this.fs, this.snapshotDirs({ srcDir, root }), [join(root, 'package.json')]) : undefined;
     const index = await buildIndex(this.fs, srcDir);
     // Installed plugins and plugin rewrites are read in the background (loadInstalledInBackground):
     // until then, no plugin is verifiable.
     index.rewrittenPlugins = new Set(['*']);
-    const snapshot = this.trackDiskChanges ? await takeSourceSnapshot(this.fs, [srcDir, join(root, 'config')], [join(root, 'package.json')]) : undefined;
     // Exact installed version (package.json only declares a range) — best-effort.
     let strapiVersion: string | undefined;
     try {
@@ -364,7 +385,8 @@ class Engine implements StrapiEngine {
       },
       freshness: {
         ...(p.indexedAt ? { indexedAt: new Date(p.indexedAt).toISOString() } : {}),
-        ...(p.snapshot ? { diskCheckedAt: new Date(p.snapshot.takenAt).toISOString() } : {}),
+        ...(p.snapshot && !p.snapshot.truncated ? { diskCheckedAt: new Date(p.snapshot.takenAt).toISOString() } : {}),
+        ...(this.trackDiskChanges ? { diskTracking: p.snapshot && !p.snapshot.truncated ? ('on' as const) : ('off' as const) } : {}),
         ...(p.installedAt ? { pluginsReadAt: new Date(p.installedAt).toISOString() } : {}),
         ...(!p.installedAt && this.loadingInstalled ? { pluginsLoading: true } : {}),
         ...(p.pluginReads ? { pluginReads: { read: p.pluginReads.read, fromCache: p.pluginReads.reused } } : {}),
@@ -397,17 +419,28 @@ class Engine implements StrapiEngine {
   async refreshIfStale(): Promise<void> {
     await this.refreshInstalledIfStale();
     await this.refreshDiskIfStale();
+    // A change on disk can re-read the plugins (a config edit) or rescan (a package.json): wait for it.
+    if (this.loadingInstalled) await this.installedLoad;
   }
 
   private refreshDiskIfStale(): Promise<void> {
     if (!this.trackDiskChanges) return Promise.resolve();
     if (this.diskCheck) return this.diskCheck;
-    if (Date.now() - this.lastDiskCheck < DISK_CHECK_MS) return Promise.resolve();
-    this.lastDiskCheck = Date.now();
+    if (Date.now() - this.lastDiskCheck < this.diskCheckInterval) return Promise.resolve();
+    const startedAt = Date.now();
+    this.lastDiskCheck = startedAt;
     this.diskCheck = this.checkDisk().finally(() => {
+      const took = Date.now() - startedAt;
+      this.diskCheckInterval = took > DISK_CHECK_SLOW_MS ? Math.min(10 * took, DISK_CHECK_MAX_INTERVAL_MS) : 0;
       this.diskCheck = undefined;
     });
     return this.diskCheck;
+  }
+
+  /** What a project's disk snapshot covers: src/, config/, local plugins resolved elsewhere, package.json. */
+  private snapshotDirs(project: { srcDir: string; root: string; rewrites?: ProjectRewrites }): string[] {
+    const others = (project.rewrites?.dirs ?? []).filter((d) => d !== project.srcDir && !isPathInside(project.srcDir, d));
+    return [project.srcDir, join(project.root, 'config'), ...others];
   }
 
   /** Re-index what changed on disk since each project's last snapshot (git checkout, manual edits…). */
@@ -416,8 +449,7 @@ class Engine implements StrapiEngine {
     const deleted: string[] = [];
     for (const project of [...this.projects]) {
       const before = project.snapshot;
-      const outside = (project.rewrites?.dirs ?? []).filter((d) => !isPathInside(project.root, d));
-      const after = await takeSourceSnapshot(this.fs, [project.srcDir, join(project.root, 'config'), ...outside], [join(project.root, 'package.json')]);
+      const after = await takeSourceSnapshot(this.fs, this.snapshotDirs(project), [join(project.root, 'package.json')]);
       project.snapshot = after;
       if (!before || before.truncated || after.truncated) continue;
       const diff = diffSnapshots(before, after);
@@ -464,16 +496,17 @@ class Engine implements StrapiEngine {
 
   /** Re-read one project's installed plugins and swap them into its index (synchronous swap). */
   private async reloadInstalled(project: StrapiProject, stamp?: string): Promise<void> {
-    const rewrites = await scanRewrites(this.fs, project.root);
-    const installed = await withTimeout(readInstalledPlugins(this.fs, project.root, unionRewrites(rewrites)), INSTALLED_READ_TIMEOUT_MS, undefined);
+    // Fingerprinted BEFORE reading: a change during the read shows up at the next check.
     let next = stamp;
     if (next === undefined) {
       try {
-        next = await installedStamp(this.fs, project.root, installed?.strapiDir, installed);
+        next = await installedStamp(this.fs, project.root, project.installed?.strapiDir, project.installed);
       } catch {
         next = undefined;
       }
     }
+    const rewrites = await scanRewrites(this.fs, project.root);
+    const installed = await withTimeout(readInstalledPlugins(this.fs, project.root, unionRewrites(rewrites)), INSTALLED_READ_TIMEOUT_MS, undefined);
     clearInstalled(project.index);
     mergeInstalled(project.index, installed);
     project.installedAt = Date.now();
@@ -481,12 +514,15 @@ class Engine implements StrapiEngine {
     else delete project.pluginReads;
     project.rewrites = rewrites;
     applyRewrites(project.index, installed, unionRewrites(rewrites));
+    // Local plugins resolved outside src/ are known now: the disk snapshot covers them from here on.
+    if (project.snapshot) project.snapshot = await extendSnapshot(this.fs, project.snapshot, this.snapshotDirs(project));
     if (installed) project.installed = installed;
     else delete project.installed;
     if (next !== undefined) project.installedStamp = next;
     else delete project.installedStamp;
     try {
-      project.installedFullStamp = await installedStamp(this.fs, project.root, installed?.strapiDir, installed, true);
+      // A plugin that changed while being read: its read wasn't cached; make the next full check read it again.
+      project.installedFullStamp = installed?.unsettled ? UNSETTLED : await installedStamp(this.fs, project.root, installed?.strapiDir, installed, true);
     } catch {
       delete project.installedFullStamp;
     }
