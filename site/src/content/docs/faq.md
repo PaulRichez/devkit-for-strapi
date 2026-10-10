@@ -10,6 +10,12 @@ locally and answers from them, with **no telemetry**. The one exception is a
 [Pro](/pro/) licence: on activation the licence **key** (never your code) is
 checked once against the Polar licensing API, then DevKit works offline.
 
+## Does it run my project’s code?
+
+No. DevKit reads files, including the installed plugins in `node_modules`, and
+follows their code **statically**. It never starts Strapi, never executes a plugin,
+and never touches your database.
+
 ## Strapi v4 or v5?
 
 Both. The version is detected per project, and v4-in-v5 patterns (e.g.

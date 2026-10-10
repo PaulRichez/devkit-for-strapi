@@ -394,7 +394,7 @@ export function registerTools(
     {
       title: 'Validate a Strapi reference',
       description:
-        'Check whether a Strapi reference is real in the project. Returns valid | unknown (+ didYouMean) | external (a plugin not in the workspace — cannot be verified). Call this before writing a magic string.',
+        'Check whether a Strapi reference is real in the project. Returns valid | unknown (+ didYouMean) | external (a plugin DevKit could not read completely, e.g. not installed — cannot be verified). Installed plugins are read from node_modules, so their refs are verified. Call this before writing a magic string.',
       inputSchema: { ref: z.string(), ...selector },
     },
     async (args) => {

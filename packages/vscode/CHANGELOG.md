@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased
+
+**Installed plugins are verified, not skipped**
+
+- DevKit now reads the plugins in `node_modules` the way Strapi's loader does: the
+  internal plugins, the dependencies that declare themselves Strapi plugins, the
+  rules of `config/plugins`, and each plugin's `strapi-server` entry. It follows
+  their code statically and never executes it.
+- Refs into a plugin read completely are checked like your own:
+  `plugin::users-permissions.usr` gets "did you mean `plugin::users-permissions.user`",
+  and completion, hover and go-to-definition work on plugin UIDs, services and
+  methods. A plugin DevKit can't read completely stays silent, as before.
+- Strapi's built-in middlewares are checked in `config/middlewares`: `strapi::corss`
+  gets "did you mean `strapi::cors`".
+- Checked against real Strapi: on six projects from 4.13 to 5.54, the plugins and
+  everything they register matched exactly.
+- Installing a plugin is picked up without a reload, through the files npm, yarn and
+  pnpm rewrite on install.
+
+**New: Strapi Routes view**
+
+- An Explorer view with every route of the project: your API, then plugin routes,
+  with mounted paths and a lock/unlock icon for `auth: false`. Click to open the
+  declaration, or jump to the controller method. Admin routes are behind a toggle.
+- The MCP `list_routes` tool returns the same table, with `fullPath`, `public`, the
+  declaration location and plugin routes; admin routes with `admin: true`.
+
+**Fixes**
+
+- Local plugins scaffolded with the Strapi 5 plugin SDK (`server/src`) were invisible,
+  so valid refs into them were reported unknown.
+- Content-types a local plugin declares in code (`content-types/index.ts`) are read.
+- A local plugin with its own `package.json` was treated as a separate project.
+- Route files that export a variable (`export default customRoutes`) were missing
+  from the route list.
+- Strapi 4 i18n's `POST …/localizations` routes are listed.
+
 ## 0.1.5
 
 An urgent fix for standalone MCP users, plus a way to tell what you're running.

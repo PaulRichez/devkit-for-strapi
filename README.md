@@ -40,8 +40,14 @@ first-class, verified code — in two surfaces that share one engine:
 - a **VS Code extension** for humans, and
 - an **MCP server** that gives AI agents the same ground truth.
 
-The rule everywhere: **guarantee, don't guess.** When something can't be proven (a non-literal string, an
-unverifiable external plugin), DevKit stays silent rather than show a false positive.
+The rule everywhere: **guarantee, don't guess.** When something can't be proven (a non-literal string, a
+plugin DevKit couldn't read exhaustively), DevKit stays silent rather than show a false positive.
+
+**Installed plugins are read too.** DevKit reads the plugins in `node_modules` (users-permissions, upload,
+i18n, third-party ones) the way Strapi loads them, statically: it follows their code without ever running
+it, and honours `config/plugins` (a disabled plugin is ignored). `plugin::users-permissions.usr` is
+reported with a fix, and `strapi::corss` in `config/middlewares` too. A plugin it can't read completely
+stays silent, and without `node_modules` nothing changes.
 
 ---
 
@@ -63,6 +69,9 @@ Inside a Strapi project — zero config, no type generation:
   handler, renames the underlying file/folder, and updates relation `target`s. No grep-and-pray.
 - **Hover** — describes what a string resolves to, with the signature for service methods and usage
   insights (incoming relations, route handlers, data usages).
+- **Strapi Routes view** — every route of the project in the Explorer: your API, then the plugins'
+  routes, with their mounted path and a lock/unlock icon for `auth: false`. Click a route to open its
+  declaration; the inline action jumps to the controller method. Admin-panel routes are behind a toggle.
 
 ---
 

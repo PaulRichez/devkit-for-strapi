@@ -26,6 +26,16 @@ strapi.documents('api::artcle.artcle')
 // ✗ unknown UID — quick fix: did you mean 'api::article.article'?
 ```
 
+Refs into [installed plugins](/concepts/#installed-plugins) are checked too, and so
+are Strapi’s built-in middlewares in `config/middlewares`:
+
+```ts
+strapi.service('plugin::users-permissions.jwtt')
+// ✗ unknown service — did you mean 'plugin::users-permissions.jwt'?
+export default ['strapi::errors', 'strapi::corss'];
+// ✗ unknown Strapi middleware — did you mean 'strapi::cors'?
+```
+
 ## Go to definition
 
 Ctrl/Cmd-click a string to jump to the right target: a UID → its `schema.json`, a
@@ -55,6 +65,20 @@ grep-and-pray. See [Pro](/pro/).
 
 Describes what a string resolves to, with the signature for service methods and
 usage insights (incoming relations, route handlers, data usages).
+
+## Strapi Routes view
+
+A **Strapi Routes** view in the Explorer lists every route of the project: your
+API first (explicit routes and the ones `createCoreRouter` generates), then the
+routes your local and installed plugins declare, grouped by owner. Each route shows
+its mounted path (`/api/articles/:id`) and its handler; a lock / unlock icon tells
+an authenticated route from an `auth: false` one.
+
+- **Click** a route to open its declaration.
+- The inline **Go to Handler** action opens the controller method.
+- The eye icon shows or hides the admin panel’s own routes (hidden by default).
+- The view follows your edits, and picks up a plugin installed from a terminal
+  without touching a file. The refresh button rescans everything.
 
 ---
 

@@ -20,9 +20,28 @@ strings into first-class, verified code.
 
 ## Guarantee, don’t guess
 
-When something can’t be proven — a non-literal string, an unverifiable external
-plugin — DevKit **stays silent** rather than show a false positive. A wrong
-diagnostic destroys trust; that’s worse than no diagnostic.
+When something can’t be proven — a non-literal string, a plugin DevKit couldn’t
+read exhaustively — DevKit **stays silent** rather than show a false positive. A
+wrong diagnostic destroys trust; that’s worse than no diagnostic.
+
+## Installed plugins
+
+Refs into installed plugins (`plugin::users-permissions.user`, `plugin::upload.file`,
+`strapi::cors`…) are checked against the plugins actually in `node_modules`. DevKit
+reads them the way Strapi’s own loader does: Strapi’s internal plugins, the
+`package.json` dependencies that declare themselves Strapi plugins, the rules of
+`config/plugins` (a plugin disabled there is ignored), and each plugin’s
+`strapi-server` entry. It follows their code **statically — nothing is executed**,
+no server is started.
+
+A plugin is only used to report an unknown ref when it was read **completely**. If
+anything can’t be followed (a computed export, an `env()`-dependent setting, a
+`src/extensions/<plugin>/strapi-server` override), its refs stay silent, as they
+always were. Without `node_modules`, nothing changes.
+
+This reading is checked against real Strapi in DevKit’s own test suite: on six real
+projects from Strapi 4.13 to 5.54, the plugins, their content-types, services,
+controllers, policies, middlewares and routes matched what Strapi registers.
 
 ## Multi-project, v4 and v5
 

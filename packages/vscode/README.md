@@ -29,6 +29,13 @@ instead of grepping your project.
   resolve (because `strapi.service(...)` is `any`).
 - **Hover** describing what a string resolves to, with service-method signatures and
   usage insights (incoming relations, route handlers, data usages).
+- **Installed plugins checked too** — users-permissions, upload, i18n and third-party
+  plugins are read from `node_modules` statically (never executed), so
+  `plugin::users-permissions.usr` or `strapi::corss` get a "did you mean". A plugin
+  DevKit can't read completely stays silent.
+- **Strapi Routes view** (Explorer) — every route: your API first, then plugin routes,
+  with mounted paths and a lock/unlock icon for `auth: false`. Click to open the
+  declaration, or jump straight to the controller method.
 
 ![An invalid Strapi reference underlined, with a "did you mean" quick fix](https://devkit-for-strapi.paulrichez.fr/screenshots/diagnostics.png)
 

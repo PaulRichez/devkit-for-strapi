@@ -37,9 +37,9 @@ survives server respawns. Returns the projects now known.
 | `list_artifacts` | `kind?` | Real refs of services / controllers / policies / middlewares (optionally one kind). |
 | `get_schema` | `uid` \| `uids[]` | The real attributes (fields, relations, components) of a content-type/component. Batchable. Use instead of guessing field names. |
 | `resolve` | `ref` | The defining file(s) of a reference, tagged by kind. |
-| `validate_reference` | `ref` | `valid` \| `unknown` (+ `didYouMean`) \| `external` (a plugin not in the workspace — unverifiable). Call before writing a magic string. |
+| `validate_reference` | `ref` | `valid` \| `unknown` (+ `didYouMean`) \| `external` (a plugin DevKit could not read completely, e.g. not installed — unverifiable). Installed plugins read from `node_modules` are verified. Call before writing a magic string. |
 | `find_references` | `ref` \| `refs[]`, `compact?`, `limit?`, `offset?` | Every call-site of a UID / service / controller / handler (or `ref#method`). Returns `total`, then a page of up to `limit` hits (default 50; `truncated: true` when more remain): `path:line:col [via] snippet`. |
-| `list_routes` | — | The HTTP route table (method, path, handler, policies, middlewares) — explicit + auto-CRUD from `createCoreRouter`. Static, no Strapi boot. |
+| `list_routes` | `plugins?`, `admin?` | The HTTP route table: method, path, mounted `fullPath`, handler, policies, middlewares, `public` (`auth: false`) and where each route is declared (`filePath`/`offset`). Explicit routes, auto-CRUD from `createCoreRouter`, and the routes local and installed plugins declare (`origin`; `plugins: false` to leave them out). Admin-panel routes only with `admin: true`. Static, no Strapi boot. |
 | `refresh` | — | Re-scan every discovered project from disk and rebuild the index. Returns the projects now known. |
 | `server_info` | — | The running server: `version`, licence `tier`, how many tools are actually callable, the Pro-only tool names, and the indexed roots. `tools/list` advertises the Pro tools too — this says which ones will really run. Also the only way for an agent to name a version in a bug report (the version lives in the MCP handshake, which clients don't always display). |
 
@@ -100,4 +100,4 @@ transactional, and **self-verifying** for broken refs afterward.
 
 - **Entities**: `api::article.article`, `shared.seo`, `plugin::billing.invoice`.
 - **Methods**: `ref#method` (e.g. `api::page.notifier#notify`) in `resolve` / `validate_reference` / `find_references`.
-- **Guarantee, don't guess**: an unverifiable external-plugin ref is reported as `external`, never invented; refactors are all-or-nothing; warnings are never silent.
+- **Guarantee, don't guess**: a ref into a plugin DevKit couldn't read completely is reported as `external`, never invented; refactors are all-or-nothing and never touch `node_modules`; warnings are never silent.

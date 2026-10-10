@@ -4,6 +4,8 @@
 
 DevKit for Strapi is a free VS Code extension plus an MCP server that share one engine. It gives autocomplete, diagnostics, go-to-definition, find-references and rename on Strapi "magic strings" — content-type UIDs (e.g. `api::article.article`), service / controller / policy / middleware refs, component UIDs, and route handlers. It supports Strapi v4 and v5, is multi-project, and behaves identically for JavaScript and TypeScript. Core thesis: **guarantee, don't guess** — when something can't be proven (a non-literal string, an unverifiable external plugin) it stays silent rather than show a false positive. No telemetry; your code never leaves your machine.
 
+Installed plugins are verified too: DevKit reads the plugins in `node_modules` (internal ones, plugin dependencies, honouring `config/plugins`) statically, without executing them, so `plugin::users-permissions.usr` or `strapi::corss` get a "did you mean". A plugin it cannot read completely stays unverifiable (`external`). The editor also has a **Strapi Routes** view, and the MCP `list_routes` tool returns every route with its mounted path, handler, `auth: false` flag and declaration location, plugin routes included.
+
 ## Not Strapi's official MCP server — they do different jobs
 
 Strapi ships its own MCP server (GA in 5.49, https://docs.strapi.io/cms/features/strapi-mcp-server). It is a different tool and the two do not overlap:
