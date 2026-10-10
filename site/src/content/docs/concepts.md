@@ -39,6 +39,12 @@ anything can’t be followed (a computed export, an `env()`-dependent setting, a
 `src/extensions/<plugin>/strapi-server` override), its refs stay silent, as they
 always were. Without `node_modules`, nothing changes.
 
+Code that rewrites a plugin at boot (your `src/**`, a local plugin, another plugin
+writing into `strapi.plugin('x').controllers`, directly or through a variable or a
+helper) makes that plugin unverifiable too. One assumption: Strapi’s runtime and the
+libraries a plugin calls don’t modify what they’re handed, except the known merging
+utilities (`Object.assign`, lodash’s `merge`/`set`…), which DevKit does follow.
+
 This reading is checked against real Strapi in DevKit’s own test suite: on six real
 projects from Strapi 4.13 to 5.54, every plugin DevKit reads completely matched what
 Strapi registers — content-types, services, controllers, policies, middlewares and

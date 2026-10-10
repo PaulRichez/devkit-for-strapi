@@ -13,6 +13,7 @@ import type { FileSystem } from '../fs/FileSystem';
 import { dirname, join } from '../fs/paths';
 import type { CodeArtifact, StrapiIndex } from '../model/types';
 import type { InstalledPluginsResult } from './installed';
+import { type PluginRewrites, unionRewrites } from './rewrites';
 
 /** Can refs into plugin `name` be verified (a local plugin, or an installed one read exhaustively)? */
 export function isVerifiablePlugin(index: StrapiIndex, name: string): boolean {
@@ -43,17 +44,6 @@ export function mergeInstalled(index: StrapiIndex, result: InstalledPluginsResul
   if (!result) return;
   index.verifiedPlugins ??= new Set();
   index.installedPlugins ??= new Map();
-  index.rewrittenPlugins = new Set(result.rewritten);
-  // Local/API artifacts extended in place at runtime: their method lists are partial.
-  const ext = new Set(result.extended);
-  if (ext.size) {
-    for (const map of [index.services, index.controllers]) {
-      for (const a of map.values()) {
-        const plugin = a.ref.startsWith('plugin::') ? a.ref.slice(8).split('.')[0] : undefined;
-        if (ext.has(a.ref) || ext.has('*') || (plugin && ext.has(`plugin::${plugin}.*`))) a.hasSpread = true;
-      }
-    }
-  }
   if (result.frameworkMiddlewares?.complete && !index.frameworkMiddlewares) {
     index.frameworkMiddlewares = new Map(
       result.frameworkMiddlewares.entries.map((e) => [`strapi::${e.name}`, { filePath: e.filePath, offset: e.offset }]),
@@ -74,6 +64,26 @@ export function mergeInstalled(index: StrapiIndex, result: InstalledPluginsResul
     for (const a of p.artifacts) {
       const map = artifactMap(index, a);
       if (!map.has(a.ref)) map.set(a.ref, a);
+    }
+  }
+}
+
+/**
+ * What code rewrites at runtime — the installed plugins' own server code plus
+ * the project's (`project`): rewritten plugins aren't verifiable, and local
+ * artifacts extended in place get partial method lists. Re-run after every
+ * index update (re-indexed artifacts are fresh objects).
+ */
+export function applyRewrites(index: StrapiIndex, installed: InstalledPluginsResult | undefined, project: PluginRewrites | undefined): void {
+  const all = unionRewrites(project, installed ? { plugins: new Set(installed.rewritten), artifacts: new Set(installed.extended) } : undefined);
+  index.rewrittenPlugins = all.plugins;
+  const ext = all.artifacts;
+  if (!ext.size) return;
+  for (const map of [index.services, index.controllers]) {
+    for (const a of map.values()) {
+      if (a.installed) continue; // the reader already applied it
+      const plugin = a.ref.startsWith('plugin::') ? a.ref.slice(8).split('.')[0] : undefined;
+      if (ext.has(a.ref) || ext.has('*') || (plugin && ext.has(`plugin::${plugin}.*`))) a.hasSpread = true;
     }
   }
 }

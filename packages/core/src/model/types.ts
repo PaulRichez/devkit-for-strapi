@@ -172,6 +172,8 @@ export interface StrapiProject {
   installedStamp?: string;
   /** The full (every parsed plugin file) fingerprint, checked less often. */
   installedFullStamp?: string;
+  /** What the project's own code rewrites in plugins at runtime (kept per file, updated on edits). */
+  rewrites?: import('../plugins/rewrites').ProjectRewrites;
 }
 
 export function emptyIndex(): StrapiIndex {

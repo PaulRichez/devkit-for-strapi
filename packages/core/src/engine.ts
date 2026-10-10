@@ -33,7 +33,8 @@ import {
 } from './reference/references';
 import { resolveDefinition, resolveMember } from './resolve/resolver';
 import { readInstalledPlugins } from './plugins/installed';
-import { clearInstalled, installedStamp, mergeInstalled } from './plugins/merge';
+import { applyRewrites, clearInstalled, installedStamp, mergeInstalled } from './plugins/merge';
+import { inRewriteScope, type ProjectRewrites, rewritesKey, rewritesOfFile, scanProjectRewrites, unionRewrites } from './plugins/rewrites';
 import { matchesAnyGlob } from './util/glob';
 import { withTimeout } from './util/timeout';
 import { asRecord, asString, safeParse } from './util/json';
@@ -102,6 +103,13 @@ const INSTALLED_CHECK_MS = 3_000;
 const INSTALLED_FULL_CHECK_MS = 60_000;
 /** Hard ceiling on one project's installed-plugin read (the reader's own budgets are lower). */
 const INSTALLED_READ_TIMEOUT_MS = 30_000;
+/** Hard ceiling on the project-code rewrite scan; past it, every plugin counts as rewritten. */
+const REWRITE_SCAN_TIMEOUT_MS = 20_000;
+
+/** The project's own code rewrites (src/**, local plugins) — bounded; on timeout, anything may be rewritten. */
+function scanRewrites(fs: FileSystem, root: string): Promise<ProjectRewrites> {
+  return withTimeout(scanProjectRewrites(fs, root), REWRITE_SCAN_TIMEOUT_MS, { files: new Map(), dirs: [join(root, 'src')], truncated: true });
+}
 
 /** Paths whose change can alter the installed-plugin picture of their project. */
 function affectsInstalledPlugins(p: string): boolean {
@@ -248,8 +256,10 @@ class Engine implements StrapiEngine {
     const index = await buildIndex(this.fs, srcDir);
     // Installed plugins (node_modules), read statically — best-effort: without
     // node_modules they simply stay unverifiable, as before.
-    const installed = await withTimeout(readInstalledPlugins(this.fs, root), INSTALLED_READ_TIMEOUT_MS, undefined);
+    const rewrites = await scanRewrites(this.fs, root);
+    const installed = await withTimeout(readInstalledPlugins(this.fs, root, unionRewrites(rewrites)), INSTALLED_READ_TIMEOUT_MS, undefined);
     mergeInstalled(index, installed);
+    applyRewrites(index, installed, unionRewrites(rewrites));
     let stamp: string | undefined;
     let fullStamp: string | undefined;
     try {
@@ -279,6 +289,7 @@ class Engine implements StrapiEngine {
       ...(installed ? { installed } : {}),
       ...(stamp !== undefined ? { installedStamp: stamp } : {}),
       ...(fullStamp !== undefined ? { installedFullStamp: fullStamp } : {}),
+      rewrites,
     };
   }
 
@@ -357,7 +368,8 @@ class Engine implements StrapiEngine {
 
   /** Re-read one project's installed plugins and swap them into its index (synchronous swap). */
   private async reloadInstalled(project: StrapiProject, stamp?: string): Promise<void> {
-    const installed = await withTimeout(readInstalledPlugins(this.fs, project.root), INSTALLED_READ_TIMEOUT_MS, undefined);
+    const rewrites = await scanRewrites(this.fs, project.root);
+    const installed = await withTimeout(readInstalledPlugins(this.fs, project.root, unionRewrites(rewrites)), INSTALLED_READ_TIMEOUT_MS, undefined);
     let next = stamp;
     if (next === undefined) {
       try {
@@ -368,6 +380,8 @@ class Engine implements StrapiEngine {
     }
     clearInstalled(project.index);
     mergeInstalled(project.index, installed);
+    project.rewrites = rewrites;
+    applyRewrites(project.index, installed, unionRewrites(rewrites));
     if (installed) project.installed = installed;
     else delete project.installed;
     if (next !== undefined) project.installedStamp = next;
@@ -416,8 +430,27 @@ class Engine implements StrapiEngine {
       touched.add(project);
       if (affectsInstalledPlugins(p)) reload.add(project);
     }
+    // Project code rewriting plugins (src/**, local plugins): re-scan the edited files only.
+    const deletedSet = new Set(deletedN);
+    for (const p of [...changedN, ...deletedN]) {
+      const owners = this.projects.filter((pr) => pr.rewrites && inRewriteScope(pr.rewrites, p));
+      for (const project of owners) {
+        const rw = project.rewrites!;
+        const before = rewritesKey(unionRewrites(rw));
+        const r = deletedSet.has(p) ? undefined : await rewritesOfFile(this.fs, p);
+        if (r) rw.files.set(p, r);
+        else rw.files.delete(p);
+        touched.add(project);
+        // Installed plugins' completeness depends on it: re-read them (cheap next to a boot).
+        if (rewritesKey(unionRewrites(rw)) !== before && project.installed) reload.add(project);
+      }
+    }
     for (const project of reload) await this.reloadInstalled(project);
-    for (const project of touched) if (!reload.has(project)) mergeInstalled(project.index, project.installed);
+    for (const project of touched) {
+      if (reload.has(project)) continue;
+      mergeInstalled(project.index, project.installed);
+      applyRewrites(project.index, project.installed, unionRewrites(project.rewrites));
+    }
     // Local plugins declaring content-types in code: re-read on any edit under their content-types dir.
     for (const p of [...changedN, ...deletedN]) {
       const project = this.projectForFile(p);

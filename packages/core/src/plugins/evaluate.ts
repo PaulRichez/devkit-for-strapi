@@ -287,9 +287,14 @@ function isReferenceIdentifier(id: ts.Identifier): boolean {
   return true;
 }
 
+const specifierMemo = new WeakMap<ts.SourceFile, string[]>();
+
 /** Relative module specifiers a file requires/imports (for crawling the graph without evaluating). */
 function relativeSpecifiers(sf: ts.SourceFile): string[] {
+  const hit = specifierMemo.get(sf);
+  if (hit) return hit;
   const out: string[] = [];
+  specifierMemo.set(sf, out);
   const walk = (n: ts.Node): void => {
     if (ts.isCallExpression(n)) {
       const a0 = n.arguments[0];
@@ -486,7 +491,13 @@ export class StaticEvaluator {
   private readonly refIndex = new Map<ts.Node, Map<string, ts.Identifier[]>>();
   private readonly escapeCache = new Map<ts.Node, string | null>();
   private readonly callRootedCache = new Map<ts.SourceFile, boolean>();
+  private readonly usesThisCache = new Map<ts.Node, boolean>();
+  private readonly stateReturnCache = new Map<ts.Node, Promise<boolean>>();
+  private readonly stateReturnFreshCache = new Map<ts.Node, Promise<boolean>>();
+  private readonly stateRunning = new Set<ts.Node>();
+  private readonly stateRunningFresh = new Set<ts.Node>();
   private realRoots: string[] | undefined;
+  private readonly realpathCache = new Map<string, Promise<string>>();
   private crawlCut = false;
   private steps = 0;
   private lastTimeCheck = 0;
@@ -576,7 +587,12 @@ export class StaticEvaluator {
     if (!this.roots || !this.fs.realpath) return true;
     try {
       this.realRoots ??= await Promise.all(this.roots.map(async (r) => resolveDots(await this.fs.realpath!(r))));
-      const rp = resolveDots(await this.fs.realpath(p));
+      let pending = this.realpathCache.get(p);
+      if (!pending) {
+        pending = this.fs.realpath(p).then(resolveDots);
+        this.realpathCache.set(p, pending);
+      }
+      const rp = await pending;
       return this.realRoots.some((r) => r === rp || isPathInside(r, rp));
     } catch {
       return false;
@@ -1494,7 +1510,7 @@ export class StaticEvaluator {
     let hit = false;
     const callRoot = (t: ts.Expression): boolean => {
       const r = skipParens(accessRoot(t).root);
-      return ts.isCallExpression(r) && !(ts.isIdentifier(r.expression) && r.expression.text === 'require');
+      return ts.isCallExpression(r) && !(ts.isIdentifier(r.expression) && r.expression.text === 'require') && this.originOf(r.expression, 0) === 'internal';
     };
     const walk = (n: ts.Node): void => {
       if (hit) return;
@@ -1509,38 +1525,6 @@ export class StaticEvaluator {
     };
     walk(sf);
     this.callRootedCache.set(sf, hit);
-    return hit;
-  }
-
-  private readonly callRootedTo = new Map<string, boolean>();
-
-  /** Does `sf` write into the result of a call to a function named `name` (`name().x = …`, `o.name().x = …`)? */
-  private callRootedWritesTo(sf: ts.SourceFile, name: string): boolean {
-    const key = `${sf.fileName}\0${name}`;
-    const cached = this.callRootedTo.get(key);
-    if (cached !== undefined) return cached;
-    let hit = false;
-    const callsIt = (t: ts.Expression): boolean => {
-      const r = skipParens(accessRoot(t).root);
-      if (!ts.isCallExpression(r)) return false;
-      const c = r.expression;
-      return (ts.isIdentifier(c) && c.text === name) || (ts.isPropertyAccessExpression(c) && c.name.text === name);
-    };
-    const walk = (n: ts.Node): void => {
-      if (hit) return;
-      this.steps++;
-      if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
-        const t = skipParens(n.left);
-        if ((ts.isPropertyAccessExpression(t) || ts.isElementAccessExpression(t)) && callsIt(t)) hit = true;
-      } else if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && SELF_MUTATORS.has(n.expression.name.text) && callsIt(n.expression.expression)) {
-        hit = true;
-      } else if (ts.isCallExpression(n) && !this.isPureCall(n) && n.arguments.some((a) => callsIt(a) && ts.isCallExpression(skipParens(a)))) {
-        hit = true; // helper(name()) — the result handed to code that may mutate it
-      }
-      ts.forEachChild(n, walk);
-    };
-    walk(sf);
-    this.callRootedTo.set(key, hit);
     return hit;
   }
 
@@ -1595,7 +1579,8 @@ export class StaticEvaluator {
     return this.escapeOf(name, scopeNode, same, false, depth + 1, seen);
   }
 
-  private escapeAt(r: ts.Identifier, isModule: boolean, depth: number, seen: Set<ts.Node>): string | undefined {
+  /** `derived`: `r` is not the binding itself but a value obtained from it (a call result, a getter read). */
+  private escapeAt(r: ts.Expression, isModule: boolean, depth: number, seen: Set<ts.Node>, derived = false): string | undefined {
     let e: ts.Expression = r;
     let viaAccess = false;
     for (;;) {
@@ -1623,13 +1608,37 @@ export class StaticEvaluator {
       }
       break;
     }
-    return this.escapeContext(e, viaAccess, isModule, depth, seen);
+    return this.escapeContext(e, viaAccess, isModule, depth, seen, derived);
   }
 
   /** The context an expression holding the binding (or something reached from it) flows into. */
-  private escapeContext(e: ts.Expression, viaAccess: boolean, isModule: boolean, depth: number, seen: Set<ts.Node>): string | undefined {
+  private escapeContext(e: ts.Expression, viaAccess: boolean, isModule: boolean, depth: number, seen: Set<ts.Node>, derived = false): string | undefined {
     const p = e.parent;
     if (!p) return undefined;
+    // Written THROUGH a derived value (`get().a = …`, `s.getter.a = …`); the binding's own
+    // writes are its write index's job.
+    if (derived && viaAccess && isWriteTarget(e)) return 'written through';
+    // Default values: `function f(o = x)`, `const { a = x } = …` — `o`/`a` alias the value.
+    if (ts.isParameter(p) && p.initializer === e) {
+      const fn = p.parent;
+      if (!isFunctionLike(fn) || !fn.body || !ts.isIdentifier(p.name)) return 'default of a parameter it cannot follow';
+      const name = p.name.text;
+      const idx = fn.parameters.indexOf(p);
+      const same = (x: Declaration | undefined): boolean => x?.kind === 'param' && x.fn === fn && x.index === idx;
+      for (const w of this.writesIn(fn.body).get(name) ?? []) {
+        if (!same(this.findDeclaration(name, w.root))) continue;
+        if (w.kind === 'assign') continue;
+        if (w.kind === 'arg' && this.isPureCall(w.call!)) continue;
+        return `mutated through parameter default '${name}'`;
+      }
+      return this.escapeOf(name, fn.body, same, false, depth + 1, seen);
+    }
+    if (ts.isBindingElement(p) && p.initializer === e) {
+      let vd: ts.Node | undefined = p.parent;
+      while (vd && !ts.isVariableDeclaration(vd) && !ts.isParameter(vd)) vd = vd.parent;
+      if (!vd || !ts.isVariableDeclaration(vd) || !ts.isIdentifier(p.name)) return 'default of a binding it cannot follow';
+      return this.aliasUnsafe(vd, p.name.text, depth, seen);
+    }
     if (ts.isCallExpression(p) && p.expression === e) {
       if (!viaAccess || isModule) return undefined; // calling the function itself / a module's function
       const m = ts.isPropertyAccessExpression(e) ? e.name.text : undefined;
@@ -1693,15 +1702,788 @@ export class StaticEvaluator {
       return 'stored into another object';
     }
     if (ts.isReturnStatement(p) || (ts.isArrowFunction(p) && p.body === e)) {
-      // Returned: only a write into the RESULT of a call to that function can reach it.
+      // Returned: every place the function's result lands must leave it alone too.
       let fn: ts.Node | undefined = ts.isArrowFunction(p) ? p : p.parent;
       while (fn && !isFunctionLike(fn)) fn = fn.parent;
-      const fname = fn ? functionName(fn) : undefined;
-      const sf = e.getSourceFile();
-      if (!fname) return this.hasCallRootedWrites(sf) ? 'returned from a function whose result is written' : undefined;
-      return this.callRootedWritesTo(sf, fname) ? `returned from '${fname}', whose result is written` : undefined;
+      if (!fn || seen.has(fn)) return undefined;
+      seen.add(fn);
+      const { sites, escape } = this.resultSites(fn, depth);
+      if (escape) return escape;
+      for (const site of sites) {
+        const why = this.escapeAt(site, false, depth + 1, seen, true);
+        if (why) return `returned, then ${why}`;
+      }
+      return undefined;
     }
     if ((ts.isForOfStatement(p) || ts.isForInStatement(p)) && p.expression === e) return 'iterated';
+    return undefined;
+  }
+
+  /**
+   * Every expression a function's result lands in (its calls, the reads of a
+   * getter), or why they can't all be found. Handing the function (or the object
+   * holding it) to the module's exports is fine: importers are checked where they
+   * use it (see {@link writesIntoModules}). An anonymous callback's caller is
+   * library code (a Strapi factory): it is trusted unless this file writes into
+   * some call result.
+   */
+  private resultSites(f: ts.Node, d: number): { sites: ts.Expression[]; escape?: string } {
+    const sites: ts.Expression[] = [];
+    const done = (escape: string | undefined): { sites: ts.Expression[]; escape?: string } => (escape ? { sites, escape } : { sites });
+    if (d > 6) return done('returned too deeply');
+    const parent = f.parent;
+    // a getter / method / function-valued property of an object literal
+    let member: { lit: ts.ObjectLiteralExpression; key: string | undefined; mode: 'get' | 'call' } | undefined;
+    if ((ts.isGetAccessorDeclaration(f) || ts.isMethodDeclaration(f)) && parent && ts.isObjectLiteralExpression(parent)) {
+      member = { lit: parent, key: propName(f.name), mode: ts.isGetAccessorDeclaration(f) ? 'get' : 'call' };
+    } else if ((ts.isFunctionExpression(f) || ts.isArrowFunction(f)) && parent && ts.isPropertyAssignment(parent) && parent.initializer === f && ts.isObjectLiteralExpression(parent.parent)) {
+      if (isExportGetterDescriptor(parent.parent)) return done(undefined); // Babel's `export *`: Object.defineProperty(exports, k, { get… })
+      member = { lit: parent.parent, key: propName(parent.name), mode: 'call' };
+    }
+    if (member) {
+      if (member.key === undefined) return done('returned from a computed member');
+      return done(this.memberSites(member.lit, member.key, member.mode, d, sites));
+    }
+    const b = this.functionBinding(f);
+    if (!b) {
+      if (this.flowsToExports(f as ts.Expression, d)) return done(undefined);
+      if (parent && ts.isClassLike(parent)) return done('returned from a class member');
+      return done(this.hasCallRootedWrites(f.getSourceFile()) ? 'returned from a function whose result is written' : undefined);
+    }
+    return done(this.functionValueSites(b, d, sites));
+  }
+
+  /** The binding a function is known by: `function f`, `const f = …`, `f = …` (a var). */
+  private functionBinding(fn: ts.Node): { name: string; decl: Declaration; at: ts.Identifier } | undefined {
+    let id: ts.Identifier | undefined;
+    if (ts.isFunctionDeclaration(fn) && fn.name) id = fn.name;
+    else {
+      let x: ts.Node = fn;
+      while (x.parent && ts.isParenthesizedExpression(x.parent)) x = x.parent;
+      const p = x.parent;
+      if (p && ts.isVariableDeclaration(p) && p.initializer === x && ts.isIdentifier(p.name)) id = p.name;
+      else if (p && ts.isBinaryExpression(p) && p.right === x && p.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(p.left)) id = p.left;
+    }
+    if (!id) return undefined;
+    const decl = this.findDeclaration(id.text, id);
+    if (!decl || decl.kind === 'opaque') return undefined;
+    return { name: id.text, decl, at: id };
+  }
+
+  /** Where a function VALUE goes: called (a result site), aliased, exported, kept in an object… */
+  private functionValueSites(b: { name: string; decl: Declaration; at: ts.Identifier }, d: number, sites: ts.Expression[]): string | undefined {
+    const sf = b.at.getSourceFile();
+    const scope = b.decl.kind === 'var' ? b.decl.scopeNode : b.decl.kind === 'param' ? (b.decl.fn.body ?? sf) : sf;
+    for (const r of this.refsIn(scope).get(b.name) ?? []) {
+      if (r === b.at || !sameDeclaration(this.findDeclaration(b.name, r), b.decl)) continue;
+      let e: ts.Expression = r;
+      while (e.parent && (ts.isParenthesizedExpression(e.parent) || ts.isAsExpression(e.parent) || ts.isNonNullExpression(e.parent))) e = e.parent;
+      const q = e.parent;
+      if (!q) continue;
+      if (ts.isCallExpression(q) && q.expression === e) {
+        sites.push(q);
+        continue;
+      }
+      if (ts.isBinaryExpression(q) && q.left === e && q.operatorToken.kind === ts.SyntaxKind.EqualsToken) continue; // the binding itself (re)assigned
+      if (ts.isExportAssignment(q) || ts.isExportSpecifier(q) || ts.isTypeOfExpression(q)) continue;
+      if (ts.isBinaryExpression(q) && q.right === e && q.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+        const left = skipParens(q.left);
+        if (isModuleExports(left) || exportsMember(left)) continue;
+      }
+      // an alias: `const g = f` / `g = f`
+      const alias = ts.isVariableDeclaration(q) && q.initializer === e && ts.isIdentifier(q.name) ? q.name
+        : ts.isBinaryExpression(q) && q.right === e && q.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(skipParens(q.left)) ? (skipParens(q.left) as ts.Identifier)
+          : undefined;
+      if (alias) {
+        const ad = this.findDeclaration(alias.text, alias);
+        if (!ad || ad.kind === 'opaque') return `'${b.name}' aliased where it can't be followed`;
+        if (d > 6) return 'aliased too deeply';
+        const why = this.functionValueSites({ name: alias.text, decl: ad, at: alias }, d + 1, sites);
+        if (why) return why;
+        continue;
+      }
+      // kept in an object literal: `{ get }`, `{ a: get }`
+      if ((ts.isShorthandPropertyAssignment(q) || (ts.isPropertyAssignment(q) && q.initializer === e)) && ts.isObjectLiteralExpression(q.parent)) {
+        const key = ts.isShorthandPropertyAssignment(q) ? q.name.text : propName(q.name);
+        if (key === undefined) return `'${b.name}' kept under a computed key`;
+        const why = this.memberSites(q.parent, key, 'call', d, sites);
+        if (why) return why;
+        continue;
+      }
+      // returned by another function G (rollup's `requireX()` hands back the server factory):
+      // fine when G is exported (importers are checked), else wherever G's results are called
+      if (ts.isReturnStatement(q) || (ts.isArrowFunction(q) && q.body === e)) {
+        let g: ts.Node | undefined = ts.isArrowFunction(q) ? q : q.parent;
+        while (g && !isFunctionLike(g)) g = g.parent;
+        if (!g) return `'${b.name}' returned where it can't be followed`;
+        if (this.flowsToExports(g as ts.Expression, d + 1)) continue;
+        const outer = this.resultSites(g, d + 1);
+        if (outer.escape) return outer.escape;
+        for (const site of outer.sites) {
+          let c: ts.Node = site;
+          while (c.parent && ts.isParenthesizedExpression(c.parent)) c = c.parent;
+          if (c.parent && ts.isCallExpression(c.parent) && c.parent.expression === c) sites.push(c.parent);
+          else return `'${b.name}' returned, then used where its results can't be followed`;
+        }
+        continue;
+      }
+      // handed to library code (a factory callback): same trust as an anonymous callback
+      if ((ts.isCallExpression(q) || ts.isNewExpression(q)) && q.arguments?.includes(e)) {
+        if (this.hasCallRootedWrites(sf)) return `'${b.name}' handed to a call in a file that writes into call results`;
+        continue;
+      }
+      if (ts.isIfStatement(q) || (ts.isPrefixUnaryExpression(q) && q.operator === ts.SyntaxKind.ExclamationToken) || (ts.isBinaryExpression(q) && COMPARISONS.has(q.operatorToken.kind))) continue;
+      return `'${b.name}' used where its results can't be followed`;
+    }
+    return undefined;
+  }
+
+  /** The reads of `lit.key` (a getter) / calls of `lit.key()` (a method), wherever `lit` is bound. */
+  private memberSites(lit: ts.ObjectLiteralExpression, key: string, mode: 'get' | 'call', d: number, sites: ts.Expression[]): string | undefined {
+    if (this.flowsToExports(lit, d)) return undefined;
+    let x: ts.Node = lit;
+    while (x.parent && (ts.isParenthesizedExpression(x.parent) || ts.isAsExpression(x.parent) || ts.isSatisfiesExpression(x.parent))) x = x.parent;
+    const p = x.parent;
+    if (!p || !ts.isVariableDeclaration(p) || p.initializer !== x || !ts.isIdentifier(p.name)) {
+      // returned by a function: each of its results holds the member
+      if (p && (ts.isReturnStatement(p) || (ts.isArrowFunction(p) && p.body === x))) {
+        let fn: ts.Node | undefined = ts.isArrowFunction(p) ? p : p.parent;
+        while (fn && !isFunctionLike(fn)) fn = fn.parent;
+        if (fn && this.flowsToExports(fn as ts.Expression, d + 1)) return undefined;
+      }
+      return `object holding '${key}' used where it can't be followed`;
+    }
+    const name = p.name.text;
+    const decl = this.findDeclaration(name, p.name);
+    if (!decl || decl.kind !== 'var') return `object holding '${key}' can't be followed`;
+    for (const r of this.refsIn(decl.scopeNode).get(name) ?? []) {
+      if (!sameDeclaration(this.findDeclaration(name, r), decl)) continue;
+      let e: ts.Expression = r;
+      while (e.parent && (ts.isParenthesizedExpression(e.parent) || ts.isAsExpression(e.parent) || ts.isNonNullExpression(e.parent))) e = e.parent;
+      const q = e.parent;
+      if (!q) continue;
+      if ((ts.isPropertyAccessExpression(q) || ts.isElementAccessExpression(q)) && q.expression === e) {
+        const k = ts.isPropertyAccessExpression(q) ? q.name.text : ts.isStringLiteralLike(q.argumentExpression) ? q.argumentExpression.text : undefined;
+        if (k === undefined) return `'${name}' read with a computed key`;
+        if (k !== key) continue;
+        if (mode === 'get') {
+          sites.push(q);
+          continue;
+        }
+        let c: ts.Node = q;
+        while (c.parent && ts.isParenthesizedExpression(c.parent)) c = c.parent;
+        if (c.parent && ts.isCallExpression(c.parent) && c.parent.expression === c) {
+          sites.push(c.parent);
+          continue;
+        }
+        return `method '${key}' taken as a value`;
+      }
+      if (ts.isBinaryExpression(q) && q.left === e && q.operatorToken.kind === ts.SyntaxKind.EqualsToken) continue;
+      if (this.flowsToExports(e, d + 1)) continue;
+      return `'${name}' (holding '${key}') used where it can't be followed`;
+    }
+    return undefined;
+  }
+
+  /** Does this value end up as (part of) the module's exports — directly, nested in them, or as an exported function's result? */
+  private flowsToExports(e0: ts.Expression, d: number): boolean {
+    if (d > 8) return false;
+    let e: ts.Node = e0;
+    for (;;) {
+      const p = e.parent;
+      if (!p) return false;
+      if (ts.isParenthesizedExpression(p) || ts.isAsExpression(p) || ts.isSatisfiesExpression(p)) {
+        e = p;
+        continue;
+      }
+      if ((ts.isPropertyAssignment(p) && p.initializer === e) || ts.isShorthandPropertyAssignment(p) || ts.isSpreadAssignment(p)) {
+        e = p.parent;
+        continue;
+      }
+      if (ts.isArrayLiteralExpression(p)) {
+        e = p;
+        continue;
+      }
+      if (ts.isExportAssignment(p)) return true;
+      if (ts.isBinaryExpression(p) && p.right === e && p.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+        const left = skipParens(p.left);
+        return isModuleExports(left) || !!exportsMember(left);
+      }
+      if (ts.isReturnStatement(p) || (ts.isArrowFunction(p) && p.body === e)) {
+        let fn: ts.Node | undefined = ts.isArrowFunction(p) ? p : p.parent;
+        while (fn && !isFunctionLike(fn)) fn = fn.parent;
+        return !!fn && this.flowsToExports(fn as ts.Expression, d + 1);
+      }
+      if (ts.isVariableDeclaration(p) && p.initializer === e && ts.isIdentifier(p.name)) {
+        const stmt = p.parent?.parent;
+        if (stmt && ts.isVariableStatement(stmt) && hasExportModifier(stmt)) return true;
+        return this.bindingExportedOnly(p.name, d);
+      }
+      if (ts.isFunctionDeclaration(e) && e.name) {
+        if (hasExportModifier(e)) return true;
+        return this.bindingExportedOnly(e.name, d);
+      }
+      return false;
+    }
+  }
+
+  /** Is every use of this binding a hand-over to the module's exports? */
+  private bindingExportedOnly(id: ts.Identifier, d: number): boolean {
+    const decl = this.findDeclaration(id.text, id);
+    if (!decl || decl.kind === 'opaque') return false;
+    const sf = id.getSourceFile();
+    const scope = decl.kind === 'var' ? decl.scopeNode : sf;
+    let any = false;
+    for (const r of this.refsIn(scope).get(id.text) ?? []) {
+      if (r === id || !sameDeclaration(this.findDeclaration(id.text, r), decl)) continue;
+      const q = r.parent;
+      if (q && ts.isExportSpecifier(q)) {
+        any = true;
+        continue;
+      }
+      if (!this.flowsToExports(r, d + 1)) return false;
+      any = true;
+    }
+    return any;
+  }
+
+  /**
+   * Can this `this` reference change its receiver? Written through, handed to
+   * code, aliased, a mutating method called on it — or (`strict`) any method
+   * called on it (a sibling method may write).
+   */
+  private thisMutates(t: ts.Node, strict: boolean): boolean {
+    let e: ts.Node = t;
+    let depth = 0;
+    while (e.parent && (((ts.isPropertyAccessExpression(e.parent) || ts.isElementAccessExpression(e.parent)) && e.parent.expression === e) || ts.isParenthesizedExpression(e.parent))) {
+      if (!ts.isParenthesizedExpression(e.parent)) depth++;
+      e = e.parent;
+    }
+    const p = e.parent;
+    if (!p) return false;
+    if (depth > 0 && isWriteTarget(e as ts.Expression)) return true;
+    if (depth > 0 && ts.isCallExpression(p) && p.expression === e) {
+      const m = ts.isPropertyAccessExpression(e) ? e.name.text : undefined;
+      return strict ? !(m && PURE_METHODS.has(m)) : !!m && SELF_MUTATORS.has(m);
+    }
+    if ((ts.isCallExpression(p) || ts.isNewExpression(p)) && p.arguments?.includes(e as ts.Expression)) return !(ts.isCallExpression(p) && this.isPureCall(p));
+    if (depth === 0 && (ts.isVariableDeclaration(p) || (ts.isBinaryExpression(p) && p.right === e) || ts.isSpreadElement(p) || ts.isSpreadAssignment(p))) return true;
+    return false;
+  }
+
+  /** Can calling this function as a method change its receiver (through its own `this`)? */
+  private receiverMayChange(fn: ts.Node): boolean {
+    const hit = this.usesThisCache.get(fn);
+    if (hit !== undefined) return hit;
+    let found = false;
+    const walk = (n: ts.Node): void => {
+      if (found) return;
+      this.steps++;
+      if (n.kind === ts.SyntaxKind.ThisKeyword) {
+        if (this.thisMutates(n, true)) found = true;
+        return;
+      }
+      if ((isFunctionLike(n) && !ts.isArrowFunction(n)) || ts.isClassLike(n)) return;
+      ts.forEachChild(n, walk);
+    };
+    ts.forEachChild(fn, walk);
+    this.usesThisCache.set(fn, found);
+    return found;
+  }
+
+  /**
+   * Who runs a call: `external` code (Strapi's runtime, a library — reached
+   * through a global, a parameter or a package import) doesn't write into what
+   * it's handed, except the known `mutator` utilities (`Object.assign`,
+   * `Reflect.set`, lodash's `merge`/`set`…, which write their first argument);
+   * `internal` code (this plugin's own functions) is analysed.
+   */
+  private calleeKind(c0: ts.Expression): 'external' | 'mutator' | 'internal' {
+    let c = skipParens(c0);
+    if (ts.isBinaryExpression(c) && c.operatorToken.kind === ts.SyntaxKind.CommaToken) c = skipParens(c.right); // `(0, x.f)(…)`
+    const name = ts.isIdentifier(c) ? c.text : ts.isPropertyAccessExpression(c) ? c.name.text : ts.isElementAccessExpression(c) && ts.isStringLiteralLike(c.argumentExpression) ? c.argumentExpression.text : undefined;
+    if (this.originOf(c, 0) === 'internal') return 'internal';
+    if (name === undefined || !MUTATOR_NAMES.has(name)) return 'external';
+    // a mutating utility: `Object.assign`, `Reflect.set`, lodash's `merge`… (not any API's `extend`/`set`)
+    let root: ts.Expression = c;
+    while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root) || ts.isCallExpression(root)) root = skipParens(root.expression);
+    if (ts.isIdentifier(root) && !this.findDeclaration(root.text, root)) return root.text === 'Object' || root.text === 'Reflect' ? 'mutator' : 'external';
+    const pkg = ts.isIdentifier(root) ? this.packageOf(root, 0) : undefined;
+    return pkg !== undefined && UTILITY_PACKAGES.test(pkg) ? 'mutator' : 'external';
+  }
+
+  /** The package a binding was imported/required from (`const { merge } = require('lodash')` → `lodash`). */
+  private packageOf(id: ts.Identifier, depth: number): string | undefined {
+    const d = this.findDeclaration(id.text, id);
+    if (d?.kind === 'import') return ts.isStringLiteralLike(d.decl.moduleSpecifier) ? d.decl.moduleSpecifier.text : undefined;
+    if ((d?.kind !== 'var' && d?.kind !== 'destructured') || !d.decl.initializer || depth > 6) return undefined;
+    let init = skipParens(d.decl.initializer);
+    if (ts.isCallExpression(init) && !(ts.isIdentifier(init.expression) && init.expression.text === 'require') && init.arguments[0]) init = skipParens(init.arguments[0]); // interop wrapper
+    while (ts.isPropertyAccessExpression(init) || ts.isElementAccessExpression(init)) init = skipParens(init.expression);
+    if (ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === 'require') {
+      const a0 = init.arguments[0];
+      return a0 && ts.isStringLiteralLike(a0) ? a0.text : undefined;
+    }
+    return ts.isIdentifier(init) ? this.packageOf(init, depth + 1) : undefined;
+  }
+
+  /**
+   * Where the value an expression starts from comes from: the runtime or a
+   * library (`external`: a global, a parameter, a package import — or a local
+   * variable initialized from one, `const s = strapi.plugin('x').service('y')`),
+   * or this plugin's own code (`internal`).
+   */
+  private originOf(e0: ts.Expression, depth: number): 'external' | 'internal' {
+    let root: ts.Expression = skipParens(e0);
+    while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root) || ts.isCallExpression(root)) root = skipParens(root.expression);
+    if (!ts.isIdentifier(root)) return 'internal';
+    const d = this.findDeclaration(root.text, root);
+    if (!d || d.kind === 'param') return 'external';
+    if (d.kind === 'import') return ts.isStringLiteralLike(d.decl.moduleSpecifier) && !d.decl.moduleSpecifier.text.startsWith('.') ? 'external' : 'internal';
+    if (this.isModuleBinding(d, false)) return this.isModuleBinding(d) ? 'internal' : 'external';
+    // `_interopDefault(require$$0)`: what the interop helper wraps
+    const wrapped = (d.kind === 'var' || d.kind === 'destructured') && d.decl.initializer ? skipParens(d.decl.initializer) : undefined;
+    if (wrapped && ts.isCallExpression(wrapped) && wrapped.arguments.length === 1 && INTEROP_NAME.test(calleeText(wrapped.expression) ?? '') && depth < 6) return this.originOf(wrapped.arguments[0]!, depth + 1);
+    if ((d.kind === 'var' || d.kind === 'destructured') && d.decl.initializer && depth < 6 && !(d.kind === 'var' && (d.redeclared || this.writesOf(d).some((w) => w.kind === 'assign')))) {
+      const init = skipParens(d.decl.initializer);
+      if (ts.isArrowFunction(init) || ts.isFunctionExpression(init) || ts.isObjectLiteralExpression(init) || ts.isArrayLiteralExpression(init) || ts.isClassExpression(init)) return 'internal';
+      return this.originOf(init, depth + 1);
+    }
+    return 'internal';
+  }
+
+  /**
+   * May what `fn` returns be (or reach) state that outlives the call — a
+   * module-level binding, `this`, the module itself? Its parameters are the
+   * caller's values (checked where they're passed); globals (`strapi`) and fresh
+   * values aren't module state.
+   */
+  private mayReturnState(fn: ts.Node, freshThis = false): Promise<boolean> {
+    const cache = freshThis ? this.stateReturnFreshCache : this.stateReturnCache;
+    const running = freshThis ? this.stateRunningFresh : this.stateRunning;
+    // A cycle (f → g → f): assume the worst instead of waiting on itself.
+    if (running.has(fn)) return Promise.resolve(true);
+    const hit = cache.get(fn);
+    if (hit !== undefined) return hit;
+    running.add(fn);
+    const p = (async (): Promise<boolean> => {
+      const exprs: ts.Expression[] = [];
+      const f = fn as FunctionLike;
+      if (ts.isArrowFunction(f) && !ts.isBlock(f.body)) exprs.push(f.body);
+      else if (f.body) {
+        forEachInScope(f.body, (n) => {
+          if (ts.isReturnStatement(n) && n.expression) exprs.push(n.expression);
+        });
+      }
+      for (const x of exprs) if (await this.mayBeState(x, 0, freshThis, new Set([fn]))) return true;
+      return false;
+    })().finally(() => running.delete(fn));
+    cache.set(fn, p);
+    return p;
+  }
+
+  /**
+   * `freshThis`: `this` is a fresh object (a method of an object literal a
+   * factory returns). `visiting`: functions being analysed (recursion → assume
+   * the worst).
+   */
+  private async mayBeState(x0: ts.Expression, d: number, freshThis: boolean, visiting: Set<ts.Node>): Promise<boolean> {
+    if (d > 8) return true;
+    this.steps++;
+    let x = skipParens(x0);
+    while (ts.isAwaitExpression(x) || ts.isTypeAssertionExpression(x)) x = skipParens(x.expression);
+    const again = (y: ts.Expression): Promise<boolean> => this.mayBeState(y, d + 1, freshThis, visiting);
+    const some = async (ys: ts.Expression[]): Promise<boolean> => {
+      for (const y of ys) if (await again(y)) return true;
+      return false;
+    };
+    const fnState = (f: ts.Node, fresh: boolean): Promise<boolean> => (visiting.has(f) ? Promise.resolve(true) : this.mayReturnState(f, fresh));
+    if (ts.isStringLiteralLike(x) || ts.isNumericLiteral(x) || ts.isBigIntLiteral(x) || ts.isTemplateExpression(x) || ts.isRegularExpressionLiteral(x)) return false;
+    if (x.kind === ts.SyntaxKind.TrueKeyword || x.kind === ts.SyntaxKind.FalseKeyword || x.kind === ts.SyntaxKind.NullKeyword) return false;
+    if (ts.isVoidExpression(x) || ts.isTypeOfExpression(x) || ts.isPrefixUnaryExpression(x) || ts.isPostfixUnaryExpression(x) || ts.isDeleteExpression(x)) return false;
+    if (x.kind === ts.SyntaxKind.ThisKeyword) return !freshThis;
+    if (ts.isConditionalExpression(x)) return some([x.whenTrue, x.whenFalse]);
+    if (ts.isBinaryExpression(x)) {
+      const op = x.operatorToken.kind;
+      if (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.QuestionQuestionToken || op === ts.SyntaxKind.AmpersandAmpersandToken) return some([x.left, x.right]);
+      if (op === ts.SyntaxKind.CommaToken || (op >= ts.SyntaxKind.FirstAssignment && op <= ts.SyntaxKind.LastAssignment)) return again(x.right);
+      return false; // arithmetic, comparison: a primitive
+    }
+    if (ts.isArrowFunction(x)) return fnState(x, freshThis);
+    if (ts.isFunctionExpression(x)) return fnState(x, true);
+    if (ts.isClassExpression(x)) return true;
+    if (ts.isObjectLiteralExpression(x)) {
+      for (const pr of x.properties) {
+        if (ts.isPropertyAssignment(pr)) {
+          if (await again(pr.initializer)) return true;
+        } else if (ts.isShorthandPropertyAssignment(pr)) {
+          if (await again(pr.name)) return true;
+        } else if (ts.isSpreadAssignment(pr)) {
+          if (await again(pr.expression)) return true;
+        } else if (ts.isMethodDeclaration(pr) || ts.isGetAccessorDeclaration(pr)) {
+          if (await fnState(pr, true)) return true;
+        } else if (!ts.isSetAccessorDeclaration(pr)) return true;
+      }
+      return false;
+    }
+    if (ts.isArrayLiteralExpression(x)) return some(x.elements.map((el) => (ts.isSpreadElement(el) ? el.expression : el)));
+    if (ts.isNewExpression(x)) return some([...(x.arguments ?? [])]);
+    if (ts.isPropertyAccessExpression(x) || ts.isElementAccessExpression(x)) return again(accessRoot(x).root);
+    if (ts.isCallExpression(x)) {
+      if (await some(x.arguments.map((a) => (ts.isSpreadElement(a) ? a.expression : a)))) return true;
+      const c = skipParens(x.expression);
+      if (ts.isIdentifier(c) && c.text === 'require') return true;
+      // a call of one of this plugin's functions: what IT returns
+      const kind = this.calleeKind(c);
+      if (kind !== 'internal') return false; // the runtime / a library hands back its own values
+      const callee = await this.ev(c, x.getSourceFile().fileName, undefined);
+      if (callee.k === 'native') return false;
+      if (callee.k === 'fn') return fnState(callee.node, false);
+      return again(accessRoot(c).root);
+    }
+    if (ts.isTaggedTemplateExpression(x)) return again(accessRoot(x.tag).root);
+    if (ts.isIdentifier(x)) {
+      const dd = this.findDeclaration(x.text, x);
+      if (!dd) return x.text === 'module' || x.text === 'exports'; // other globals (`strapi`, `process`) aren't module state
+      if (dd.kind === 'param') return false; // the caller's value: checked where it is passed
+      if (dd.kind === 'fn') return false; // a function value
+      if (dd.kind === 'var' && !ts.isSourceFile(dd.scopeNode)) {
+        // a function's local (fresh per call): what it was given — its initializer and reassignments
+        if (dd.redeclared) return true;
+        const assigns = this.writesOf(dd).filter((w) => w.kind === 'assign');
+        return (dd.decl.initializer ? await again(dd.decl.initializer) : false) || (await some(assigns.map((w) => w.rhs!)));
+      }
+      if (dd.kind === 'destructured' && !ts.isSourceFile(this.varScopeOf(dd.decl)) && dd.decl.initializer) return again(dd.decl.initializer);
+      // a module-level binding: state, unless it holds a function or a primitive
+      if (dd.kind === 'var' || dd.kind === 'destructured' || dd.kind === 'import') {
+        const v = await this.ev(x, x.getSourceFile().fileName, undefined);
+        return !(v.k === 'fn' || v.k === 'native' || v.k === 'str' || v.k === 'num' || v.k === 'bool' || v.k === 'nil');
+      }
+      return true;
+    }
+    return true;
+  }
+
+  /**
+   * Is the module-derived value at `start` (a module binding's reference, a
+   * `require()`, a value reached from one, what a module function returns)
+   * written to from here? Returns where, if so. Reports what the code shows —
+   * a write through it, an alias, a returned value, a readable helper's
+   * parameter, a mutating utility or method; a flow into code it can't read
+   * (an unreadable function, another object) is not followed.
+   */
+  private async moduleUse(start: ts.Expression, ctx: ModuleUseCtx, depth: number, container = false): Promise<string | undefined> {
+    if (depth > 10) return undefined; // followed far enough: no write seen
+    const visited = container ? ctx.visitedContainer : ctx.visited;
+    if (visited.has(start)) return undefined;
+    visited.add(start);
+    if (this.overBudget()) return undefined;
+    this.steps++;
+    let e: ts.Expression = start;
+    let viaAccess = false;
+    let accessDepth = 0;
+    for (;;) {
+      const p = e.parent;
+      if (!p) return undefined;
+      if ((ts.isPropertyAccessExpression(p) || ts.isElementAccessExpression(p)) && p.expression === e) {
+        e = p;
+        viaAccess = true;
+        accessDepth++;
+        continue;
+      }
+      if (ts.isParenthesizedExpression(p) || ts.isAsExpression(p) || ts.isNonNullExpression(p) || ts.isSatisfiesExpression(p) || ts.isTypeAssertionExpression(p) || ts.isAwaitExpression(p)) {
+        e = p;
+        continue;
+      }
+      if (ts.isConditionalExpression(p) && p.condition !== e) {
+        e = p;
+        continue;
+      }
+      if (ts.isBinaryExpression(p)) {
+        const op = p.operatorToken.kind;
+        if (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.AmpersandAmpersandToken || op === ts.SyntaxKind.QuestionQuestionToken || (op === ts.SyntaxKind.CommaToken && p.right === e)) {
+          e = p;
+          continue;
+        }
+      }
+      break;
+    }
+    const p = e.parent!;
+    const file = e.getSourceFile().fileName;
+    // written through
+    if (isWriteTarget(e)) {
+      if (!viaAccess) return undefined; // rebinding a variable that held it
+      if (container && accessDepth === 1) return undefined; // a fresh object holding it gets another key
+      if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.EqualsToken && ctx.privateVirtual(e)) return undefined;
+      return ctx.where(p, 'written');
+    }
+    // A primitive or a function can't be written into (and a module's functions are meant to be handed around).
+    const bare = skipParens(e);
+    if (!container && !ts.isCallExpression(bare) && !ts.isNewExpression(bare) && !(ts.isCallExpression(p) && p.expression === e)) {
+      const v = await this.ev(e, file, undefined);
+      if (v.k === 'fn' || v.k === 'native' || v.k === 'str' || v.k === 'num' || v.k === 'bool' || v.k === 'nil') return undefined;
+    }
+    // called: a method runs with its receiver as `this`; what a function returns may be its module's state
+    if (ts.isCallExpression(p) && p.expression === e) {
+      const callee = skipParens(e);
+      let fnv: Value | undefined;
+      if (viaAccess && (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee))) {
+        const m = ts.isPropertyAccessExpression(callee) ? callee.name.text : ts.isStringLiteralLike(callee.argumentExpression) ? callee.argumentExpression.text : undefined;
+        const receiver = skipParens(callee.expression);
+        const deep = ts.isPropertyAccessExpression(receiver) || ts.isElementAccessExpression(receiver) || ts.isCallExpression(receiver);
+        if (m === undefined || !PURE_METHODS.has(m)) {
+          fnv = await this.ev(callee, file, undefined);
+          // `mod.list.push(x)`, `mod.map.set(k, v)`: a built-in mutator on the module's own array/object
+          if (fnv.k !== 'fn' && m !== undefined && SELF_MUTATORS.has(m) && deep) {
+            const recv = await this.ev(receiver, file, undefined);
+            if (recv.k === 'arr' || recv.k === 'obj') return ctx.where(p, `'${m}' called on it`);
+          }
+          // `Object.entries(mod).forEach((x) => …)`: an array's own iteration — the callback receives its members
+          if (fnv.k !== 'fn' && m !== undefined && ARRAY_ITERATORS.has(m)) {
+            const cb = p.arguments[0] && skipParens(p.arguments[0]);
+            const cbv = cb && (ts.isArrowFunction(cb) || ts.isFunctionExpression(cb) ? undefined : await this.ev(cb, file, undefined));
+            const fnNode = cb && (ts.isArrowFunction(cb) || ts.isFunctionExpression(cb)) ? cb : cbv?.k === 'fn' ? cbv.node : undefined;
+            if (cb && !fnNode) return undefined; // a callback it can't read: no write seen
+            const param = fnNode?.parameters[m === 'reduce' || m === 'reduceRight' ? 1 : 0];
+            if (param) {
+              const why = await this.followBinding(param.name, param, ctx, depth);
+              if (why) return why;
+            }
+            return m === 'forEach' ? undefined : this.moduleUse(p, ctx, depth + 1);
+          }
+          // a method it can read that changes its receiver (one it can't read is not followed)
+          if (fnv.k === 'fn' && this.receiverMayChange(fnv.node)) return ctx.where(p, `method '${m ?? '[computed]'}' changes it`);
+        }
+      }
+      fnv ??= await this.ev(callee, file, undefined);
+      if (fnv.k === 'native' || (fnv.k === 'fn' && !(await this.mayReturnState(fnv.node)))) return undefined;
+      return this.moduleUse(p, ctx, depth + 1);
+    }
+    // handed to code: harmless when what's handed is a function or a primitive
+    const argOf = (x: ts.Node): ts.CallExpression | ts.NewExpression | undefined => {
+      const q = x.parent;
+      return q && (ts.isCallExpression(q) || ts.isNewExpression(q)) && q.arguments?.includes(x as ts.Expression) ? q : undefined;
+    };
+    const call = argOf(e) ?? (ts.isSpreadElement(p) ? argOf(p) : undefined);
+    if (call) {
+      if (ctx.privateVirtualRoot(e)) return undefined; // rollup's wrapper hands its own module object to its factory
+      if (call.arguments?.[0] === e && this.isExportStar(call)) return undefined; // re-exported: importers are checked where they use it
+      if (ts.isCallExpression(call) && this.isPureCall(call)) {
+        const t = calleeText(call.expression);
+        if (t && READ_ONLY_GLOBALS.has(t)) return undefined;
+        if (t && /^console\./.test(t)) return undefined;
+        return this.moduleUse(call, ctx, depth + 1); // an interop helper / Object.freeze hands it back
+      }
+      const idx = call.arguments!.indexOf((argOf(e) ? e : p) as ts.Expression);
+      let kind = this.calleeKind(call.expression);
+      if (kind === 'internal' && (await this.externalThroughHelper(call.expression, 0))) kind = 'external';
+      if (kind === 'external') return undefined;
+      if (kind === 'mutator') {
+        if (idx === 0) return ctx.where(call, 'written by a utility');
+        return this.moduleUse(call, ctx, depth + 1); // copied/stored into the target, which the call returns
+      }
+      // this plugin's own function: follow the parameter that receives it
+      const v = await this.ev(e, file, undefined);
+      if (v.k === 'fn' || v.k === 'native' || v.k === 'str' || v.k === 'num' || v.k === 'bool' || v.k === 'nil') return undefined;
+      if (ts.isNewExpression(call)) return undefined; // a constructor: not followed
+      const fnv = await this.ev(call.expression, file, undefined);
+      if (fnv.k === 'native') return undefined;
+      if (fnv.k !== 'fn' || !fnv.node.body) return undefined; // a function it can't read: not followed
+      if (call.arguments.slice(0, idx).some((a) => ts.isSpreadElement(a)) || ts.isSpreadElement(call.arguments[idx]!)) return undefined; // spread: not followed
+      const param = fnv.node.parameters[idx] ?? fnv.node.parameters.find((pp) => pp.dotDotDotToken);
+      if (!param) return undefined; // not a declared parameter (`arguments`): not followed
+      return this.followBinding(param.name, param, ctx, depth, container);
+    }
+    // inside a literal: where the literal goes
+    if ((ts.isPropertyAssignment(p) && p.initializer === e) || ts.isShorthandPropertyAssignment(p) || ts.isSpreadAssignment(p) || ts.isArrayLiteralExpression(p) || ts.isSpreadElement(p)) {
+      const lit = (ts.isArrayLiteralExpression(p) ? p : p.parent) as ts.Expression;
+      if (isDestructuringTarget(lit)) return viaAccess ? ctx.where(lit, 'destructuring target') : undefined;
+      return this.moduleUse(lit, ctx, depth + 1, true); // a fresh object holding it: its own keys are its own
+    }
+    // aliased
+    if (ts.isVariableDeclaration(p) && p.initializer === e) return this.followBinding(p.name, p, ctx, depth, container);
+    if (ts.isBinaryExpression(p) && p.right === e) {
+      const op = p.operatorToken.kind;
+      if (op === ts.SyntaxKind.EqualsToken || op === ts.SyntaxKind.BarBarEqualsToken || op === ts.SyntaxKind.QuestionQuestionEqualsToken || op === ts.SyntaxKind.AmpersandAmpersandEqualsToken) {
+        const left = skipParens(p.left);
+        if (isModuleExports(left) || exportsMember(left)) return undefined; // re-exported: importers are checked where they use it
+        if (ts.isIdentifier(left)) return this.followBinding(left, left, ctx, depth, container);
+        // stored into a fresh object of this function (`const conf = {…}; conf.k = it`): follow that object
+        const holder = skipParens(accessRoot(left).root);
+        if (ts.isIdentifier(holder)) {
+          const hd = this.findDeclaration(holder.text, holder);
+          const init = hd?.kind === 'var' && !ts.isSourceFile(hd.scopeNode) && !hd.redeclared && hd.decl.initializer ? skipParens(hd.decl.initializer) : undefined;
+          if (init && (ts.isObjectLiteralExpression(init) || ts.isArrayLiteralExpression(init)) && hd?.kind === 'var') return this.followBinding(hd.decl.name, hd.decl, ctx, depth, true);
+        }
+        return undefined; // kept in another object: not followed
+      }
+      return undefined;
+    }
+    if (ts.isParameter(p) && p.initializer === e) return this.followBinding(p.name, p, ctx, depth);
+    if (ts.isBindingElement(p) && p.initializer === e) return this.followBinding(p.name, p, ctx, depth);
+    // returned: wherever the function's result lands
+    if (ts.isReturnStatement(p) || (ts.isArrowFunction(p) && p.body === e)) {
+      let fn: ts.Node | undefined = ts.isArrowFunction(p) ? p : p.parent;
+      while (fn && !isFunctionLike(fn)) fn = fn.parent;
+      if (!fn || ctx.seen.has(fn)) return undefined;
+      ctx.seen.add(fn);
+      const { sites, escape } = this.resultSites(fn, 0);
+      if (escape) return undefined; // its results land where they can't be followed
+      for (const site of sites) {
+        const why = await this.moduleUse(site, ctx, depth + 1, container);
+        if (why) return why;
+      }
+      return undefined;
+    }
+    if (ts.isForOfStatement(p) && p.expression === e && ts.isVariableDeclarationList(p.initializer)) {
+      // `for (const x of mod.list)`: x holds its members
+      if (ctx.seen.has(p)) return undefined;
+      ctx.seen.add(p);
+      for (const d of p.initializer.declarations) {
+        for (const id of identifiersOf(d.name)) {
+          for (const r of this.refsIn(p.statement).get(id.text) ?? []) {
+            const why = await this.moduleUse(r, ctx, depth + 1, container);
+            if (why) return why;
+          }
+        }
+      }
+      return undefined;
+    }
+    return undefined; // read
+  }
+
+  /**
+   * tsc's `__exportStar(m, exports)` (local helper or `tslib.__exportStar`): copies
+   * `m`'s keys onto this module's exports, reading `m` only.
+   */
+  private isExportStar(call: ts.CallExpression | ts.NewExpression): boolean {
+    if (!ts.isCallExpression(call)) return false;
+    const target = call.arguments[1] && skipParens(call.arguments[1]);
+    if (!target || !((ts.isIdentifier(target) && target.text === 'exports' && !this.findDeclaration('exports', target)) || isModuleExports(target))) return false;
+    const c = skipParens(call.expression);
+    if (ts.isIdentifier(c) && /^_*exportStar$/i.test(c.text)) {
+      const d = this.findDeclaration(c.text, c);
+      const text = d?.kind === 'fn' ? d.decl.getText() : d?.kind === 'var' ? d.decl.initializer?.getText() : undefined;
+      return !!text && text.includes('hasOwnProperty') && !/\bm\s*\[[^\]]*\]\s*=(?!=)/.test(text);
+    }
+    if (ts.isPropertyAccessExpression(c) && c.name.text === '__exportStar' && ts.isIdentifier(c.expression)) {
+      const d = this.findDeclaration(c.expression.text, c.expression);
+      const init = d?.kind === 'var' && d.decl.initializer ? skipParens(d.decl.initializer) : undefined;
+      const spec = init && ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === 'require' ? init.arguments[0] : undefined;
+      return !!spec && ts.isStringLiteralLike(spec) && spec.text === 'tslib';
+    }
+    return false;
+  }
+
+  /**
+   * Is what a call chain ends in handed back by the runtime / a library through
+   * one of this plugin's helpers (`getService(name)` → `strapi.plugin(…).service(name)`,
+   * `const sm = getSessionManager()`)? Then calling into it is calling the runtime.
+   */
+  private async externalThroughHelper(e0: ts.Expression, depth: number): Promise<boolean> {
+    if (depth > 4) return false;
+    let call: ts.CallExpression | undefined;
+    let r: ts.Expression = skipParens(e0);
+    if (ts.isBinaryExpression(r) && r.operatorToken.kind === ts.SyntaxKind.CommaToken) r = skipParens(r.right);
+    for (; ts.isPropertyAccessExpression(r) || ts.isElementAccessExpression(r) || ts.isCallExpression(r); r = skipParens(r.expression)) if (ts.isCallExpression(r)) call = r;
+    if (!call) {
+      if (!ts.isIdentifier(r)) return false;
+      const d = this.findDeclaration(r.text, r);
+      if (d?.kind !== 'var' || ts.isSourceFile(d.scopeNode) || d.redeclared || !d.decl.initializer || this.writesOf(d).some((w) => w.kind === 'assign')) return false;
+      const init = skipParens(d.decl.initializer);
+      return this.originOf(init, 0) === 'external' || this.externalThroughHelper(init, depth + 1);
+    }
+    const fnv = await this.ev(call.expression, call.getSourceFile().fileName, undefined);
+    if (fnv.k !== 'fn' || !fnv.node.body) return false;
+    const f = fnv.node as FunctionLike;
+    const returns: ts.Expression[] = [];
+    if (ts.isArrowFunction(f) && !ts.isBlock(f.body)) returns.push(f.body);
+    else forEachInScope(f.body!, (n) => {
+      if (ts.isReturnStatement(n) && n.expression) returns.push(n.expression);
+    });
+    for (const ret of returns) {
+      const x = skipParens(ret);
+      if (x.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(x) && x.text === 'undefined') || ts.isVoidExpression(x)) continue;
+      if (this.originOf(x, 0) === 'external') continue;
+      if (await this.externalThroughHelper(x, depth + 1)) continue;
+      return false;
+    }
+    return true;
+  }
+
+  /** Does a function read `arguments` (its own: nested non-arrow functions aside)? */
+  private mentionsArguments(fn: ts.Node): boolean {
+    let found = false;
+    const walk = (n: ts.Node): void => {
+      if (found) return;
+      if (ts.isIdentifier(n) && n.text === 'arguments') found = true;
+      if ((isFunctionLike(n) && !ts.isArrowFunction(n)) || ts.isClassLike(n)) return;
+      ts.forEachChild(n, walk);
+    };
+    ts.forEachChild(fn, walk);
+    return found;
+  }
+
+  /** Follow every reference of the binding(s) a pattern declares (an alias of a module-derived value). */
+  private async followBinding(name: ts.BindingName, key: ts.Node, ctx: ModuleUseCtx, depth: number, container = false): Promise<string | undefined> {
+    if (ctx.seen.has(key)) return undefined;
+    ctx.seen.add(key);
+    for (const id of identifiersOf(name)) {
+      const d = this.findDeclaration(id.text, id);
+      if (!d || d.kind === 'opaque' || d.kind === 'import') continue; // a binding it can't follow
+      const scope = d.kind === 'var' ? d.scopeNode : d.kind === 'param' ? (d.fn.body ?? d.fn) : d.kind === 'destructured' ? this.varScopeOf(d.decl) : id.getSourceFile();
+      for (const r of this.refsIn(scope).get(id.text) ?? []) {
+        if (r === id || !sameDeclaration(this.findDeclaration(id.text, r), d)) continue;
+        const why = await this.moduleUse(r, ctx, depth + 1, container);
+        if (why) return why;
+      }
+    }
+    return undefined;
+  }
+
+  /** Can code in this file write into another (relative) module's exports? */
+  private async moduleMutationIn(sf: ts.SourceFile, ctx: ModuleUseCtx): Promise<string | undefined> {
+    const isRelRequire = (n: ts.Node): n is ts.CallExpression =>
+      ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'require' && !!n.arguments[0] && ts.isStringLiteralLike(n.arguments[0]) && n.arguments[0].text.startsWith('.');
+    const starts: ts.Expression[] = [];
+    const bindings: Array<{ id: ts.Identifier; d: Declaration }> = [];
+    const walk = (n: ts.Node): void => {
+      this.steps++;
+      if (ts.isVariableDeclaration(n) && n.initializer) {
+        for (const id of identifiersOf(n.name)) {
+          const d = this.findDeclaration(id.text, id);
+          if (this.isModuleBinding(d)) bindings.push({ id, d: d! });
+        }
+      } else if (ts.isImportDeclaration(n) && n.importClause && !n.importClause.isTypeOnly && ts.isStringLiteralLike(n.moduleSpecifier) && n.moduleSpecifier.text.startsWith('.')) {
+        const ic = n.importClause;
+        const ids: ts.Identifier[] = [];
+        if (ic.name) ids.push(ic.name);
+        if (ic.namedBindings && ts.isNamespaceImport(ic.namedBindings)) ids.push(ic.namedBindings.name);
+        if (ic.namedBindings && ts.isNamedImports(ic.namedBindings)) for (const el of ic.namedBindings.elements) if (!el.isTypeOnly) ids.push(el.name);
+        for (const id of ids) {
+          const d = this.findDeclaration(id.text, id);
+          if (d) bindings.push({ id, d });
+        }
+      } else if (isRelRequire(n)) {
+        let x: ts.Node = n;
+        while (x.parent && (ts.isParenthesizedExpression(x.parent) || ts.isAsExpression(x.parent))) x = x.parent;
+        if (!(x.parent && ts.isVariableDeclaration(x.parent) && x.parent.initializer === x)) starts.push(n);
+      }
+      ts.forEachChild(n, walk);
+    };
+    walk(sf);
+    for (const { id, d } of bindings) {
+      const scope = d.kind === 'var' ? d.scopeNode : d.kind === 'destructured' ? this.varScopeOf(d.decl) : sf;
+      for (const r of this.refsIn(scope).get(id.text) ?? []) {
+        if (r === id || !sameDeclaration(this.findDeclaration(id.text, r), d)) continue;
+        const why = await this.moduleUse(r, ctx, 0);
+        if (why) return why;
+      }
+    }
+    for (const s0 of starts) {
+      const why = await this.moduleUse(s0, ctx, 0);
+      if (why) return why;
+    }
     return undefined;
   }
 
@@ -1905,64 +2687,137 @@ export class StaticEvaluator {
       const key = resolveDots(join(dirname(target.decl.getSourceFile().fileName), spec.text));
       return (virtualOwners.get(key) ?? 0) === 1;
     };
+    const virtualSpecOwned = (decl: ts.VariableDeclaration): boolean => {
+      const init = decl.initializer && skipParens(decl.initializer);
+      const spec = init && ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === 'require' ? init.arguments[0] : undefined;
+      if (!spec || !ts.isStringLiteralLike(spec) || !/(^|\/)_virtual\//.test(spec.text)) return false;
+      return (virtualOwners.get(resolveDots(join(dirname(decl.getSourceFile().fileName), spec.text))) ?? 0) === 1;
+    };
     for (const sf of files) {
-      let hit: string | undefined;
-      const isModuleRoot = (root: ts.Expression): boolean => {
-        const r = skipParens(root);
-        if (ts.isCallExpression(r) && ts.isIdentifier(r.expression) && r.expression.text === 'require') {
-          const spec = r.arguments[0];
-          return !!spec && ts.isStringLiteralLike(spec) && spec.text.startsWith('.');
-        }
-        // `mod.__require().x = …` / `mod.fn().x = …` — a write into what another module's function returns
-        if (ts.isCallExpression(r)) return isModuleRoot(accessRoot(r.expression).root);
-        if (!ts.isIdentifier(r)) return false;
-        return this.isModuleBinding(this.findDeclaration(r.text, r));
+      const ctx: ModuleUseCtx = {
+        sf,
+        seen: new Set(),
+        visited: new Set(),
+        visitedContainer: new Set(),
+        where: (n, why) => {
+          const f = n.getSourceFile();
+          return `${f.fileName}:${f.getLineAndCharacterOfPosition(n.getStart(f)).line + 1}${why ? `: ${why}` : ''}`;
+        },
+        privateVirtual,
+        privateVirtualRoot: (e) => {
+          const root = skipParens(accessRoot(e).root);
+          if (!ts.isIdentifier(root)) return false;
+          const d = this.findDeclaration(root.text, root);
+          return d?.kind === 'var' && virtualSpecOwned(d.decl);
+        },
       };
-      const report = (n: ts.Node): void => {
-        const line = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
-        hit = `${sf.fileName}:${line}`;
-      };
-      const walk = (n: ts.Node): void => {
-        if (hit) return;
-        this.steps++;
-        if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
-          const t = skipParens(n.left);
-          const isPlainVirtual = n.operatorToken.kind === ts.SyntaxKind.EqualsToken && privateVirtual(t);
-          if ((ts.isPropertyAccessExpression(t) || ts.isElementAccessExpression(t)) && !isPlainVirtual && isModuleRoot(accessRoot(t).root)) {
-            report(n);
-            return;
-          }
-        } else if (ts.isDeleteExpression(n)) {
-          const t = skipParens(n.expression);
-          if ((ts.isPropertyAccessExpression(t) || ts.isElementAccessExpression(t)) && isModuleRoot(accessRoot(t).root)) {
-            report(n);
-            return;
-          }
-        } else if (ts.isCallExpression(n)) {
-          const c = n.expression;
-          // x.push(…) on something rooted at a module
-          if (ts.isPropertyAccessExpression(c) && SELF_MUTATORS.has(c.name.text) && isModuleRoot(accessRoot(c.expression).root) && (ts.isPropertyAccessExpression(skipParens(c.expression)) || ts.isElementAccessExpression(skipParens(c.expression)))) {
-            report(n);
-            return;
-          }
-          // Object.assign(moduleThing, …), _.set(moduleThing, …): the FIRST argument is written.
-          const callee = calleeText(c);
-          const a0 = n.arguments[0];
-          if (a0 && callee && /^(Object\.(assign|defineProperty|defineProperties|setPrototypeOf)|_\.(merge|mergeWith|set|setWith|assign|defaults|defaultsDeep|extend|unset))$/.test(callee)) {
-            const arg = skipParens(ts.isSpreadElement(a0) ? a0.expression : a0);
-            if (isModuleRoot(accessRoot(arg).root)) {
-              report(n);
-              return;
-            }
-          }
-        }
-        ts.forEachChild(n, walk);
-      };
-      walk(sf);
+      const hit = await this.moduleMutationIn(sf, ctx);
       if (hit) return hit;
     }
     return undefined;
   }
+}
+
+interface ModuleUseCtx {
+  sf: ts.SourceFile;
+  seen: Set<ts.Node>;
+  /** Start nodes already followed (each once). */
+  visited: Set<ts.Node>;
+  visitedContainer: Set<ts.Node>;
+  where: (n: ts.Node, why?: string) => string;
+  /** A plain `m.__module.exports(.k) = …` into rollup's private wrapper (modelled by the evaluator). */
+  privateVirtual: (t: ts.Expression) => boolean;
+  privateVirtualRoot: (e: ts.Expression) => boolean;
+}
+
+const COMPARISONS = new Set([
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+  ts.SyntaxKind.InstanceOfKeyword,
+  ts.SyntaxKind.InKeyword,
+]);
+
+/** Packages whose `merge`/`set`/`assign`… write into their first argument. */
+const UTILITY_PACKAGES = /^(lodash(\/.*)?|lodash-es(\/.*)?|lodash\.\w+|underscore|ramda|deepmerge|deep-extend|merge|merge-deep|object-assign|extend|defu|dot-prop|dset)$/;
+
+/** Built-in array iteration: the callback receives the members (`reduce`: second parameter). */
+const ARRAY_ITERATORS = new Set(['forEach', 'map', 'filter', 'find', 'findIndex', 'findLast', 'findLastIndex', 'some', 'every', 'flatMap', 'reduce', 'reduceRight']);
+
+/** Library utilities that write into their first argument (by member name, on external code). */
+const MUTATOR_NAMES = new Set([
+  'assign',
+  'assignIn',
+  'assignWith',
+  'assignInWith',
+  'extend',
+  'extendWith',
+  'merge',
+  'mergeWith',
+  'defaults',
+  'defaultsDeep',
+  'set',
+  'setWith',
+  'unset',
+  'update',
+  'updateWith',
+  'defineProperty',
+  'defineProperties',
+  'setPrototypeOf',
+  'deleteProperty',
+  'remove',
+  'pull',
+  'pullAll',
+  'pullAllBy',
+  'pullAllWith',
+  'pullAt',
+]);
+
+/** Calls whose result carries nothing of their arguments. */
+const READ_ONLY_GLOBALS = new Set(['require', 'Object.keys', 'Object.isFrozen', 'Object.getOwnPropertyNames', 'JSON.stringify', 'Array.isArray']);
+
+/** Is `e` assigned to, deleted, incremented, or a for-in/of target? */
+function isWriteTarget(e: ts.Expression): boolean {
+  const p = e.parent;
+  if (!p) return false;
+  if (ts.isBinaryExpression(p) && p.left === e && p.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && p.operatorToken.kind <= ts.SyntaxKind.LastAssignment) return true;
+  if (ts.isDeleteExpression(p)) return true;
+  if ((ts.isPrefixUnaryExpression(p) || ts.isPostfixUnaryExpression(p)) && (p.operator === ts.SyntaxKind.PlusPlusToken || p.operator === ts.SyntaxKind.MinusMinusToken)) return true;
+  if ((ts.isForOfStatement(p) || ts.isForInStatement(p)) && p.initializer === e) return true;
+  return false;
+}
+
+/** Is this literal (or one it is nested in) the target of a destructuring assignment? */
+function isDestructuringTarget(lit: ts.Node): boolean {
+  let x = lit;
+  for (;;) {
+    const q = x.parent;
+    if (!q) return false;
+    if (ts.isParenthesizedExpression(q) || ts.isPropertyAssignment(q) || ts.isShorthandPropertyAssignment(q) || ts.isSpreadAssignment(q) || ts.isSpreadElement(q) || ts.isArrayLiteralExpression(q) || ts.isObjectLiteralExpression(q)) {
+      x = q;
+      continue;
+    }
+    if (ts.isBinaryExpression(q) && q.left === x && q.operatorToken.kind === ts.SyntaxKind.EqualsToken) return true;
+    if ((ts.isForOfStatement(q) || ts.isForInStatement(q)) && q.initializer === x) return true;
+    return false;
+  }
+}
+
+/** `{ enumerable, get: function () { return m[k] } }` handed to `Object.defineProperty(exports, …)` (Babel's `export *`). */
+function isExportGetterDescriptor(lit: ts.ObjectLiteralExpression): boolean {
+  const call = lit.parent;
+  if (!call || !ts.isCallExpression(call) || calleeText(call.expression) !== 'Object.defineProperty' || call.arguments[2] !== lit) return false;
+  const target = call.arguments[0] && skipParens(call.arguments[0]);
+  return !!target && ((ts.isIdentifier(target) && target.text === 'exports') || isModuleExports(target));
+}
+
+/** Every identifier a binding name declares. */
+function identifiersOf(name: ts.BindingName): ts.Identifier[] {
+  if (ts.isIdentifier(name)) return [name];
+  const out: ts.Identifier[] = [];
+  for (const el of name.elements) if (!ts.isOmittedExpression(el)) out.push(...identifiersOf(el.name));
+  return out;
 }
 
 /**
@@ -1999,17 +2854,6 @@ function isExportsAccess(x: ts.Expression): boolean {
   return ts.isPropertyAccessExpression(x) && x.name.text === 'exports' && ts.isPropertyAccessExpression(skipParens(x.expression)) && (skipParens(x.expression) as ts.PropertyAccessExpression).name.text === '__module';
 }
 
-/** The name a function is known by (declaration, bound variable, method/property key). */
-function functionName(fn: ts.Node): string | undefined {
-  if ((ts.isFunctionDeclaration(fn) || ts.isFunctionExpression(fn)) && fn.name) return fn.name.text;
-  if (ts.isMethodDeclaration(fn) || ts.isGetAccessorDeclaration(fn)) return propName(fn.name);
-  const bound = bindingNameOf(fn);
-  if (bound) return bound;
-  const p = fn.parent;
-  if (p && ts.isPropertyAssignment(p) && p.initializer === fn) return propName(p.name);
-  return undefined;
-}
-
 /** Do two lookups designate the same binding? (lookups build fresh objects, compare their nodes) */
 function sameDeclaration(a: Declaration | undefined, b: Declaration | undefined): boolean {
   if (!a || !b || a.kind !== b.kind) return false;
@@ -2031,6 +2875,16 @@ function sameDeclaration(a: Declaration | undefined, b: Declaration | undefined)
 /** The name a function expression/arrow is bound to (`const x = () => …`), for helper recognition. */
 function bindingNameOf(fn: ts.Node): string | undefined {
   let p = fn.parent;
+  // `var x = (function () { …; return function (mod) {…} })()` — tsc ≥5.7's __importStar: the
+  // function returned by an IIFE is known by the IIFE's binding.
+  if (p && ts.isReturnStatement(p)) {
+    let f: ts.Node | undefined = p.parent;
+    while (f && !isFunctionLike(f)) f = f.parent;
+    let call: ts.Node | undefined = f?.parent;
+    while (call && ts.isParenthesizedExpression(call)) call = call.parent;
+    if (!f || !call || !ts.isCallExpression(call) || skipParens(call.expression) !== f) return undefined;
+    p = call.parent;
+  }
   while (p && (ts.isParenthesizedExpression(p) || (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.BarBarToken))) p = p.parent;
   if (p && ts.isVariableDeclaration(p) && ts.isIdentifier(p.name)) return p.name.text;
   return undefined;
