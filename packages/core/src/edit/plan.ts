@@ -32,5 +32,9 @@ export function touchedPaths(edit: WorkspaceEdit): string[] {
  */
 export function pathsOutsideRoots(roots: readonly string[], edit: WorkspaceEdit): string[] {
   const norm = roots.map(normalize);
-  return touchedPaths(edit).filter((p) => !isAbsolute(p) || !norm.some((r) => isPathInside(r, p)));
+  // `node_modules` is inside the root but never the user's code (installed
+  // plugins are indexed read-only): an edit touching it is refused as a whole.
+  return touchedPaths(edit).filter(
+    (p) => !isAbsolute(p) || p.split('/').includes('node_modules') || !norm.some((r) => isPathInside(r, p)),
+  );
 }

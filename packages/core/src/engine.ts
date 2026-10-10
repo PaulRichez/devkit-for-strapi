@@ -30,6 +30,8 @@ import {
   updateReferencesForFile,
 } from './reference/references';
 import { resolveDefinition, resolveMember } from './resolve/resolver';
+import { readInstalledPlugins } from './plugins/installed';
+import { clearInstalled, installedStamp, mergeInstalled } from './plugins/merge';
 import { matchesAnyGlob } from './util/glob';
 import { asRecord, asString, safeParse } from './util/json';
 import { validateDocument } from './validate/validator';
@@ -81,6 +83,26 @@ export interface StrapiEngine {
   onReferencesChanged(listener: () => void): void;
   /** Resolves once the background reference index has finished building. */
   whenReferencesReady(): Promise<void>;
+  /**
+   * Re-read installed plugins of any project whose install fingerprint changed
+   * (package.json, lockfiles, node_modules install markers, plugins config).
+   * Throttled; called by every query, so an `npm install` is picked up without
+   * a watcher on node_modules.
+   */
+  refreshInstalledIfStale(): Promise<void>;
+}
+
+/** Minimum delay between two installed-plugin freshness checks. */
+const INSTALLED_CHECK_MS = 3_000;
+
+/** Paths whose change can alter the installed-plugin picture of their project. */
+function affectsInstalledPlugins(p: string): boolean {
+  return (
+    /\/config\/(plugins|api)\.[cm]?[jt]s$/.test(p) ||
+    /\/config\/env\/[^/]+\/plugins\.[cm]?[jt]s$/.test(p) ||
+    /\/src\/extensions\/[^/]+\/strapi-server\.[cm]?[jt]s$/.test(p) ||
+    /\/(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|npm-shrinkwrap\.json)$/.test(p)
+  );
 }
 
 class Engine implements StrapiEngine {
@@ -99,6 +121,8 @@ class Engine implements StrapiEngine {
   private referencesListener?: () => void;
   /** Resolves when the in-flight background reference build finishes. */
   private refsBuild: Promise<void> = Promise.resolve();
+  private lastInstalledCheck = 0;
+  private installedCheck: Promise<void> | undefined;
 
   constructor(private readonly fs: FileSystem) {}
 
@@ -213,6 +237,21 @@ class Engine implements StrapiEngine {
     const { version, signals } = detectVersion(pkg);
     const srcDir = join(root, 'src');
     const index = await buildIndex(this.fs, srcDir);
+    // Installed plugins (node_modules), read statically — best-effort: without
+    // node_modules they simply stay unverifiable, as before.
+    let installed: Awaited<ReturnType<typeof readInstalledPlugins>>;
+    try {
+      installed = await readInstalledPlugins(this.fs, root);
+    } catch {
+      installed = undefined;
+    }
+    mergeInstalled(index, installed);
+    let stamp: string | undefined;
+    try {
+      stamp = await installedStamp(this.fs, root, installed?.strapiDir);
+    } catch {
+      stamp = undefined;
+    }
     // Exact installed version (package.json only declares a range) — best-effort.
     let strapiVersion: string | undefined;
     try {
@@ -231,6 +270,8 @@ class Engine implements StrapiEngine {
       ...(strapiVersion ? { strapiVersion } : {}),
       index,
       references: new Map(),
+      ...(installed ? { installed } : {}),
+      ...(stamp !== undefined ? { installedStamp: stamp } : {}),
     };
   }
 
@@ -260,6 +301,57 @@ class Engine implements StrapiEngine {
     return this.projects.find((p) => isPathInside(p.root, f));
   }
 
+  refreshInstalledIfStale(): Promise<void> {
+    if (this.installedCheck) return this.installedCheck;
+    const now = Date.now();
+    if (now - this.lastInstalledCheck < INSTALLED_CHECK_MS) return Promise.resolve();
+    this.lastInstalledCheck = now;
+    this.installedCheck = this.checkInstalled().finally(() => {
+      this.installedCheck = undefined;
+    });
+    return this.installedCheck;
+  }
+
+  private async checkInstalled(): Promise<void> {
+    let changed = false;
+    for (const project of [...this.projects]) {
+      let stamp: string | undefined;
+      try {
+        stamp = await installedStamp(this.fs, project.root, project.installed?.strapiDir);
+      } catch {
+        continue;
+      }
+      if (stamp === project.installedStamp) continue;
+      await this.reloadInstalled(project, stamp);
+      changed = true;
+    }
+    if (changed) this.referencesListener?.();
+  }
+
+  /** Re-read one project's installed plugins and swap them into its index (synchronous swap). */
+  private async reloadInstalled(project: StrapiProject, stamp?: string): Promise<void> {
+    let installed: Awaited<ReturnType<typeof readInstalledPlugins>>;
+    try {
+      installed = await readInstalledPlugins(this.fs, project.root);
+    } catch {
+      installed = undefined;
+    }
+    let next = stamp;
+    if (next === undefined) {
+      try {
+        next = await installedStamp(this.fs, project.root, installed?.strapiDir);
+      } catch {
+        next = undefined;
+      }
+    }
+    clearInstalled(project.index);
+    mergeInstalled(project.index, installed);
+    if (installed) project.installed = installed;
+    else delete project.installed;
+    if (next !== undefined) project.installedStamp = next;
+    else delete project.installedStamp;
+  }
+
   onFilesChanged(changed: string[], deleted: string[]): Promise<void> {
     return this.serialize(() => this.onFilesChangedImpl(changed, deleted));
   }
@@ -286,6 +378,20 @@ class Engine implements StrapiEngine {
       }
     }
 
+    // Installed plugins: a plugins/api config, an extension entry point or a lockfile
+    // change re-reads them; any other edit only re-fills entries an incremental
+    // update may have dropped (e.g. a deleted `src/extensions` schema).
+    const touched = new Set<StrapiProject>();
+    const reload = new Set<StrapiProject>();
+    for (const p of [...changedN, ...deletedN]) {
+      const project = this.projectForFile(p);
+      if (!project) continue;
+      touched.add(project);
+      if (affectsInstalledPlugins(p)) reload.add(project);
+    }
+    for (const project of reload) await this.reloadInstalled(project);
+    for (const project of touched) if (!reload.has(project)) mergeInstalled(project.index, project.installed);
+
     // Update the reference index incrementally — only the touched files, no full re-walk.
     for (const p of changedN) {
       if (this.buildingRefs) this.dirtyDuringBuild.add(p);
@@ -305,6 +411,7 @@ class Engine implements StrapiEngine {
   }
 
   async getDefinitions(filePath: string, offset: number, sourceText: string): Promise<TargetLocation[]> {
+    await this.refreshInstalledIfStale();
     const project = this.projectForFile(filePath);
     if (!project) return [];
     const ctx = analyzeAt(filePath, sourceText, offset);
@@ -327,6 +434,7 @@ class Engine implements StrapiEngine {
   }
 
   async getHover(filePath: string, offset: number, sourceText: string): Promise<HoverInfo | undefined> {
+    await this.refreshInstalledIfStale();
     const project = this.projectForFile(filePath);
     if (!project) return undefined;
     const ctx = analyzeAt(filePath, sourceText, offset);
@@ -339,6 +447,7 @@ class Engine implements StrapiEngine {
   }
 
   async getCompletions(filePath: string, offset: number, sourceText: string): Promise<CompletionResult> {
+    await this.refreshInstalledIfStale();
     const project = this.projectForFile(filePath);
     if (!project) return { items: [] };
     const ctx = analyzeAt(filePath, sourceText, offset);
@@ -352,12 +461,14 @@ class Engine implements StrapiEngine {
   }
 
   async validateFile(filePath: string, sourceText: string): Promise<DiagnosticEntry[]> {
+    await this.refreshInstalledIfStale();
     const project = this.projectForFile(filePath);
     if (!project) return [];
     return validateDocument(project, filePath, sourceText);
   }
 
   async getReferences(filePath: string, offset: number, sourceText: string): Promise<ReferenceLocation[]> {
+    await this.refreshInstalledIfStale();
     const project = this.projectForFile(filePath);
     if (!project) return [];
     const norm = normalize(filePath);
@@ -387,6 +498,7 @@ class Engine implements StrapiEngine {
   }
 
   async getCodeLenses(filePath: string, _sourceText: string): Promise<CodeLensEntry[]> {
+    await this.refreshInstalledIfStale();
     // Avoid flashing wrong "0 references" while the reference index is building.
     if (this.buildingRefs) return [];
     const project = this.projectForFile(filePath);
@@ -428,7 +540,7 @@ class Engine implements StrapiEngine {
   getModel(): OutlineProject[] {
     return this.projects.map((project) => {
       const maps = buildModelMaps(project);
-      const contentTypes = [...project.index.contentTypes.values()].map((ct) => {
+      const contentTypes = [...project.index.contentTypes.values()].filter((ct) => !ct.installed).map((ct) => {
         const ins = contentTypeInsights(project, ct.uid, maps);
         const relations: OutlineRelation[] = [];
         const components: OutlineComponentUse[] = [];

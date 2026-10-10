@@ -16,6 +16,7 @@ import type {
   StrapiProject,
 } from '../model/types';
 import { isFrameworkRef, parseAddress, parseHandlerRef, parseRef } from '../model/uid';
+import { isVerifiablePlugin } from '../plugins/merge';
 import { closest } from '../util/levenshtein';
 
 export interface ContentTypeSummary {
@@ -23,6 +24,8 @@ export interface ContentTypeSummary {
   kind: 'collectionType' | 'singleType';
   displayName: string;
   schemaPath: string;
+  /** Defined by an installed plugin in node_modules (not the project's code). */
+  installed?: true;
 }
 
 export interface ComponentSummary {
@@ -39,6 +42,8 @@ export interface ArtifactSummary {
   filePath: string;
   /** Custom method names (services/controllers), if any. */
   methods?: string[];
+  /** Defined by an installed plugin in node_modules (not the project's code). */
+  installed?: true;
 }
 
 export interface SchemaAttribute {
@@ -106,6 +111,7 @@ export function listContentTypes(project: StrapiProject): ContentTypeSummary[] {
     kind: ct.kind,
     displayName: ct.info.displayName ?? ct.ctName,
     schemaPath: ct.schemaPath,
+    ...(ct.installed ? { installed: true as const } : {}),
   }));
 }
 
@@ -131,6 +137,7 @@ export function listArtifacts(project: StrapiProject, kind?: ArtifactKind): Arti
         name: a.name,
         filePath: a.filePath,
         ...(a.actions?.length ? { methods: a.actions.map((x) => x.name) } : {}),
+        ...(a.installed ? { installed: true as const } : {}),
       });
     }
   }
@@ -242,7 +249,7 @@ export function validateRef(project: StrapiProject, address: string): Validation
     return { status: 'valid', kinds: [...new Set(targets.map((t) => t.kind))] };
   }
   const parsed = parseRef(ref);
-  if (parsed && parsed.namespace === 'plugin' && !project.index.pluginNames.has(parsed.scope)) {
+  if (parsed && parsed.namespace === 'plugin' && !isVerifiablePlugin(project.index, parsed.scope)) {
     return { status: 'external', kinds: [] };
   }
   // A method address only ever resolves to a service/controller action.
@@ -393,7 +400,7 @@ export function listBrokenRefs(project: StrapiProject): BrokenRef[] {
     const ref = key.slice(c.prefix.length);
     if (isFrameworkRef(ref)) continue; // framework built-in (admin::/strapi::) — unverifiable
     const parsed = parseRef(ref);
-    if (parsed && parsed.namespace === 'plugin' && !idx.pluginNames.has(parsed.scope)) continue; // external
+    if (parsed && parsed.namespace === 'plugin' && !isVerifiablePlugin(idx, parsed.scope)) continue; // external
     if (c.has(ref)) continue; // resolves → fine
     out.push({ ref, kind: c.kind, locations });
   }
@@ -423,7 +430,8 @@ const DEFAULT_UNUSED_KINDS: UnusedKind[] = ['method', 'content-type', 'component
 export function listUnused(project: StrapiProject, opts?: { kinds?: UnusedKind[]; file?: string }): UnusedItem[] {
   const kinds = new Set(opts?.kinds ?? DEFAULT_UNUSED_KINDS);
   const file = opts?.file ? normalize(opts.file).toLowerCase() : undefined;
-  const inFile = (p: string): boolean => !file || normalize(p).toLowerCase() === file;
+  // Installed-plugin entries (node_modules) are not the project's code: never "dead".
+  const inFile = (p: string): boolean => !p.includes('/node_modules/') && (!file || normalize(p).toLowerCase() === file);
   const unused = (key: string): boolean => (project.references.get(key) ?? []).length === 0;
   const out: UnusedItem[] = [];
 

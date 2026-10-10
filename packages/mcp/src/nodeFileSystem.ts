@@ -39,9 +39,10 @@ export class NodeFileSystem implements FileSystem {
     return entries.map((e) => ({ name: e.name, type: entryType(e) }));
   }
 
-  async stat(path: string): Promise<{ type: FileType } | null> {
+  async stat(path: string): Promise<{ type: FileType; mtime?: number } | null> {
     try {
-      return { type: statType(await stat(path)) };
+      const s = await stat(path);
+      return { type: statType(s), mtime: s.mtimeMs };
     } catch {
       return null;
     }

@@ -89,6 +89,21 @@ export const UNKNOWN = (why: string): Value => ({ k: 'unknown', why });
 const NIL: Value = { k: 'nil' };
 
 const RESOLVE_EXT = ['', '.js', '.cjs', '.mjs', '.ts', '.cts', '.mts', '.json'];
+
+/** Resolve `.` / `..` segments (the core's `normalize` keeps them) — one canonical key per file. */
+export function resolveDots(p: string): string {
+  const n = normalize(p);
+  const out: string[] = [];
+  for (const seg of n.split('/')) {
+    if (seg === '.') continue;
+    if (seg === '..' && out.length > 1) {
+      out.pop();
+      continue;
+    }
+    out.push(seg);
+  }
+  return out.join('/') || '/';
+}
 const INDEX_FILES = ['index.js', 'index.cjs', 'index.mjs', 'index.ts', 'index.json'];
 
 export interface EvaluatorLimits {
@@ -309,7 +324,7 @@ export class StaticEvaluator {
 
   /** Resolve a relative module specifier from `fromFile` to an existing file. */
   async resolveRelative(fromFile: string, spec: string): Promise<string | undefined> {
-    const base = join(dirname(fromFile), spec);
+    const base = resolveDots(join(dirname(fromFile), spec));
     for (const ext of RESOLVE_EXT) {
       const p = normalize(base + ext);
       const st = await this.fs.stat(p);
@@ -334,7 +349,7 @@ export class StaticEvaluator {
 
   /** The value of `module.exports` (CJS) or the module namespace (ESM) of `file`. */
   moduleExports(file: string): Promise<Value> {
-    const key = normalize(file);
+    const key = resolveDots(file);
     let p = this.modules.get(key);
     if (!p) {
       p = this.computeModuleExports(key);
@@ -578,7 +593,11 @@ export class StaticEvaluator {
     if (base) {
       if (baseCount > 1) return UNKNOWN('module.exports reassigned');
       const v = await this.ev(base, file, undefined);
-      if (props.size === 0 && !esModule) return v;
+      if (props.size === 0 && !esModule) {
+        // An export write we could not follow taints the module value.
+        if (!open) return v;
+        return v.k === 'obj' ? { ...v, open: true } : UNKNOWN('module exports not exhaustive');
+      }
       if (v.k === 'obj') {
         const merged: ObjValue = {
           k: 'obj',

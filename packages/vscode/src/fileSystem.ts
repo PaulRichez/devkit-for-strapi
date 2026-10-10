@@ -32,10 +32,10 @@ export class VscodeFileSystem implements FileSystem {
     return entries.map(([name, type]) => ({ name, type: mapType(type) }));
   }
 
-  async stat(path: string): Promise<{ type: CoreFileType } | null> {
+  async stat(path: string): Promise<{ type: CoreFileType; mtime?: number } | null> {
     try {
       const s = await vscode.workspace.fs.stat(toUri(path));
-      return { type: mapType(s.type) };
+      return { type: mapType(s.type), mtime: s.mtime };
     } catch {
       return null;
     }

@@ -115,6 +115,13 @@ export interface StrapiIndex {
   /** local plugin names discovered under `src/plugins` */
   pluginNames: Set<string>;
   /**
+   * Installed (`node_modules`) plugins read exhaustively: refs into them are
+   * verifiable exactly like local ones (see `plugins/installed.ts`).
+   */
+  verifiedPlugins?: Set<string>;
+  /** Every enabled installed plugin (complete or not), for plugin-name completion/hover. */
+  installedPlugins?: Map<string, { packageName: string; version?: string; complete: boolean }>;
+  /**
    * Reverse map: normalized filePath → the definition entries it contributes.
    * Lets {@link updateIndexForFile} remove a file's old definitions without
    * re-walking every map (incremental definition index — O(1) removal).
@@ -139,6 +146,10 @@ export interface StrapiProject {
   index: StrapiIndex;
   /** Reverse index: canonical target key → every call-site that references it. */
   references: Map<string, ReferenceLocation[]>;
+  /** Installed plugins read from `node_modules` (absent when Strapi isn't installed). */
+  installed?: import('../plugins/installed').InstalledPluginsResult;
+  /** Freshness fingerprint of {@link installed} (see `plugins/merge.ts#installedStamp`). */
+  installedStamp?: string;
 }
 
 export function emptyIndex(): StrapiIndex {

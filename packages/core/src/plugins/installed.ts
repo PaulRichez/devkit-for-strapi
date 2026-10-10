@@ -25,7 +25,7 @@ import { parseMajor } from '../workspace/version';
 import type { AttributeInfo, CodeArtifact, ContentType, ControllerAction, ArtifactKind } from '../model/types';
 import { asRecord, asString, safeParse } from '../util/json';
 import { configModuleValue, readPluginsConfig, type PluginDeclaration, type PluginsConfig } from './config';
-import { isCallable, type Loc, type ObjValue, StaticEvaluator, toPlain, UNKNOWN, type Value } from './evaluate';
+import { isCallable, type Loc, type ObjValue, resolveDots, StaticEvaluator, toPlain, UNKNOWN, type Value } from './evaluate';
 import { strapiExternals } from './shims';
 
 export interface PluginRoute {
@@ -67,6 +67,8 @@ export interface InstalledPlugin {
 }
 
 export interface InstalledPluginsResult {
+  /** `node_modules/@strapi/strapi` directory the plugins were resolved from. */
+  strapiDir: string;
   strapiVersion: string;
   major: number;
   plugins: InstalledPlugin[];
@@ -527,7 +529,7 @@ export async function readInstalledPlugins(fs: FileSystem, root: string): Promis
     }
 
     const exported = major >= 5 ? strapiServerExport(c.pkg) : undefined;
-    const entry = normalize(join(c.dir, exported ?? './strapi-server.js'));
+    const entry = resolveDots(join(c.dir, exported ?? './strapi-server.js'));
     if ((await fs.stat(entry))?.type === FileType.File) {
       plugin.hasServer = true;
       await new PluginReader(ev, plugin, apiPrefix).read(entry);
@@ -542,6 +544,6 @@ export async function readInstalledPlugins(fs: FileSystem, root: string): Promis
     }
     plugins.push(plugin);
   }
-  return { strapiVersion, major, plugins, config, apiPrefix };
+  return { strapiDir, strapiVersion, major, plugins, config, apiPrefix };
 }
 

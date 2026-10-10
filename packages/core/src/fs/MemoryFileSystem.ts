@@ -7,6 +7,8 @@ import { dirname, normalize } from './paths';
  */
 export class MemoryFileSystem implements FileSystem {
   private readonly files = new Map<string, string>();
+  private readonly mtimes = new Map<string, number>();
+  private clock = 0;
   private readonly dirs = new Set<string>();
 
   constructor(files: Record<string, string> = {}) {
@@ -19,6 +21,7 @@ export class MemoryFileSystem implements FileSystem {
   writeFile(rawPath: string, content: string): void {
     const p = normalize(rawPath);
     this.files.set(p, content);
+    this.mtimes.set(p, ++this.clock);
     let d = dirname(p);
     while (d && d !== '.' && !this.dirs.has(d)) {
       this.dirs.add(d);
@@ -63,9 +66,9 @@ export class MemoryFileSystem implements FileSystem {
     return [...entries].map(([name, type]) => ({ name, type }));
   }
 
-  async stat(path: string): Promise<{ type: FileType } | null> {
+  async stat(path: string): Promise<{ type: FileType; mtime?: number } | null> {
     const p = normalize(path);
-    if (this.files.has(p)) return { type: FileType.File };
+    if (this.files.has(p)) return { type: FileType.File, mtime: this.mtimes.get(p) ?? 0 };
     if (this.dirs.has(p) || this.hasAnyUnder(p)) return { type: FileType.Directory };
     return null;
   }

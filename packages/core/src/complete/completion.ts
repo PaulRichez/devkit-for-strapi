@@ -167,8 +167,18 @@ export function complete(
         : scopedEntries(idx.middlewares, ctx, project, filePath);
     case 'controller-action':
       return actionEntries(project, ctx);
-    case 'plugin-name':
-      return [...idx.pluginNames].map((n) => ({ label: n, insertText: n, kind: 'module' }));
+    case 'plugin-name': {
+      const names = new Set([...idx.pluginNames, ...(idx.installedPlugins?.keys() ?? [])]);
+      return [...names].map((n) => {
+        const inst = idx.pluginNames.has(n) ? undefined : idx.installedPlugins?.get(n);
+        return {
+          label: n,
+          insertText: n,
+          kind: 'module' as const,
+          ...(inst ? { detail: `${inst.packageName}${inst.version ? `@${inst.version}` : ''}` } : {}),
+        };
+      });
+    }
     default:
       return [];
   }

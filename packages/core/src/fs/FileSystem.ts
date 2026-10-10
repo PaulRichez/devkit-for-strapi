@@ -26,7 +26,11 @@ export interface FileSystem {
   readFile(path: string): Promise<string>;
   /** List immediate children. Rejects if the directory does not exist. */
   readDirectory(path: string): Promise<DirEntry[]>;
-  /** Stat a path, or `null` if it does not exist (never rejects for absence). */
-  stat(path: string): Promise<{ type: FileType } | null>;
+  /**
+   * Stat a path, or `null` if it does not exist (never rejects for absence).
+   * `mtime` (ms) is optional: implementations that can provide it let the engine
+   * notice an `npm install` without a file watcher (installed-plugin freshness).
+   */
+  stat(path: string): Promise<{ type: FileType; mtime?: number } | null>;
   exists(path: string): Promise<boolean>;
 }

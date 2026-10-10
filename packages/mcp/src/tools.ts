@@ -212,7 +212,13 @@ export function registerTools(
   let registered = 0;
   const reg: typeof server.registerTool = (name, config, cb) => {
     registered++;
-    return server['registerTool'](name, config, (GATED.has(name) ? gate(cb as never, name) : cb) as typeof cb);
+    const inner = (GATED.has(name) ? gate(cb as never, name) : cb) as (...a: unknown[]) => unknown;
+    // No file watcher in the MCP server: pick up an `npm install` (installed plugins) on the next call.
+    const fresh = (async (...a: unknown[]) => {
+      await engine.refreshInstalledIfStale();
+      return inner(...a);
+    }) as unknown as typeof cb;
+    return server['registerTool'](name, config, fresh);
   };
 
   reg(

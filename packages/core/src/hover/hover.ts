@@ -98,11 +98,15 @@ export function describeHover(
     case 'middleware-ref':
       md = target ? `${header('🧱', 'Middleware', ctx.text)}\n\n_${rel(project, target.filePath)}_` : unknown('middleware', ctx.text);
       break;
-    case 'plugin-name':
+    case 'plugin-name': {
+      const inst = idx.installedPlugins?.get(ctx.text);
       md = idx.pluginNames.has(ctx.text)
         ? `${header('🔌', 'Local plugin', ctx.text)}`
-        : `🔌 **Plugin** · \`${ctx.text}\``;
+        : inst
+          ? `${header('🔌', 'Installed plugin', ctx.text)}\n\n_${inst.packageName}${inst.version ? `@${inst.version}` : ''}_`
+          : `🔌 **Plugin** · \`${ctx.text}\``;
       break;
+    }
     default:
       md = undefined;
   }

@@ -7,6 +7,7 @@ import type {
   StrapiProject,
 } from '../model/types';
 import { isFrameworkRef, parseComponentUid, parseEntityRef, parseHandlerRef, parseRef } from '../model/uid';
+import { isVerifiablePlugin } from '../plugins/merge';
 import { autoCrudActions, CORE_ACTION_SET } from '../model/constants';
 import { closest } from '../util/levenshtein';
 import { owningApiName, owningPluginName, qualifyRouteHandler } from '../resolve/owner';
@@ -48,8 +49,9 @@ function diag(
   return entry;
 }
 
+/** A plugin whose refs can be verified: local, or installed and read exhaustively. */
 function isLocalPlugin(project: StrapiProject, name: string): boolean {
-  return project.index.pluginNames.has(name);
+  return isVerifiablePlugin(project.index, name);
 }
 
 /** The read-only surface of an index map used during validation. */
