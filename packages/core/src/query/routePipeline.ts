@@ -175,6 +175,13 @@ function handlerStep(project: StrapiProject, route: RouteInfo): PipelineStep {
   if (isFrameworkRef(qualified)) return step({ name: route.handler, status: 'unverified', note: 'Registered by Strapi itself: not checked.' });
   const h = parseHandlerRef(qualified);
   if (!h) return step({ name: route.handler, status: 'unknown', note: 'Not a `<controller>.<action>` handler.' });
+  // Strapi 4 i18n adds this route at boot, and the action with it (`createLocalization`).
+  if (route.source === 'plugin-injected') {
+    const c = project.index.controllers.get(h.controllerRef);
+    const ct = project.index.contentTypes.get(h.controllerRef);
+    const target = c ? { filePath: c.filePath, offset: c.defOffset ?? 0 } : ct ? { filePath: ct.schemaPath } : undefined;
+    return step({ name: route.handler, status: 'ok', ...(target ? { target } : {}), note: `Added to the controller at boot by the i18n plugin (Strapi 4), with this route.` });
+  }
   const plugin = h.parsed.namespace === 'plugin' ? h.parsed.scope : undefined;
   if (plugin && !isVerifiablePlugin(project.index, plugin)) {
     return step({ name: route.handler, status: 'unverified', note: `The plugin \`${plugin}\` is not verified by DevKit: its controllers aren't checked.` });

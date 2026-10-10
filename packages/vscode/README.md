@@ -55,7 +55,7 @@ starting Strapi:
 - **Plugins** — local and installed: what each adds, whether DevKit checks the refs
   into it (and why not), the disabled ones, the ones your code rewrites.
 
-<!-- screenshot: the DevKit panel (Routes with a pipeline unfolded) -->
+![The DevKit panel (Health, Routes with a route's pipeline, Model, Plugins) next to the relations diagram in its MCD view](https://devkit-for-strapi.paulrichez.fr/screenshots/panel-diagram.png)
 
 ![An invalid Strapi reference underlined, with a "did you mean" quick fix](https://devkit-for-strapi.paulrichez.fr/screenshots/diagnostics.png)
 
@@ -122,7 +122,6 @@ One licence unlocks **safe, propagated refactors** in both surfaces:
   **apply**. Both the plan *and* its apply are licensed. `get_model_diagram` gives it
   the data model as Mermaid.
 
-<!-- screenshot: the relations diagram (MCD view) -->
 
 **€39.99 one-time** — a perpetual licence plus one year of updates, per developer.
 One key unlocks both the editor and the MCP Pro tools; the panel's views stay free. Validated **once on

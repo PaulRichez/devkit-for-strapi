@@ -75,6 +75,28 @@ function isModuleExports(node: ts.Expression): boolean {
 
 const FACTORY_ANCHOR_NAMES = ['createCoreService', 'createCoreController', 'createCoreRouter'];
 
+/**
+ * The exported value, following `const x = …; export default x` (or `module.exports = x`)
+ * to the initializer when `x` is declared once at the top level of the file.
+ */
+function exportedValue(sf: ts.SourceFile, expr: ts.Expression): ts.Expression {
+  let e = expr;
+  while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isSatisfiesExpression(e)) e = e.expression;
+  if (!ts.isIdentifier(e)) return e;
+  let found: ts.Expression | undefined;
+  let count = 0;
+  for (const stmt of sf.statements) {
+    if (!ts.isVariableStatement(stmt)) continue;
+    for (const d of stmt.declarationList.declarations) {
+      if (ts.isIdentifier(d.name) && d.name.text === e.text && d.initializer) {
+        found = d.initializer;
+        count++;
+      }
+    }
+  }
+  return count === 1 && found ? found : e;
+}
+
 /** Collect the methods from a parsed service/controller source. */
 function collectMethods(sf: ts.SourceFile, factories: readonly string[]): ControllerAction[] {
   const out = new Map<string, ControllerAction>();
@@ -90,7 +112,7 @@ function collectMethods(sf: ts.SourceFile, factories: readonly string[]): Contro
 
   for (const stmt of sf.statements) {
     if (ts.isExportAssignment(stmt)) {
-      const obj = unwrapToObject(stmt.expression);
+      const obj = unwrapToObject(exportedValue(sf, stmt.expression));
       if (obj) collectActions(obj, sf, out);
     } else if (
       ts.isExpressionStatement(stmt) &&
@@ -98,7 +120,7 @@ function collectMethods(sf: ts.SourceFile, factories: readonly string[]): Contro
       stmt.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
       isModuleExports(stmt.expression.left)
     ) {
-      const obj = unwrapToObject(stmt.expression.right);
+      const obj = unwrapToObject(exportedValue(sf, stmt.expression.right));
       if (obj) collectActions(obj, sf, out);
     }
   }
@@ -164,7 +186,7 @@ function factoryHasSpread(sf: ts.SourceFile): boolean {
   if (!spread) {
     for (const stmt of sf.statements) {
       if (ts.isExportAssignment(stmt)) {
-        const o = unwrapToObject(stmt.expression);
+        const o = unwrapToObject(exportedValue(sf, stmt.expression));
         if (o) check(o);
       } else if (
         ts.isExpressionStatement(stmt) &&
@@ -172,7 +194,7 @@ function factoryHasSpread(sf: ts.SourceFile): boolean {
         stmt.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
         isModuleExports(stmt.expression.left)
       ) {
-        const o = unwrapToObject(stmt.expression.right);
+        const o = unwrapToObject(exportedValue(sf, stmt.expression.right));
         if (o) check(o);
       }
       if (spread) break;

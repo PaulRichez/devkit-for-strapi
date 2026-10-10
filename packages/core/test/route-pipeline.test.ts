@@ -191,6 +191,14 @@ describe('the route pipeline', () => {
     expect(handler('GET', '/authors').target?.filePath).toBe(`${ROOT}/src/api/author/content-types/author/schema.json`);
   });
 
+  it("trusts the action Strapi 4 i18n injects with its localization route", async () => {
+    const global = await engine.getGlobalMiddlewares(ROOT);
+    const injected: RouteInfo = { method: 'POST', path: '/articles/:id/localizations', handler: 'api::article.article.createLocalization', source: 'plugin-injected', owner: 'api::article', type: 'content-api', origin: 'project' };
+    const handler = routePipeline(project, injected, global).steps.at(-1)!;
+    expect(handler.status).toBe('ok');
+    expect(handler.note).toContain('i18n');
+  });
+
   it('maps every action to the routes calling it (short handlers qualified)', () => {
     const map = routesByAction(routes);
     expect(map.get('api::article.article.publish')?.map((r) => r.path)).toEqual(['/articles/:id/publish']);

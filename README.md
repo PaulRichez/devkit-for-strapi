@@ -84,6 +84,8 @@ Inside a Strapi project — zero config, no type generation:
   **relations diagram**: an MCD (entities, straight links, 1 / n cardinalities) or a graph, exported
   as Markdown (Mermaid), PNG or SVG.
 
+![The DevKit panel (Health, Routes with a route's pipeline, Model, Plugins) next to the relations diagram in its MCD view](site/public/screenshots/panel-diagram.png)
+
 ---
 
 ## 🤖 The MCP server — ground truth for AI agents

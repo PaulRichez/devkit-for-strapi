@@ -12,6 +12,18 @@ export default factories.createCoreController('api::x.x', ({ strapi }) => ({
     expect(actions).toEqual(['custom', 'find']);
   });
 
+  it('follows a factory declared in a const, then exported (`const x = ({ strapi }) => ({…}); export default x`)', () => {
+    const ts = `const ignore = ({ strapi }: { strapi: unknown }) => ({
+  async list(ctx: any) {},
+  async add(ctx: any) {},
+});
+export default ignore;`;
+    expect(extractControllerActions('c.ts', ts).map((a) => a.name)).toEqual(['list', 'add']);
+    const cjs = `const ctrl = { find(ctx) {} };
+module.exports = ctrl;`;
+    expect(extractControllerActions('c.js', cjs).map((a) => a.name)).toEqual(['find']);
+  });
+
   it('extracts methods from a bare default-export object', () => {
     const text = `export default {
   async findOne(ctx) {},
