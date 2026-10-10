@@ -29,7 +29,7 @@ function html(webview: vscode.Webview, script: vscode.Uri): string {
 <title>Strapi relations</title>
 <style nonce="${n}">
   html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
-  body { background: var(--vscode-editor-background); color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); display: flex; flex-direction: column; }
+  body { position: relative; background: var(--vscode-editor-background); color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); display: flex; flex-direction: column; }
   .bar { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--vscode-panel-border, transparent); flex-wrap: wrap; }
   .bar input[type=search], .bar select { background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); padding: 3px 6px; border-radius: 2px; }
   .bar input[type=search] { width: 220px; }
@@ -42,10 +42,15 @@ function html(webview: vscode.Webview, script: vscode.Uri): string {
   .seg button:last-child { border-radius: 0 2px 2px 0; }
   .seg button.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   .spacer { flex: 1; }
+  .menu { position: relative; display: inline-flex; }
+  .popover { position: absolute; top: 100%; left: 0; margin-top: 4px; z-index: 10; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; white-space: nowrap; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, transparent)); border-radius: 4px; box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0,0,0,0.35)); }
+  .popover.hidden { display: none; }
+  .popover label { color: var(--vscode-menu-foreground, var(--vscode-foreground)); cursor: pointer; }
+  .legend.overlay { position: absolute; left: 10px; bottom: 8px; pointer-events: none; font-size: 11.5px; }
   #count, .legend { color: var(--vscode-descriptionForeground); }
   .legend span { margin-left: 10px; }
   .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; border: 2px solid; vertical-align: -1px; }
-  .lc { border-color: var(--vscode-charts-blue); } .ls { border-color: var(--vscode-charts-purple); } .lk { border-color: var(--vscode-charts-green); border-style: dashed !important; } .lp { border-color: var(--vscode-descriptionForeground); border-style: dotted !important; }
+  .legend i.lc { border-color: var(--vscode-charts-blue); } .legend i.ls { border-color: var(--vscode-charts-purple); } .legend i.lk { border-color: var(--vscode-charts-green); border-style: dashed; } .legend i.lp { border-color: var(--vscode-descriptionForeground); border-style: dotted; }
   #graph { flex: 1; width: 100%; cursor: grab; user-select: none; }
   #graph:active { cursor: grabbing; }
   .node rect { fill: var(--vscode-editorWidget-background); stroke: var(--vscode-charts-blue); stroke-width: 1.5; }
@@ -84,17 +89,22 @@ function html(webview: vscode.Webview, script: vscode.Uri): string {
     <select id="project" title="Project"></select>
     <span class="seg"><button id="mode-mcd" title="Entities with their fields, cardinalities on straight links">MCD</button><button id="mode-graph" title="Compact boxes and arrows">Graph</button></span>
     <input id="search" type="search" placeholder="Find a type (Enter to center)">
-    <label><input id="components" type="checkbox"> Components</label>
-    <label title="Off: only the plugin types your types point at"><input id="allPlugins" type="checkbox"> All plugin types</label>
-    <label title="Media fields, linked to the upload plugin's File"><input id="media" type="checkbox"> Media</label>
-    <label title="What Strapi adds to every content-type: createdAt, updatedAt, publishedAt, and createdBy / updatedBy → admin::user"><input id="strapiFields" type="checkbox"> Strapi's fields</label>
+    <span class="menu">
+      <button id="options" aria-haspopup="true" aria-expanded="false" title="What the diagram shows">Options ▾</button>
+      <span id="optionsPanel" class="popover hidden" role="menu">
+        <label><input id="components" type="checkbox"> Components</label>
+        <label title="Off: only the plugin types your types point at"><input id="allPlugins" type="checkbox"> All plugin types</label>
+        <label title="Media fields, linked to the upload plugin's File"><input id="media" type="checkbox"> Media</label>
+        <label title="What Strapi adds to every content-type: createdAt, updatedAt, publishedAt, and createdBy / updatedBy → admin::user"><input id="strapiFields" type="checkbox"> Strapi's fields</label>
+      </span>
+    </span>
     <button id="fit" title="Fit to window">Fit</button>
     <button id="relayout" title="Lay out again (unpins dragged boxes)">Re-layout</button>
     <button id="export" title="Markdown (Mermaid), PNG or SVG">Export…</button>
     <span class="spacer"></span>
     <span id="count"></span>
-    <span class="legend"><span><i class="lc"></i>collection</span><span><i class="ls"></i>single</span><span><i class="lk"></i>component</span><span><i class="lp"></i>plugin</span></span>
   </div>
+  <span class="legend overlay"><span><i class="lc"></i>collection</span><span><i class="ls"></i>single</span><span><i class="lk"></i>component</span><span><i class="lp"></i>plugin</span></span>
   <svg id="graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs></svg>
   <div id="empty" class="hidden">No content-type in this project yet.</div>
   <script nonce="${n}" src="${webview.asWebviewUri(script)}"></script>

@@ -601,6 +601,28 @@ $('mode-mcd').classList.toggle('active', saved.mode === 'mcd');
 $('mode-graph').classList.toggle('active', saved.mode === 'graph');
 $('mode-mcd').addEventListener('click', () => setMode('mcd'));
 $('mode-graph').addEventListener('click', () => setMode('graph'));
+// The Options menu: opens below its button, closes on a click elsewhere or Escape.
+const optionsButton = $('options');
+const optionsPanel = $('optionsPanel');
+const setOptionsOpen = (open: boolean): void => {
+  optionsPanel.classList.toggle('hidden', !open);
+  optionsButton.setAttribute('aria-expanded', String(open));
+};
+const describeOptions = (): void => {
+  const on = [saved.components, saved.allPlugins, saved.strapiFields].filter(Boolean).length + (saved.media ? 0 : 1);
+  optionsButton.textContent = on ? `Options (${on}) ▾` : 'Options ▾';
+};
+optionsButton.addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  setOptionsOpen(optionsPanel.classList.contains('hidden'));
+});
+optionsPanel.addEventListener('click', (ev) => ev.stopPropagation());
+optionsPanel.addEventListener('change', describeOptions);
+document.addEventListener('click', () => setOptionsOpen(false));
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') setOptionsOpen(false);
+});
+describeOptions();
 $('fit').addEventListener('click', fit);
 $('relayout').addEventListener('click', () => {
   const v = visible();
