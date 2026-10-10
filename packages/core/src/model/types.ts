@@ -134,6 +134,12 @@ export interface StrapiIndex {
   /** Local plugins whose content-type list could not be read exhaustively (refs into them stay silent). */
   partialContentTypePlugins?: Set<string>;
   /**
+   * Strapi's built-in middlewares (`strapi::<name>` → definition), present only
+   * when read exhaustively from the installed Strapi — then `strapi::` names in
+   * `config/middlewares` are verified instead of skipped.
+   */
+  frameworkMiddlewares?: Map<string, { filePath: string; offset: number }>;
+  /**
    * Reverse map: normalized filePath → the definition entries it contributes.
    * Lets {@link updateIndexForFile} remove a file's old definitions without
    * re-walking every map (incremental definition index — O(1) removal).

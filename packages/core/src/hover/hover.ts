@@ -97,6 +97,15 @@ export function describeHover(
       md = target ? `${header('🛡️', 'Policy', ctx.text)}\n\n_${rel(project, target.filePath)}_` : unknown('policy', ctx.text);
       break;
     case 'middleware-ref':
+      if (ctx.text.startsWith('strapi::')) {
+        // Built-in: known when Strapi's registry was read; otherwise just named, never "unknown".
+        md = target
+          ? `${header('🧱', 'Strapi middleware', ctx.text)}\n\n_${rel(project, target.filePath)}_`
+          : idx.frameworkMiddlewares
+            ? unknown('Strapi middleware', ctx.text)
+            : `🧱 **Strapi middleware** · \`${ctx.text}\``;
+        break;
+      }
       md = target ? `${header('🧱', 'Middleware', ctx.text)}\n\n_${rel(project, target.filePath)}_` : unknown('middleware', ctx.text);
       break;
     case 'plugin-name': {

@@ -41,6 +41,11 @@ export function mergeInstalled(index: StrapiIndex, result: InstalledPluginsResul
   if (!result) return;
   index.verifiedPlugins ??= new Set();
   index.installedPlugins ??= new Map();
+  if (result.frameworkMiddlewares?.complete && !index.frameworkMiddlewares) {
+    index.frameworkMiddlewares = new Map(
+      result.frameworkMiddlewares.entries.map((e) => [`strapi::${e.name}`, { filePath: e.filePath, offset: e.offset }]),
+    );
+  }
   for (const p of result.plugins) {
     // A local plugin of the same name wins (Strapi: a declared `resolve` replaces it).
     if (index.pluginNames.has(p.name)) continue;
@@ -69,6 +74,7 @@ export function clearInstalled(index: StrapiIndex): void {
   }
   index.verifiedPlugins?.clear();
   index.installedPlugins?.clear();
+  delete index.frameworkMiddlewares;
 }
 
 const LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb', 'npm-shrinkwrap.json'];

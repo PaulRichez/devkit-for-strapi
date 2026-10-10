@@ -103,8 +103,13 @@ export function resolveDefinition(
         : [];
     case 'policy-ref':
       return resolveScoped(ctx, index.policies, project, filePath);
-    case 'middleware-ref':
+    case 'middleware-ref': {
+      if (ctx.text.startsWith('strapi::')) {
+        const builtin = index.frameworkMiddlewares?.get(ctx.text);
+        return builtin ? [{ filePath: builtin.filePath, offset: builtin.offset }] : [];
+      }
       return resolveScoped(ctx, index.middlewares, project, filePath);
+    }
     case 'controller-action':
       return resolveControllerAction(project, filePath, ctx.text);
     case 'plugin-name':

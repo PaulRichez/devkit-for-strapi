@@ -138,6 +138,13 @@ describe.skipIf(APPS.length === 0)('oracle: static installed-plugin reading vs r
           ...report,
         );
       }
+      // Strapi's built-in middlewares (strapi::*): exact when DevKit reads them exhaustively.
+      const fw = stat!.frameworkMiddlewares;
+      const truthFw = Object.keys(oracle.registries.middlewares ?? {}).filter((k) => k.startsWith('strapi::')).sort();
+      const mineFw = (fw?.entries ?? []).map((e) => `strapi::${e.name}`).sort();
+      lines.push(`  strapi:: middlewares: ${mineFw.length} static${fw?.complete ? ' (complete)' : ''} / ${truthFw.length} Strapi`);
+      if (mineFw.some((m) => !truthFw.includes(m))) problems.push(`strapi:: middlewares invented: ${mineFw.filter((m) => !truthFw.includes(m)).join(', ')}`);
+      if (fw?.complete && truthFw.some((t) => !mineFw.includes(t))) problems.push(`strapi:: middlewares missing: ${truthFw.filter((t) => !mineFw.includes(t)).join(', ')}`);
       const staticNames = new Set(stat!.plugins.map((p) => p.name));
       const localDeclared = [...stat!.config.declarations].filter(([, d]) => d.resolve !== undefined).map(([n]) => n);
       const unseen = oracle.enabledPlugins.filter((n) => !staticNames.has(n) && !localDeclared.includes(n));

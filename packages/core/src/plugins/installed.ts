@@ -66,6 +66,13 @@ export interface InstalledPlugin {
   routes: PluginRoute[];
 }
 
+/** Strapi's built-in middlewares (`strapi::<name>`), read from its own registry module. */
+export interface FrameworkMiddlewares {
+  /** Read exhaustively — unknown `strapi::` names may be reported. */
+  complete: boolean;
+  entries: Array<{ name: string; filePath: string; offset: number }>;
+}
+
 export interface InstalledPluginsResult {
   /** `node_modules/@strapi/strapi` directory the plugins were resolved from. */
   strapiDir: string;
@@ -75,6 +82,8 @@ export interface InstalledPluginsResult {
   config: PluginsConfig;
   /** `api.rest.prefix` (default `/api`); `undefined` when not literal. */
   apiPrefix: string | undefined;
+  /** `strapi::*` middlewares; absent when Strapi's middleware module wasn't found. */
+  frameworkMiddlewares?: FrameworkMiddlewares;
 }
 
 /** Fallback internal-plugin lists, used only if Strapi's own list can't be read. */
@@ -514,6 +523,42 @@ export async function readApiPrefix(fs: FileSystem, root: string, ev: StaticEval
   return '/api';
 }
 
+/**
+ * `strapi::<name>` middlewares: the keys of the `middlewares` object exported by
+ * `@strapi/core/dist/middlewares` (v5) or `@strapi/strapi/dist|lib/middlewares` (v4),
+ * the registry Strapi registers them from.
+ */
+async function readFrameworkMiddlewares(
+  fs: FileSystem,
+  ev: StaticEvaluator,
+  strapiDir: string,
+  major: number,
+): Promise<FrameworkMiddlewares | undefined> {
+  const candidates: string[] = [];
+  if (major >= 5) {
+    const coreDir = (await findPackageDir(fs, strapiDir, '@strapi/core')) ?? (await findPackageDir(fs, dirname(strapiDir), '@strapi/core'));
+    if (coreDir) candidates.push(join(coreDir, 'dist', 'middlewares', 'index.js'));
+  } else {
+    candidates.push(join(strapiDir, 'dist', 'middlewares', 'index.js'), join(strapiDir, 'lib', 'middlewares', 'index.js'));
+  }
+  for (const file of candidates) {
+    if ((await fs.stat(file))?.type !== FileType.File) continue;
+    const mod = await ev.moduleExports(file);
+    let v = await ev.getProp(mod, 'middlewares');
+    if (v.k !== 'obj' && mod.k === 'obj' && !mod.props.has('middlewares')) v = mod;
+    if (v.k !== 'obj') return { complete: false, entries: [] };
+    const entries: FrameworkMiddlewares['entries'] = [];
+    for (const [name, thunk] of v.props) {
+      const val = await thunk();
+      const kl = v.keyLocs.get(name);
+      const loc = val.k === 'fn' ? val.loc : kl;
+      entries.push({ name, filePath: loc?.file ?? file, offset: loc?.pos ?? 0 });
+    }
+    return { complete: !v.open, entries };
+  }
+  return undefined;
+}
+
 function enabledState(decl: PluginDeclaration | undefined, config: PluginsConfig): 'yes' | 'uncertain' | 'no' {
   if (!decl) return config.exhaustive ? 'yes' : 'uncertain';
   if (decl.enabled === false) return decl.envOverride ? 'uncertain' : 'no';
@@ -600,6 +645,7 @@ export async function readInstalledPlugins(fs: FileSystem, root: string): Promis
     }
     plugins.push(plugin);
   }
-  return { strapiDir, strapiVersion, major, plugins, config, apiPrefix };
+  const frameworkMiddlewares = await readFrameworkMiddlewares(fs, ev, strapiDir, major);
+  return { strapiDir, strapiVersion, major, plugins, config, apiPrefix, ...(frameworkMiddlewares ? { frameworkMiddlewares } : {}) };
 }
 

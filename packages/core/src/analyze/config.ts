@@ -42,7 +42,8 @@ function isTopLevelConfigArray(arr: ts.ArrayLiteralExpression): boolean {
  * entries are paths, not refs.
  */
 export function classifyConfigMiddlewareLiteral(lit: ts.StringLiteralLike): ClassifiedRef | undefined {
-  if (lit.text.startsWith('strapi::')) return undefined; // framework built-in — never flag
+  // `strapi::*` built-ins are classified too: the validator checks them only when
+  // Strapi's own middleware registry was read exhaustively (else they stay silent).
   const parent = lit.parent;
 
   // (a) a direct string element of the top-level stack array.

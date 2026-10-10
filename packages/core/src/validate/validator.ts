@@ -172,6 +172,14 @@ function validateScoped(
   label: string,
 ): DiagnosticEntry | undefined {
   const text = ref.text;
+  // `strapi::<name>` middlewares: verifiable when Strapi's own registry was read
+  // exhaustively from node_modules (see plugins/installed.ts), silent otherwise.
+  const builtins = project.index.frameworkMiddlewares;
+  if (label === 'middleware' && text.startsWith('strapi::') && builtins) {
+    if (builtins.has(text)) return undefined;
+    const suggestion = closest(text, builtins.keys());
+    return diag(ref, `Unknown Strapi middleware '${text}'.`, code, 'error', suggestion);
+  }
   // Framework built-in policy/middleware (`admin::isAuthenticatedAdmin`,
   // `strapi::*`) — registered by Strapi core, not in the workspace → never flag.
   if (isFrameworkRef(text)) return undefined;

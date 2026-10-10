@@ -271,6 +271,41 @@ describe('installed plugins — engine integration', () => {
     expect(validateRef(project, 'plugin::seo.sseo').status).toBe('unknown');
   });
 
+  it('verifies strapi:: middlewares in config/middlewares once Strapi\'s registry is read', async () => {
+    const coreMw = `${ROOT}/node_modules/@strapi/core/dist/middlewares`;
+    const fs = v5App({
+      [`${coreMw}/index.js`]: `'use strict';
+var cors = require('./cors.js');
+var errors = require('./errors.js');
+const middlewares = {
+    cors: cors.cors,
+    errors: errors.errors,
+};
+exports.middlewares = middlewares;`,
+      [`${coreMw}/cors.js`]: `'use strict';
+const cors = (config) => async (ctx, next) => next();
+exports.cors = cors;`,
+      [`${coreMw}/errors.js`]: `'use strict';
+const errors = () => async (ctx, next) => next();
+exports.errors = errors;`,
+    });
+    const { engine } = await engineFor(fs);
+    const file = `${ROOT}/config/middlewares.ts`;
+    const diags = await engine.validateFile(file, `export default ['strapi::errors', 'strapi::corss'];`);
+    expect(diags).toHaveLength(1);
+    expect(diags[0]!.message).toMatch(/strapi::corss/);
+    expect(diags[0]!.quickFixes?.[0]?.replacement).toBe('strapi::cors');
+    const src = `export default ['strapi::cors'];`;
+    const defs = await engine.getDefinitions(file, src.indexOf('cors') + 1, src);
+    expect(defs[0]?.filePath).toBe(`${coreMw}/cors.js`);
+  });
+
+  it('stays silent on strapi:: middlewares when Strapi\'s registry is not readable', async () => {
+    const { engine } = await engineFor(v5App());
+    const diags = await engine.validateFile(`${ROOT}/config/middlewares.ts`, `export default ['strapi::corss'];`);
+    expect(diags).toEqual([]);
+  });
+
   it('refuses any edit that would write into node_modules', () => {
     const outside = pathsOutsideRoots([ROOT], {
       textEdits: [{ filePath: `${ROOT}/node_modules/@strapi/upload/dist/server/index.js`, start: 0, end: 0, newText: 'x' }],

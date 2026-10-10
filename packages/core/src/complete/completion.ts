@@ -164,10 +164,16 @@ export function complete(
       return ctx.pluginName
         ? pluginBareEntries(idx.policies, ctx.pluginName, 'plugin policy')
         : scopedEntries(idx.policies, ctx, project, filePath);
-    case 'middleware-ref':
-      return ctx.pluginName
-        ? pluginBareEntries(idx.middlewares, ctx.pluginName, 'plugin middleware')
-        : scopedEntries(idx.middlewares, ctx, project, filePath);
+    case 'middleware-ref': {
+      if (ctx.pluginName) return pluginBareEntries(idx.middlewares, ctx.pluginName, 'plugin middleware');
+      const out = scopedEntries(idx.middlewares, ctx, project, filePath);
+      if (ctx.apiStyle === 'config' || ctx.apiStyle === 'route') {
+        for (const name of idx.frameworkMiddlewares?.keys() ?? []) {
+          out.push({ label: name, insertText: name, detail: 'Strapi built-in middleware', kind: 'reference' });
+        }
+      }
+      return out;
+    }
     case 'controller-action':
       return actionEntries(project, ctx);
     case 'plugin-name': {

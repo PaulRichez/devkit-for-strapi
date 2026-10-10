@@ -33,9 +33,9 @@ describe('config/middlewares analyzer', () => {
     expect(ctx?.text).toBe('global::rate-limit');
   });
 
-  it('skips strapi:: built-ins (emits no ref)', () => {
+  it('emits strapi:: built-ins as middleware refs (the validator decides if they can be checked)', () => {
     const code = `export default ['strapi::logger', 'strapi::errors'];`;
-    expect(collectReferences(CFG_TS, code)).toEqual([]);
+    expect(collectReferences(CFG_TS, code).map((r) => r.text)).toEqual(['strapi::logger', 'strapi::errors']);
   });
 
   it('skips the { resolve } path form', () => {
@@ -46,7 +46,7 @@ describe('config/middlewares analyzer', () => {
   it('collects only the real refs from a mixed stack, ignoring nested arrays', () => {
     const code = `export default ['strapi::logger', 'global::a', { name: 'global::b', config: { extra: ['global::nested'] } }, { resolve: './x' }];`;
     const refs = collectReferences(CFG_TS, code);
-    expect(refs.map((r) => r.text)).toEqual(['global::a', 'global::b']);
+    expect(refs.map((r) => r.text)).toEqual(['strapi::logger', 'global::a', 'global::b']);
     expect(refs.every((r) => r.kind === 'middleware-ref' && r.apiStyle === 'config')).toBe(true);
   });
 
