@@ -3,9 +3,20 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createEngine, MemoryFileSystem, type StrapiEngine } from 'devkit-for-strapi-core';
 import { loadFixture } from 'devkit-for-strapi-test-fixtures';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { planRename } from 'devkit-for-strapi-pro';
 import { registerTools } from '../src/tools';
 
 type Handler = (args?: unknown) => Promise<CallToolResult>;
+
+/** The open-source build ships a stub of the Pro refactor engine; the real one runs these too. */
+const HAS_PRO_ENGINE = await (async (): Promise<boolean> => {
+  try {
+    await planRename(new MemoryFileSystem({}), { index: { services: new Map(), controllers: new Map(), contentTypes: new Map(), policies: new Map(), middlewares: new Map(), components: new Map() } } as never, 'x', 'y');
+    return true;
+  } catch (e) {
+    return !/not included in the open-source build/.test(String(e));
+  }
+})();
 
 describe('MCP tools (engine-backed handlers)', () => {
   let engine: StrapiEngine;
@@ -69,6 +80,13 @@ describe('MCP tools (engine-backed handlers)', () => {
         'validate_reference',
       ].sort(),
     );
+  });
+
+  it.skipIf(!HAS_PRO_ENGINE)('a refactor of a UID Strapi stores in the database warns about it; others stay quiet', async () => {
+    const ct = await call('plan_rename_entity', { ref: 'api::page.page', newName: 'article', from: cmsARoot });
+    expect(ct.warnings?.join(' ')).toMatch(/Database: .*up_permissions/);
+    const svc = await call('plan_rename_method', { ref: 'api::page.notifier', method: 'notify', newName: 'announce', from: cmsARoot });
+    expect(svc.warnings).toBeUndefined();
   });
 
   it('every answer says how current it is in _meta, with no visible noise when nothing limits it', async () => {

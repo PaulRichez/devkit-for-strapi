@@ -8,7 +8,11 @@ import {
   getSchema,
   listArtifacts,
   listBrokenRefs,
+  movedUid,
   projectInfo,
+  refKind,
+  renamedUid,
+  storedUidWarnings,
   listComponents,
   listContentTypes,
   listRefs,
@@ -219,7 +223,21 @@ export function registerTools(
     if (!move.ok) return json({ moved: false, errors: move.errors, warnings: move.warnings });
     const planned = await planEdit(fs, { textEdits: move.textEdits, fileRenames: move.fileRenames });
     rememberPlan(planned);
-    return json({ ...planned, warnings: move.warnings });
+    return json({ ...planned, warnings: [...move.warnings, ...movedWarnings(project, specs)] });
+  };
+  /** The database caveats of moving these refs (UIDs Strapi stores as strings). */
+  const movedWarnings = (project: StrapiProject, specs: MoveSpec[]): string[] =>
+    storedUidWarnings({
+      uids: specs.flatMap((s) => {
+        const kind = refKind(project.index, s.ref);
+        return kind && s.toNamespace ? [{ kind, from: s.ref, to: movedUid(s.ref, s.toNamespace) }] : [];
+      }),
+    });
+  /** The database caveats of a rename (entity: its last segment; method: a controller action). */
+  const renameWarnings = (project: StrapiProject, ref: string, newName: string, method?: string): string[] => {
+    if (method) return project.index.controllers.has(ref) ? storedUidWarnings({ actions: [{ from: `${ref}.${method}`, to: `${ref}.${newName}` }] }) : [];
+    const kind = refKind(project.index, ref);
+    return kind ? storedUidWarnings({ uids: [{ kind, from: ref, to: renamedUid(ref, newName) }] }) : [];
   };
 
   // Auto-gate the Pro (write/refactor) tools: without a licence they return the
@@ -670,7 +688,7 @@ export function registerTools(
     {
       title: 'Plan a service/controller method rename (dry-run)',
       description:
-        'Compute the exact edits to rename a service/controller METHOD — its declaration, every `strapi.service(...).method()` call-site, and (for controllers) the action segment of route handlers. Dry-run: returns a plan (text edits + `planId`), writes nothing. Review, then apply with `apply_edits` (pass the `planId`).',
+        'Compute the exact edits to rename a service/controller METHOD — its declaration, every `strapi.service(...).method()` call-site, and (for controllers) the action segment of route handlers. Dry-run: returns a plan (text edits + `planId`, + `warnings` when route permissions stored in the database are affected), writes nothing. Review, then apply with `apply_edits` (pass the `planId`).',
       inputSchema: {
         ref: z.string().describe('The owning service/controller ref, e.g. api::page.notifier'),
         method: z.string().describe('The current method name, e.g. notify'),
@@ -691,7 +709,8 @@ export function registerTools(
         });
       const planned = await planEdit(fs, edit);
       rememberPlan(planned);
-      return json(planned);
+      const warnings = renameWarnings(p.project, args.ref, args.newName, args.method);
+      return json(warnings.length ? { ...planned, warnings } : planned);
     },
   );
 
@@ -700,7 +719,7 @@ export function registerTools(
     {
       title: 'Plan an entity rename (dry-run)',
       description:
-        'Compute the exact edits to rename a content-type / service / controller / policy / middleware / component: every magic-string call-site and route handler, plus the file/folder renames. Dry-run: returns a plan (edits + `planId`), writes nothing. Review, then apply with `apply_edits` (pass the `planId`).',
+        'Compute the exact edits to rename a content-type / service / controller / policy / middleware / component: every magic-string call-site and route handler, plus the file/folder renames. Dry-run: returns a plan (edits + `planId`, + `warnings` listing the UIDs Strapi also stores in the database — permissions, media links, components — which the plan does not migrate), writes nothing. Review, then apply with `apply_edits` (pass the `planId`).',
       inputSchema: {
         ref: z.string().describe('The entity UID/ref, e.g. api::product.product or shared.seo'),
         newName: z.string().describe("The UID's new last segment, e.g. item (api::product.product → api::product.item, shared.seo → shared.item)"),
@@ -720,7 +739,8 @@ export function registerTools(
         });
       const planned = await planEdit(fs, edit);
       rememberPlan(planned);
-      return json(planned);
+      const warnings = renameWarnings(p.project, args.ref, args.newName);
+      return json(warnings.length ? { ...planned, warnings } : planned);
     },
   );
 
@@ -814,7 +834,11 @@ export function registerTools(
         args.refs.map((ref) => ({ ref, toNamespace: `plugin::${args.name}` })),
         { allowNewNamespace: true },
       );
-      const warnings = [...scaffold.warnings, ...move.warnings];
+      const warnings = [
+        ...scaffold.warnings,
+        ...move.warnings,
+        ...(move.ok ? movedWarnings(p.project, args.refs.map((ref) => ({ ref, toNamespace: `plugin::${args.name}` }))) : []),
+      ];
       if (!move.ok) return json({ extracted: false, errors: move.errors, warnings });
       const planned = await planEdit(fs, {
         textEdits: move.textEdits,
@@ -937,6 +961,7 @@ export function registerTools(
         const p = pick(engine, args, roots());
         if ('result' in p) return p.result;
         const edit = await planRename(fs, p.project, args.ref, args.newName, args.method);
+        const dbWarnings = renameWarnings(p.project, args.ref, args.newName, args.method);
         if (!edit)
           return json({
             applied: false,
@@ -951,7 +976,7 @@ export function registerTools(
         }
         const { changed, deleted } = applyDelta(result);
         await engine.onFilesChanged(changed, deleted); // incremental refresh — not a full workspace rescan
-        return json({ applied: true, ...result, verify: await verifyAfterApply(changed) });
+        return json({ applied: true, ...result, verify: await verifyAfterApply(changed), ...(dbWarnings.length ? { warnings: dbWarnings } : {}) });
       }),
   );
 }

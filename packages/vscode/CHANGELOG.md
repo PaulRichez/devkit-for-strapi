@@ -39,6 +39,10 @@
   outside the session, a `git checkout`, an `npm install`), so `refresh` is no
   longer needed to avoid stale answers. `server_info` and `list_projects` say how
   current each project's index is; `refresh({ cold: true })` reads everything again.
+- Refactors that change a UID Strapi also stores in the database (a content-type,
+  a component, a controller or one of its actions) now warn about it: permissions,
+  media links and components point at the old UID until those rows are migrated.
+  The plans edit code and files only.
 - New MCP tool `project_info`: one project in full — versions, TypeScript or
   JavaScript, package manager, API prefix, counts, every plugin with whether its
   refs are verified and, when not, why — plus health (broken refs, refs into

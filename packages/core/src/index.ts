@@ -89,3 +89,4 @@ export {
 } from './query/select';
 export { dependencies, dependents, listRefs, type GraphOptions, type RefSummary } from './query/graph';
 export { projectInfo, type PluginInfo, type ProjectInfo } from './query/projectInfo';
+export { movedUid, refKind, renamedUid, storedUidWarnings, type ActionChange, type RefKind, type UidChange } from './edit/storedUids';

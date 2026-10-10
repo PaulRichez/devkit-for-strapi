@@ -1,5 +1,5 @@
-import { paths, touchedPaths } from 'devkit-for-strapi-core';
-import type { FileSystem, StrapiEngine } from 'devkit-for-strapi-core';
+import { analyzeAt, paths, refKind, renamedUid, storedUidWarnings, touchedPaths } from 'devkit-for-strapi-core';
+import type { FileSystem, StrapiEngine, StrapiProject } from 'devkit-for-strapi-core';
 import { computeRename, prepareRename as prepareRenameAt } from 'devkit-for-strapi-pro';
 import * as vscode from 'vscode';
 import { DOCUMENT_SELECTOR, docPath } from '../selector';
@@ -60,6 +60,8 @@ export function registerRenameProvider(
             'DevKit for Strapi does not rename code that lives in node_modules (an installed plugin). Rename it in the plugin itself, or extend it under src/extensions.',
           );
         }
+        // UIDs Strapi also stores in the database (permissions, media links, components): say it.
+        for (const w of databaseWarnings(project, filePath, document, position, newName)) void vscode.window.showWarningMessage(`DevKit for Strapi — ${w}`);
         const edit = new vscode.WorkspaceEdit();
         // Text edits first, then creates, renames, deletes (they move/remove the edited files).
         for (const t of result.textEdits) {
@@ -82,4 +84,22 @@ export function registerRenameProvider(
       },
     }),
   );
+}
+
+/** The database caveats of this rename, when what is renamed is certain (an entity's magic string, a controller action's declaration). */
+function databaseWarnings(project: StrapiProject, filePath: string, document: vscode.TextDocument, position: vscode.Position, newName: string): string[] {
+  const ctx = analyzeAt(filePath, document.getText(), document.offsetAt(position));
+  if (ctx?.isLiteral) {
+    const kind = refKind(project.index, ctx.text);
+    return kind ? storedUidWarnings({ uids: [{ kind, from: ctx.text, to: renamedUid(ctx.text, newName) }] }) : [];
+  }
+  const word = document.getWordRangeAtPosition(position);
+  const method = word ? document.getText(word) : undefined;
+  if (!method) return [];
+  for (const c of project.index.controllers.values()) {
+    if (c.filePath === filePath && (c.actions ?? []).some((a) => a.name === method)) {
+      return storedUidWarnings({ actions: [{ from: `${c.ref}.${method}`, to: `${c.ref}.${newName}` }] });
+    }
+  }
+  return [];
 }

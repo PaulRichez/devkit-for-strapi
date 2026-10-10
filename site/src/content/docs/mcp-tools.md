@@ -91,7 +91,7 @@ transactional, and **self-verifying** for broken refs afterward.
 | Tool | Params | What it plans |
 |---|---|---|
 | `plan_rename_method` | `ref`, `method`, `newName` | Rename a service/controller method — declaration, every `strapi.service(...).method()` call-site, and (controllers) the route-handler action segment. |
-| `plan_rename_entity` | `ref`, `newName` | Rename a content-type / service / controller / policy / middleware / component — every call-site & route handler, plus file/folder renames. |
+| `plan_rename_entity` | `ref`, `newName` | Rename a content-type / service / controller / policy / middleware / component — every call-site & route handler, plus file/folder renames. The plan's `warnings` list the UIDs Strapi also stores **in the database** (permissions, media links, components): the plan edits code and files only, so migrate those rows on a project that already has data. |
 | `plan_move` | `ref`, `toNamespace` | Move an artifact, or a whole content-type resource (CT + service + controller + routes), to another namespace; repoints relation `target`s and `strapi.plugin(...)` chains. |
 | `plan_move_entities` | `refs[]`, `toNamespace` | Like `plan_move` for several refs to one destination, in one coherent pass. |
 | `plan_change_relation` | `uid`, `field`, `newTarget` | Retarget a relation field to another content-type (precise `schema.json` edit). Warns about a now-orphaned inverse. |
