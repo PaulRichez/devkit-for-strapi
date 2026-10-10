@@ -20,6 +20,19 @@ export interface AttributeInfo {
   components?: string[];
   /** Char offset of the attribute key inside the schema/component JSON. */
   keyOffset: number;
+  /** Relation kind (`oneToOne`, `manyToOne`, `morphToMany`, …). */
+  relation?: string;
+  /** The other side of a bidirectional relation. */
+  mappedBy?: string;
+  inversedBy?: string;
+  /** A repeatable component. */
+  repeatable?: boolean;
+  required?: boolean;
+  unique?: boolean;
+  /** Not returned by the API. */
+  private?: boolean;
+  /** An enumeration's values. */
+  enum?: string[];
 }
 
 export type ContentTypeSource = 'api' | 'plugin';
@@ -35,6 +48,8 @@ export interface ContentType {
   source: ContentTypeSource;
   pluginName?: string;
   info: { singularName?: string; pluralName?: string; displayName?: string };
+  /** The database table (`collectionName`), when declared. */
+  collectionName?: string;
   attributes: Record<string, AttributeInfo>;
   /** Char offset to anchor UI (e.g. a CodeLens) on, near the definition. */
   defOffset?: number;
@@ -465,6 +480,19 @@ export interface ProjectSummary {
   };
 }
 
+/**
+ * A route's `config.auth` when it isn't the default: `public` (`auth: false` — Strapi
+ * skips authenticate and authorize), `custom` (an object: Strapi uses its `strategies`
+ * and checks its `scope`), `unread` (not a literal). Absent: the route type's default
+ * strategies, then the permissions of the role or token (set in the admin).
+ */
+export type RouteAuth = { mode: 'public' } | { mode: 'custom'; scope?: string[]; strategies?: string[] } | { mode: 'unread' };
+
+/** A policy/middleware entry declared as a function (no name to resolve). */
+export const INLINE_ENTRY = '<inline>';
+/** A policy/middleware list or entry that could not be read statically. */
+export const UNREAD_ENTRY = '<unread>';
+
 /** One HTTP route, parsed statically (project route files, local and installed plugins). */
 export interface RouteInfo {
   method: string;
@@ -472,8 +500,12 @@ export interface RouteInfo {
   path: string;
   /** Route handler ref, e.g. `api::product.product.find` (`<inline>` for a function handler). */
   handler: string;
+  /** In declaration order; {@link INLINE_ENTRY} for a function, {@link UNREAD_ENTRY} when not read statically. */
   policies?: string[];
+  /** Same as {@link policies}. */
   middlewares?: string[];
+  /** `config.auth` when it isn't the default (see {@link RouteAuth}). */
+  auth?: RouteAuth;
   /**
    * `router-file` = explicit route; `core-router` = synthesized from `createCoreRouter`;
    * `plugin` = declared by a plugin's server; `plugin-injected` = added to an API by a

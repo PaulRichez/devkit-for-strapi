@@ -45,6 +45,27 @@ async function firstExisting(fs: FileSystem, base: string): Promise<string | und
   return undefined;
 }
 
+/** `config/<name>.{ts,js,…}` of a project, if any. */
+export function findConfigFile(fs: FileSystem, root: string, name: string): Promise<string | undefined> {
+  return firstExisting(fs, join(root, 'config', name));
+}
+
+/** The `config/env/<env>/<name>.*` overlays of a project (their effect depends on NODE_ENV). */
+export async function envConfigFiles(fs: FileSystem, root: string, name: string): Promise<string[]> {
+  let envs: string[] = [];
+  try {
+    envs = (await fs.readDirectory(join(root, 'config', 'env'))).filter((e) => e.type === FileType.Directory).map((e) => e.name);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const env of envs.sort()) {
+    const f = await firstExisting(fs, join(root, 'config', 'env', env, name));
+    if (f) out.push(f);
+  }
+  return out;
+}
+
 /** The value Strapi's `loadConfigFile` would produce for a JS/TS config module. */
 export async function configModuleValue(ev: StaticEvaluator, file: string): Promise<Value> {
   let v = await ev.moduleExports(file);

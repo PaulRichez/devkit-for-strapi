@@ -12,6 +12,7 @@ import { contentTypeUids, hasContentType, hasPartialContentTypes } from '../inde
 import { autoCrudActions, CORE_ACTION_SET } from '../model/constants';
 import { closest } from '../util/levenshtein';
 import { owningApiName, owningPluginName, qualifyRouteHandler } from '../resolve/owner';
+import { lookupStrapiName, whyNotFound } from '../resolve/strapiNames';
 
 export const DiagnosticCode = {
   UnknownContentType: 'devkit-for-strapi.unknown-content-type',
@@ -21,6 +22,8 @@ export const DiagnosticCode = {
   UnknownComponent: 'devkit-for-strapi.unknown-component',
   UnknownPolicy: 'devkit-for-strapi.unknown-policy',
   UnknownMiddleware: 'devkit-for-strapi.unknown-middleware',
+  /** A policy/middleware DevKit finds, but not under the name Strapi looks up (it throws at startup). */
+  NotFoundByStrapi: 'devkit-for-strapi.not-found-by-strapi',
   Malformed: 'devkit-for-strapi.malformed-ref',
   V4InV5: 'devkit-for-strapi.v4-in-v5',
 } as const;
@@ -210,6 +213,23 @@ function validateScoped(
   // Bare name: resolvable within the owning API, the owning plugin, or globally.
   const api = owningApiName(project, filePath);
   const plugin = owningPluginName(project, filePath);
+  // In a route's config or config/middlewares, Strapi is narrower (see resolve/strapiNames):
+  // a name DevKit finds but Strapi won't throws at startup → say so. A policy needs the
+  // route's owner; outside an API or local plugin folder it isn't known → as before.
+  if ((ref.apiStyle === 'route' || ref.apiStyle === 'config') && (label === 'middleware' || api || plugin)) {
+    const kind = label === 'middleware' ? 'middleware' : 'policy';
+    const owner = { api, plugin };
+    const found = lookupStrapiName((k) => map.has(k), kind, text, owner);
+    if (found.status === 'not-found-by-strapi') {
+      return diag(
+        ref,
+        `Strapi won't find the ${label} '${text}' at startup: ${whyNotFound(kind, text, owner)}. Use '${found.ref}'.`,
+        DiagnosticCode.NotFoundByStrapi,
+        'error',
+        found.ref,
+      );
+    }
+  }
   const candidates: string[] = [];
   if (api) candidates.push(`api::${api}.${text}`);
   if (plugin) candidates.push(`plugin::${plugin}.${text}`);
@@ -231,6 +251,10 @@ function validateControllerAction(
   const qualified = qualifyRouteHandler(project, filePath, ref.text);
   // Framework handler (`admin::…`) → unverifiable, never flag.
   if (isFrameworkRef(qualified)) return undefined;
+  // A short handler outside an API or local plugin folder (e.g. a route pushed into a
+  // plugin from `src/extensions`): Strapi qualifies it with the router's owner, which
+  // the file location doesn't tell → unverifiable, never "malformed".
+  if (!qualified.includes('::') && !owningApiName(project, filePath) && !owningPluginName(project, filePath)) return undefined;
   // parseHandlerRef: the action is the LAST segment; everything before is the
   // controller ref, which may be a nested/dotted name (`api::foo.a.b`). Using it
   // (not parseRef) stops a nested controller from being misparsed as name+action

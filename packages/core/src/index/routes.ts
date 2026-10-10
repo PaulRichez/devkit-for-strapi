@@ -14,15 +14,23 @@ import type { FileSystem } from '../fs/FileSystem';
 import { FileType } from '../fs/FileSystem';
 import { join } from '../fs/paths';
 import { CORE_ACTIONS } from '../model/constants';
-import type { RouteInfo, StrapiProject } from '../model/types';
+import { INLINE_ENTRY, type RouteAuth, type RouteInfo, type StrapiProject, UNREAD_ENTRY } from '../model/types';
 import { StaticEvaluator } from '../plugins/evaluate';
 import { type PluginRoute, readApiPrefix, readPluginRoutes } from '../plugins/installed';
 import { pluginLayoutOf } from './indexer';
 import { withTimeout } from '../util/timeout';
 
+interface RouteConfig {
+  policies?: string[];
+  middlewares?: string[];
+  auth?: RouteAuth;
+}
+
 interface CoreRouter {
   uid: string;
-  perAction: Map<string, { policies?: string[]; middlewares?: string[] }>;
+  perAction: Map<string, RouteConfig>;
+  /** The router's options or `config` aren't a literal: every action's config is unread. */
+  unread?: boolean;
   only?: string[];
   except?: string[];
   prefix?: string;
@@ -67,11 +75,6 @@ function strProp(obj: ts.ObjectLiteralExpression, name: string): string | undefi
   return p ? literalText(p.initializer) : undefined;
 }
 
-function objProp(obj: ts.ObjectLiteralExpression, name: string): ts.ObjectLiteralExpression | undefined {
-  const p = findProp(obj, name);
-  return p && ts.isObjectLiteralExpression(p.initializer) ? p.initializer : undefined;
-}
-
 /** A string array, accepting both `'x'` and `{ name: 'x' }` elements (policy/mw forms). */
 function strArrayProp(obj: ts.ObjectLiteralExpression, name: string): string[] | undefined {
   const p = findProp(obj, name);
@@ -88,6 +91,62 @@ function strArrayProp(obj: ts.ObjectLiteralExpression, name: string): string[] |
   return out;
 }
 
+/** A policies/middlewares list in declaration order (`'x'`, `{ name: 'x', config }`, a function → `<inline>`). */
+function entryArray(obj: ts.ObjectLiteralExpression, name: string): string[] | undefined {
+  const p = findProp(obj, name);
+  if (!p) return undefined;
+  if (!ts.isArrayLiteralExpression(p.initializer)) return [UNREAD_ENTRY];
+  const out: string[] = [];
+  for (const el of p.initializer.elements) {
+    const s = literalText(el);
+    if (s !== undefined) out.push(s);
+    else if (ts.isObjectLiteralExpression(el)) out.push(strProp(el, 'name') ?? UNREAD_ENTRY);
+    else if (ts.isArrowFunction(el) || ts.isFunctionExpression(el)) out.push(INLINE_ENTRY);
+    else out.push(UNREAD_ENTRY);
+  }
+  return out;
+}
+
+/** `config.auth` when it isn't the default (`auth: true` is the default too). */
+function authOf(config: ts.ObjectLiteralExpression): RouteAuth | undefined {
+  const p = findProp(config, 'auth');
+  if (!p || p.initializer.kind === ts.SyntaxKind.TrueKeyword) return undefined;
+  if (p.initializer.kind === ts.SyntaxKind.FalseKeyword) return { mode: 'public' };
+  if (!ts.isObjectLiteralExpression(p.initializer)) return { mode: 'unread' };
+  const auth: RouteAuth = { mode: 'custom' };
+  const scope = strArrayProp(p.initializer, 'scope');
+  const strategies = strArrayProp(p.initializer, 'strategies');
+  if (scope) auth.scope = scope;
+  if (strategies) auth.strategies = strategies;
+  return auth;
+}
+
+const UNREAD_CONFIG: RouteConfig = { policies: [UNREAD_ENTRY], middlewares: [UNREAD_ENTRY], auth: { mode: 'unread' } };
+
+/** A route's `config` (absent → the defaults; not a literal → everything unread). */
+function routeConfigOf(owner: ts.ObjectLiteralExpression, name: string): RouteConfig {
+  const p = findProp(owner, name);
+  if (!p) return {};
+  if (!ts.isObjectLiteralExpression(p.initializer)) return UNREAD_CONFIG;
+  const cfg: RouteConfig = {};
+  const policies = entryArray(p.initializer, 'policies');
+  const middlewares = entryArray(p.initializer, 'middlewares');
+  const auth = authOf(p.initializer);
+  if (policies?.length) cfg.policies = policies;
+  if (middlewares?.length) cfg.middlewares = middlewares;
+  if (auth) cfg.auth = auth;
+  return cfg;
+}
+
+/** Copy a route config onto a route (`public` kept for older readers). */
+function applyConfig(route: RouteInfo, cfg: RouteConfig | undefined): void {
+  if (!cfg) return;
+  if (cfg.policies?.length) route.policies = cfg.policies;
+  if (cfg.middlewares?.length) route.middlewares = cfg.middlewares;
+  if (cfg.auth) route.auth = cfg.auth;
+  if (cfg.auth?.mode === 'public') route.public = true;
+}
+
 function parseCustomRoutes(obj: ts.ObjectLiteralExpression, filePath: string, sf: ts.SourceFile): RouteInfo[] {
   const routesProp = findProp(obj, 'routes');
   if (!routesProp || !ts.isArrayLiteralExpression(routesProp.initializer)) return [];
@@ -98,14 +157,8 @@ function parseCustomRoutes(obj: ts.ObjectLiteralExpression, filePath: string, sf
     const path = strProp(el, 'path');
     const handler = strProp(el, 'handler');
     if (!method || !path || !handler) continue;
-    const config = objProp(el, 'config');
     const route: RouteInfo = { method, path, handler, source: 'router-file', filePath, offset: el.getStart(sf) };
-    const auth = config && findProp(config, 'auth');
-    if (auth && auth.initializer.kind === ts.SyntaxKind.FalseKeyword) route.public = true;
-    const policies = config && strArrayProp(config, 'policies');
-    const middlewares = config && strArrayProp(config, 'middlewares');
-    if (policies?.length) route.policies = policies;
-    if (middlewares?.length) route.middlewares = middlewares;
+    applyConfig(route, routeConfigOf(el, 'config'));
     out.push(route);
   }
   return out;
@@ -116,16 +169,16 @@ function parseCoreRouter(call: ts.CallExpression): CoreRouter | undefined {
   if (!uid) return undefined;
   const cr: CoreRouter = { uid, perAction: new Map() };
   const opts = call.arguments[1];
-  if (opts && ts.isObjectLiteralExpression(opts)) {
+  if (opts && !ts.isObjectLiteralExpression(opts)) cr.unread = true;
+  else if (opts) {
     cr.only = strArrayProp(opts, 'only');
     cr.except = strArrayProp(opts, 'except');
     cr.prefix = strProp(opts, 'prefix');
-    const config = objProp(opts, 'config');
-    if (config) {
-      for (const action of CORE_ACTIONS) {
-        const ac = objProp(config, action);
-        if (ac) cr.perAction.set(action, { policies: strArrayProp(ac, 'policies'), middlewares: strArrayProp(ac, 'middlewares') });
-      }
+    const config = findProp(opts, 'config');
+    if (config && !ts.isObjectLiteralExpression(config.initializer)) cr.unread = true;
+    else if (config) {
+      const perAction = config.initializer;
+      if (ts.isObjectLiteralExpression(perAction)) for (const action of CORE_ACTIONS) cr.perAction.set(action, routeConfigOf(perAction, action));
     }
   }
   return cr;
@@ -159,8 +212,7 @@ function synthesizeCrud(cr: CoreRouter, project: StrapiProject, filePath?: strin
     const route: RouteInfo = { method: r.method, path: base + r.suffix, handler: `${cr.uid}.${r.action}`, source: 'core-router' };
     if (filePath !== undefined) route.filePath = filePath;
     if (offset !== undefined) route.offset = offset;
-    if (cfg?.policies?.length) route.policies = cfg.policies;
-    if (cfg?.middlewares?.length) route.middlewares = cfg.middlewares;
+    applyConfig(route, cr.unread ? UNREAD_CONFIG : cfg);
     return route;
   });
 }
@@ -219,6 +271,7 @@ function fromPluginRoute(r: PluginRoute, origin: 'local-plugin' | 'installed-plu
   if (r.policies.length) route.policies = r.policies;
   if (r.middlewares.length) route.middlewares = r.middlewares;
   if (r.public) route.public = true;
+  if (r.auth) route.auth = r.auth;
   if (r.loc) {
     route.filePath = r.loc.file;
     route.offset = r.loc.pos;

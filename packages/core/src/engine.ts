@@ -23,7 +23,9 @@ import type {
   TargetLocation,
 } from './model/types';
 import { listRoutes, type ListRoutesOptions } from './index/routes';
-import { buildModelMaps, componentInsights, contentTypeInsights, type ModelMaps } from './reference/insights';
+import { type GlobalMiddlewares, readGlobalMiddlewares } from './index/globalMiddlewares';
+import { modelOf } from './query/model';
+import { buildModelMaps, contentTypeInsights, type ModelMaps } from './reference/insights';
 import {
   buildReferenceIndex,
   canonicalKey,
@@ -108,8 +110,14 @@ export interface StrapiEngine {
    * created, edited or deleted on disk since the last check. Throttled.
    */
   refreshIfStale(): Promise<void>;
-  /** Every project's HTTP routes (see `listRoutes`), for the editor's Routes view. */
-  getRoutes(opts?: ListRoutesOptions): Promise<Array<{ root: string; routes: RouteInfo[] }>>;
+  /**
+   * Every project's HTTP routes (see `listRoutes`), for the editor's Routes view.
+   * Cached per project until a route-relevant file changes (routes, content-types,
+   * plugins, config) or installed plugins are re-read; the arrays are shared: read-only.
+   */
+  getRoutes(opts?: ListRoutesOptions & { root?: string }): Promise<Array<{ root: string; routes: RouteInfo[] }>>;
+  /** A project's `config/middlewares` stack (cached like {@link getRoutes}). */
+  getGlobalMiddlewares(root: string): Promise<GlobalMiddlewares>;
 }
 
 /** Minimum delay between two installed-plugin freshness checks (fast / full fingerprint). */
@@ -134,6 +142,16 @@ function scanRewrites(fs: FileSystem, root: string): Promise<ProjectRewrites> {
 }
 
 /** Paths whose change can alter the installed-plugin picture of their project. */
+/** True when editing `p` can change the project's route table or middleware stack. */
+function affectsRoutes(project: StrapiProject, p: string): boolean {
+  const src = normalize(project.srcDir) + '/';
+  if (p.startsWith(src)) {
+    const rel = p.slice(src.length);
+    return /^api\/[^/]+\/(routes|content-types)\//.test(rel) || rel.startsWith('plugins/') || rel.startsWith('extensions/');
+  }
+  return p.startsWith(normalize(project.root) + '/config/');
+}
+
 function affectsInstalledPlugins(p: string): boolean {
   return (
     /\/config\/(plugins|api)\.[cm]?[jt]s$/.test(p) ||
@@ -172,6 +190,9 @@ class Engine implements StrapiEngine {
   private diskCheck: Promise<void> | undefined;
   /** The token of the installed-plugin load in flight (see loadInstalledInBackground). */
   private loadToken = 0;
+  /** Every route of a project (admin and plugins included), until a route-relevant change. */
+  private routeCache = new WeakMap<StrapiProject, Promise<RouteInfo[]>>();
+  private globalMwCache = new WeakMap<StrapiProject, Promise<GlobalMiddlewares>>();
 
   constructor(
     private readonly fs: FileSystem,
@@ -403,17 +424,49 @@ class Engine implements StrapiEngine {
     return this.projects.find((p) => isPathInside(p.root, f));
   }
 
-  async getRoutes(opts?: ListRoutesOptions): Promise<Array<{ root: string; routes: RouteInfo[] }>> {
+  async getRoutes(opts?: ListRoutesOptions & { root?: string }): Promise<Array<{ root: string; routes: RouteInfo[] }>> {
     await this.refreshInstalledIfStale();
     const out: Array<{ root: string; routes: RouteInfo[] }> = [];
+    const only = opts?.root !== undefined ? normalize(opts.root) : undefined;
     for (const project of [...this.projects].sort((a, b) => a.root.localeCompare(b.root))) {
-      try {
-        out.push({ root: project.root, routes: await listRoutes(this.fs, project, opts) });
-      } catch {
-        out.push({ root: project.root, routes: [] });
-      }
+      if (only !== undefined && project.root !== only) continue;
+      const all = await this.routesOf(project);
+      const routes = all.filter((r) => (opts?.admin || r.type !== 'admin') && (opts?.plugins !== false || r.origin === 'project'));
+      out.push({ root: project.root, routes });
     }
     return out;
+  }
+
+  private routesOf(project: StrapiProject): Promise<RouteInfo[]> {
+    let p = this.routeCache.get(project);
+    if (!p) {
+      const read: Promise<RouteInfo[]> = listRoutes(this.fs, project, { admin: true, plugins: true }).catch(() => {
+        if (this.routeCache.get(project) === read) this.routeCache.delete(project);
+        return [];
+      });
+      this.routeCache.set(project, (p = read));
+    }
+    return p;
+  }
+
+  async getGlobalMiddlewares(root: string): Promise<GlobalMiddlewares> {
+    const project = this.projects.find((p) => p.root === normalize(root));
+    if (!project) return { status: 'missing', entries: [], envFiles: [] };
+    let p = this.globalMwCache.get(project);
+    if (!p) {
+      const read: Promise<GlobalMiddlewares> = readGlobalMiddlewares(this.fs, project.root).catch(() => {
+        if (this.globalMwCache.get(project) === read) this.globalMwCache.delete(project);
+        return { status: 'not-literal' as const, entries: [], envFiles: [] };
+      });
+      this.globalMwCache.set(project, (p = read));
+    }
+    return p;
+  }
+
+  /** Drop a project's cached routes and middleware stack (a route-relevant file changed). */
+  private forgetRoutes(project: StrapiProject): void {
+    this.routeCache.delete(project);
+    this.globalMwCache.delete(project);
   }
 
   async refreshIfStale(): Promise<void> {
@@ -507,6 +560,7 @@ class Engine implements StrapiEngine {
     }
     const rewrites = await scanRewrites(this.fs, project.root);
     const installed = await withTimeout(readInstalledPlugins(this.fs, project.root, unionRewrites(rewrites)), INSTALLED_READ_TIMEOUT_MS, undefined);
+    this.forgetRoutes(project);
     clearInstalled(project.index);
     mergeInstalled(project.index, installed);
     project.installedAt = Date.now();
@@ -547,6 +601,7 @@ class Engine implements StrapiEngine {
     for (const p of [...changedN, ...deletedN]) {
       const project = this.projectForFile(p);
       if (!project) continue;
+      if (affectsRoutes(project, p)) this.forgetRoutes(project);
       try {
         await updateIndexForFile(this.fs, project, p);
       } catch {
@@ -758,39 +813,39 @@ class Engine implements StrapiEngine {
   }
 
   getModel(): OutlineProject[] {
+    // The outline is the project's own part of `modelOf` (one source of truth).
     return this.projects.map((project) => {
-      const maps = buildModelMaps(project);
-      const contentTypes = [...project.index.contentTypes.values()].filter((ct) => !ct.installed).map((ct) => {
-        const ins = contentTypeInsights(project, ct.uid, maps);
-        const relations: OutlineRelation[] = [];
-        const components: OutlineComponentUse[] = [];
-        for (const a of Object.values(ct.attributes)) {
-          if (a.type === 'relation' && a.target) {
-            relations.push({ attr: a.name, targetUid: a.target, offset: a.keyOffset });
+      const model = modelOf(project);
+      const order = [...project.index.contentTypes.keys()];
+      const contentTypes = model.contentTypes
+        .filter((ct) => ct.origin !== 'installed-plugin' && !ct.inCode)
+        .sort((a, b) => order.indexOf(a.uid) - order.indexOf(b.uid))
+        .map((ct) => {
+          const relations: OutlineRelation[] = [];
+          const components: OutlineComponentUse[] = [];
+          for (const f of ct.fields) {
+            if (f.type === 'relation' && f.target) relations.push({ attr: f.name, targetUid: f.target, offset: f.offset });
+            if (f.component) components.push({ attr: f.name, uid: f.component, offset: f.offset });
+            for (const c of f.components ?? []) components.push({ attr: f.name, uid: c, offset: f.offset });
           }
-          if (a.component) components.push({ attr: a.name, uid: a.component, offset: a.keyOffset });
-          for (const c of a.components ?? []) components.push({ attr: a.name, uid: c, offset: a.keyOffset });
-        }
-        return {
-          uid: ct.uid,
-          displayName: ct.info.displayName ?? ct.ctName,
-          kind: ct.kind,
-          schemaPath: ct.schemaPath,
-          defOffset: ct.defOffset ?? 0,
-          refCount: ins.total,
-          routeHandlers: ins.routeHandlers,
-          dataUsages: ins.dataUsages,
-          incomingRelations: ins.incomingRelations,
-          relations,
-          components,
-        };
-      });
-      const components = [...project.index.components.values()].map((c) => ({
-        uid: c.uid,
-        jsonPath: c.jsonPath,
-        defOffset: c.defOffset ?? 0,
-        usedByCount: componentInsights(project, c.uid, maps).usedByCount,
-      }));
+          return {
+            uid: ct.uid,
+            displayName: ct.displayName,
+            kind: ct.kind,
+            schemaPath: ct.schemaPath,
+            defOffset: ct.defOffset,
+            refCount: ct.usage.total,
+            routeHandlers: ct.usage.routeHandlers,
+            dataUsages: ct.usage.dataUsages,
+            incomingRelations: ct.usage.incomingRelations,
+            relations,
+            components,
+          };
+        });
+      const corder = [...project.index.components.keys()];
+      const components = [...model.components]
+        .sort((a, b) => corder.indexOf(a.uid) - corder.indexOf(b.uid))
+        .map((c) => ({ uid: c.uid, jsonPath: c.jsonPath, defOffset: c.defOffset, usedByCount: c.usage.usedByCount }));
       const issues: OutlineIssue[] = [];
       for (const ct of contentTypes) {
         if (ct.refCount === 0) issues.push({ kind: 'unused-content-type', uid: ct.uid, label: ct.displayName });

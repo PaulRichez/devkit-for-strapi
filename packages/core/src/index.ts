@@ -89,4 +89,8 @@ export {
 } from './query/select';
 export { dependencies, dependents, listRefs, type GraphOptions, type RefSummary } from './query/graph';
 export { projectInfo, type PluginInfo, type ProjectInfo } from './query/projectInfo';
+export { readGlobalMiddlewares, type GlobalMiddlewareEntry, type GlobalMiddlewares } from './index/globalMiddlewares';
+export { pathMatches, qualifiedHandler, routePipeline, routesByAction, type PipelineStep, type RoutePipeline, type StepStatus } from './query/routePipeline';
+export { modelOf, type ModelComponent, type ModelContentType, type ModelField, type ModelIncoming, type ProjectModel } from './query/model';
+export { devkitNameCandidates, lookupStrapiName, ownerOf, strapiNameCandidates, type NameLookup, type RouteOwner } from './resolve/strapiNames';
 export { movedUid, refKind, renamedUid, storedUidWarnings, type ActionChange, type RefKind, type UidChange } from './edit/storedUids';

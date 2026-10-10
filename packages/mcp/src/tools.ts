@@ -16,8 +16,11 @@ import {
   listComponents,
   listContentTypes,
   listRefs,
-  listRoutes,
   listUnused,
+  pathMatches,
+  qualifiedHandler,
+  routePipeline,
+  type RouteInfo,
   paths,
   type ReferenceLocation,
   referencesOf,
@@ -53,6 +56,9 @@ const json = (data: unknown): CallToolResult => ({
 });
 
 /** Human-readable text for a thrown value (for structured apply-failure reasons). */
+/** Most routes `list_routes` explains at once (`pipeline: true`). */
+const PIPELINE_MAX = 20;
+
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /**
@@ -524,18 +530,41 @@ export function registerTools(
     {
       title: 'List HTTP routes',
       description:
-        'List a project\'s HTTP route table: method, path, mounted `fullPath` (API prefix included), handler, policies, middlewares, `public` (auth: false), and where each route is declared (`filePath`/`offset`). Covers the project\'s explicit routes, the auto-CRUD routes synthesized from createCoreRouter, and the routes local and installed plugins declare (`origin`), read from node_modules without booting Strapi. Admin-panel routes are left out unless `admin: true`.',
+        'List a project\'s HTTP route table: method, path, mounted `fullPath` (API prefix included), handler, policies, middlewares, `public` (auth: false), `auth` when customized, and where each route is declared (`filePath`/`offset`). Covers the project\'s explicit routes, the auto-CRUD routes synthesized from createCoreRouter, and the routes local and installed plugins declare (`origin`), read from node_modules without booting Strapi. Admin-panel routes are left out unless `admin: true`. Filter with `method`, `path` (a pattern, a part of it, or a concrete URL such as `/api/articles/12`) and `handler`. With `pipeline: true` (needs a filter, at most ' +
+        PIPELINE_MAX +
+        ' routes), each route also gets what a request goes through, in Strapi\'s order — the `config/middlewares` stack (once, in `globalMiddlewares`), auth, policies, route middlewares, handler — each step with a status: `ok`, `not-found-by-strapi` (it exists under another name Strapi won\'t try: Strapi throws at startup), `unknown`, `unverified`, `unread` or `inline`. Use it to explain a 401/403, or a startup error about a policy or middleware.',
       inputSchema: {
         ...selector,
         plugins: z.boolean().optional().describe('Include routes declared by local and installed plugins (default true).'),
         admin: z.boolean().optional().describe('Include admin-panel (`type: "admin"`) routes (default false).'),
+        method: z.string().optional().describe('Only routes of this HTTP method (e.g. `GET`).'),
+        path: z.string().optional().describe('Only routes whose path matches: the pattern (`/api/articles/:id`), a part of it, or a concrete URL it serves (`/api/articles/12`).'),
+        handler: z.string().optional().describe('Only routes whose handler (qualified, e.g. `api::article.article.find`) contains this.'),
+        pipeline: z.boolean().optional().describe(`Add each route's pipeline (needs method, path or handler; at most ${PIPELINE_MAX} routes).`),
       },
     },
     async (args) => {
       await ready;
       const p = pick(engine, args, roots());
       if ('result' in p) return p.result;
-      return json(await listRoutes(fs, p.project, { ...(args.plugins !== undefined ? { plugins: args.plugins } : {}), ...(args.admin !== undefined ? { admin: args.admin } : {}) }));
+      const all = (await engine.getRoutes({ ...(args.plugins !== undefined ? { plugins: args.plugins } : {}), admin: args.admin ?? false, root: p.project.root }))[0]?.routes ?? [];
+      const routes = all.filter(
+        (r: RouteInfo) =>
+          (!args.method || r.method.toUpperCase().split(/[|,]/).includes(args.method.toUpperCase())) &&
+          (!args.path || pathMatches(r.fullPath ?? r.path, args.path) || pathMatches(r.path, args.path)) &&
+          (!args.handler || qualifiedHandler(r).includes(args.handler)),
+      );
+      if (!args.pipeline) return json(routes);
+      if (!args.method && !args.path && !args.handler) {
+        return json({ error: 'pipeline needs a filter: pass `method`, `path` or `handler` to narrow the routes first.', routes: routes.length });
+      }
+      if (routes.length > PIPELINE_MAX) {
+        return json({ error: `${routes.length} routes match: narrow the filter to at most ${PIPELINE_MAX} for the pipeline.`, routes: routes.map((r) => `${r.method} ${r.fullPath ?? r.path}`) });
+      }
+      const global = await engine.getGlobalMiddlewares(p.project.root);
+      const piped = routes.map((r) => ({ ...r, pipeline: routePipeline(p.project, r, global).steps.filter((s) => s.phase !== 'global-middleware') }));
+      const stack = routes[0] ? routePipeline(p.project, routes[0], global).steps.filter((s) => s.phase === 'global-middleware') : [];
+      return json({ globalMiddlewares: { status: global.status, file: global.file, envFiles: global.envFiles, steps: stack }, routes: piped });
     },
   );
 

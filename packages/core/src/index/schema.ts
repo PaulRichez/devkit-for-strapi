@@ -1,6 +1,7 @@
 import type { AttributeInfo, ContentType, ContentTypeSource } from '../model/types';
 import { buildContentTypeUid, buildPluginContentTypeUid } from '../model/uid';
 import { asRecord, asString, asStringArray, safeParse } from '../util/json';
+import { attributeDetails } from './attributeDetails';
 
 /** Find the offset of `"key"` in raw JSON, searching after `from`. */
 function findKeyOffset(raw: string, key: string, from: number): number {
@@ -30,7 +31,7 @@ function parseAttributes(
     if (component) info.component = component;
     const components = asStringArray(def.components);
     if (components) info.components = components;
-    attributes[name] = info;
+    attributes[name] = { ...info, ...attributeDetails(def) };
   }
   return attributes;
 }
@@ -72,6 +73,8 @@ export function parseSchemaFile(raw: string, ctx: SchemaContext): ContentType | 
     defOffset: Math.max(0, raw.indexOf('"kind"')),
   };
   if (ctx.pluginName) result.pluginName = ctx.pluginName;
+  const collectionName = asString(json.collectionName);
+  if (collectionName) result.collectionName = collectionName;
   const i18n = asRecord(asRecord(json.pluginOptions)?.i18n);
   if (i18n?.localized === true) result.i18nLocalized = true;
   return result;

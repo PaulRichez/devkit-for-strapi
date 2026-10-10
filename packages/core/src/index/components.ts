@@ -1,6 +1,7 @@
 import type { AttributeInfo, ComponentDef } from '../model/types';
 import { buildComponentUid } from '../model/uid';
 import { asRecord, asString, asStringArray, safeParse } from '../util/json';
+import { attributeDetails } from './attributeDetails';
 
 function parseAttributes(
   attrsObj: Record<string, unknown>,
@@ -24,7 +25,7 @@ function parseAttributes(
     if (component) info.component = component;
     const components = asStringArray(def.components);
     if (components) info.components = components;
-    attributes[name] = info;
+    attributes[name] = { ...info, ...attributeDetails(def) };
   }
   return attributes;
 }

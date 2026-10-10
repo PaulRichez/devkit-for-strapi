@@ -23,13 +23,14 @@ import { type FileSystem, FileType } from '../fs/FileSystem';
 import { dirname, join, normalize } from '../fs/paths';
 import { pathsStamp, pathsStampParts } from '../fs/stamp';
 import { parseMajor } from '../workspace/version';
-import type { AttributeInfo, CodeArtifact, ContentType, ControllerAction, ArtifactKind } from '../model/types';
+import { INLINE_ENTRY, UNREAD_ENTRY, type AttributeInfo, type CodeArtifact, type ContentType, type ControllerAction, type ArtifactKind, type RouteAuth } from '../model/types';
 import { asRecord, asString, safeParse } from '../util/json';
 import { configModuleValue, readPluginsConfig, type PluginDeclaration, type PluginsConfig } from './config';
 import { pluginReadPaths } from './merge';
 import { isCallable, type Loc, type ObjValue, resolveDots, StaticEvaluator, toPlain, UNKNOWN, type Value } from './evaluate';
 import { MAY_REWRITE_PLUGINS, pluginWriteTargets, type PluginRewrites, scanProjectRewrites, unionRewrites } from './rewrites';
 import { strapiExternals } from './shims';
+import { attributeDetails } from '../index/attributeDetails';
 
 export interface PluginRoute {
   /** Owning plugin name. */
@@ -44,6 +45,9 @@ export interface PluginRoute {
   handler?: string;
   /** `config.auth === false` — reachable without authentication. `undefined` when not literal. */
   public: boolean | undefined;
+  /** `config.auth` when it isn't the default. */
+  auth?: RouteAuth;
+  /** In declaration order (`<inline>` a function, `<unread>` not read). */
   policies: string[];
   middlewares: string[];
   loc?: Loc;
@@ -331,9 +335,22 @@ class PluginReader {
       if (x.k === 'str') out.push(x.v);
       else if (x.k === 'obj') {
         const n = await this.ev.getProp(x, 'name');
-        out.push(n.k === 'str' ? n.v : '<inline>');
-      } else out.push('<inline>');
+        out.push(n.k === 'str' ? n.v : UNREAD_ENTRY);
+      } else out.push(isCallable(x) ? INLINE_ENTRY : UNREAD_ENTRY);
     }
+    return out;
+  }
+
+  /** `config.auth` when it isn't the default. */
+  private async routeAuth(auth: Value): Promise<RouteAuth | undefined> {
+    if (auth.k === 'nil' || (auth.k === 'bool' && auth.v)) return undefined;
+    if (auth.k === 'bool') return { mode: 'public' };
+    if (auth.k !== 'obj') return { mode: 'unread' };
+    const out: RouteAuth = { mode: 'custom' };
+    const scope = await this.strings(await this.ev.getProp(auth, 'scope'));
+    const strategies = await this.strings(await this.ev.getProp(auth, 'strategies'));
+    if (scope?.length) out.scope = scope;
+    if (strategies?.length) out.strategies = strategies;
     return out;
   }
 
@@ -394,20 +411,25 @@ class PluginReader {
           continue;
         }
         let pub: boolean | undefined = false;
+        let auth: RouteAuth | undefined;
         let policies: string[] = [];
         let middlewares: string[] = [];
         let own: string | undefined = routerPrefix;
         if (config.k === 'obj') {
-          const auth = await this.ev.getProp(config, 'auth');
-          pub = auth.k === 'bool' ? !auth.v : auth.k === 'obj' || auth.k === 'nil' ? false : undefined;
-          policies = (await this.strings(await this.ev.getProp(config, 'policies'))) ?? [];
-          middlewares = (await this.strings(await this.ev.getProp(config, 'middlewares'))) ?? [];
+          const a = await this.ev.getProp(config, 'auth');
+          pub = a.k === 'bool' ? !a.v : a.k === 'obj' || a.k === 'nil' ? false : undefined;
+          auth = await this.routeAuth(a);
+          policies = (await this.strings(await this.ev.getProp(config, 'policies'))) ?? [UNREAD_ENTRY];
+          middlewares = (await this.strings(await this.ev.getProp(config, 'middlewares'))) ?? [UNREAD_ENTRY];
           if (config.props.has('prefix')) {
             const p = await this.ev.getProp(config, 'prefix');
             own = p.k === 'str' ? p.v : p.k === 'nil' ? '' : undefined;
           }
         } else if (config.k !== 'nil') {
           pub = undefined;
+          auth = { mode: 'unread' };
+          policies = [UNREAD_ENTRY];
+          middlewares = [UNREAD_ENTRY];
         }
         const base = type === 'content-api' ? (this.apiPrefix ?? '/api') : '';
         const route: PluginRoute = {
@@ -417,6 +439,7 @@ class PluginReader {
           path: path.v,
           fullPath: joinRoutePath(base, own ?? `/${name}`, path.v),
           public: pub,
+          ...(auth ? { auth } : {}),
           policies,
           middlewares,
           ...(r.loc ? { loc: r.loc } : {}),
@@ -447,7 +470,7 @@ async function readAttributes(ev: StaticEvaluator, attrsV: ObjValue, schemaPath:
       const comps = def.components.filter((c): c is string => typeof c === 'string');
       if (comps.length) info.components = comps;
     }
-    out[attrName] = info;
+    out[attrName] = { ...info, ...attributeDetails(def) };
   }
   return out;
 }
@@ -497,6 +520,8 @@ export async function contentTypeFromDefinition(
     pluralName: asString(info.pluralName),
     displayName: asString(info.displayName),
   };
+  const collectionName = asString(plain.collectionName);
+  if (collectionName) ct.collectionName = collectionName;
   const attrsV = await ev.getProp(schemaV, 'attributes');
   if (attrsV.k === 'obj') {
     ct.attributes = await readAttributes(ev, attrsV, ct.schemaPath);
