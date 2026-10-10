@@ -412,6 +412,7 @@ export interface ModelView {
   provider: ModelProvider;
   /** Reveal a content-type or component node. */
   reveal(root: string, uid: string, focus?: boolean): Promise<boolean>;
+  visible(): boolean;
 }
 
 export function registerModelView(context: vscode.ExtensionContext, engine: StrapiEngine, routes: RoutesView): ModelView {
@@ -422,6 +423,7 @@ export function registerModelView(context: vscode.ExtensionContext, engine: Stra
   const reveal = async (root: string, uid: string, focus = true): Promise<boolean> => {
     const into = (n: Node): boolean => n.kind === 'project' || n.kind === 'section' || n.kind === 'category' || n.kind === 'plugin';
     const node = await provider.find((n) => n.kind === 'type' && n.root === root && uidOf(n.type) === uid, into);
+    if (!node && !focus) return false; // following the editor: silent
     if (!node) {
       void vscode.window.showInformationMessage(`DevKit for Strapi: '${uid}' is not in this project's model${uid.startsWith('plugin::') ? ' (an installed plugin not read, or plugin types hidden)' : ''}.`);
       return false;
@@ -460,5 +462,5 @@ export function registerModelView(context: vscode.ExtensionContext, engine: Stra
       }
     }),
   );
-  return { refresh: () => provider.refresh(), provider, reveal };
+  return { refresh: () => provider.refresh(), provider, reveal, visible: () => view.visible };
 }

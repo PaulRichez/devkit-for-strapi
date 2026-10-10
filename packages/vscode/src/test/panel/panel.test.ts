@@ -150,6 +150,34 @@ suite('DevKit panel', () => {
     assert.ok((edit.fileCreates ?? []).some((f) => f.path.includes('/plugins/blog/')));
   });
 
+  test('Ctrl+T finds Strapi names: UIDs, actions, routes', async () => {
+    const find = async (q: string): Promise<string[]> =>
+      ((await vscode.commands.executeCommand<vscode.SymbolInformation[]>('vscode.executeWorkspaceSymbolProvider', q)) ?? []).map((s) => s.name);
+    assert.ok((await find('api::author')).includes('api::author.author'));
+    assert.ok((await find('article.publish')).includes('api::article.article.publish'));
+    assert.ok((await find('GET /api/articles')).includes('GET /api/articles'));
+    assert.ok((await find('shared.orphan')).includes('shared.orphan'));
+  });
+
+  test('reveal in panel: a schema opens its type in Model', async () => {
+    const schema = vscode.Uri.file(path.join(ws, 'src/api/author/content-types/author/schema.json'));
+    await vscode.commands.executeCommand('strapiDevkit.revealInPanel', schema);
+    const m = views.model as AnyProvider;
+    const author = await child(m, await child(m, undefined, 'Content-types'), 'Author');
+    assert.ok(author);
+  });
+
+  test('pro: the relations diagram opens as a webview', async function () {
+    await vscode.commands.executeCommand('strapiDevkit.model.diagram');
+    const tabs = await until(
+      () => Promise.resolve(vscode.window.tabGroups.all.flatMap((g) => g.tabs.map((t) => t.label))),
+      (labels) => labels.includes('Strapi relations'),
+      20,
+    );
+    if (!tabs.includes('Strapi relations')) this.skip(); // the open-source build: Pro required
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+  });
+
   test('routes CodeLens: a controller action shows the routes it handles', async () => {
     const file = vscode.Uri.file(path.join(ws, 'src/api/article/controllers/article.ts'));
     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(file));

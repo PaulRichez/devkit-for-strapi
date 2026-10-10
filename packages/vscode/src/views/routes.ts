@@ -362,10 +362,11 @@ function phaseIcon(s: PipelineStep): string {
 export interface RoutesView {
   refresh(): void;
   provider: RoutesProvider;
-  /** Reveal the first route matching `pred` (clearing a filter that hides it). */
-  revealRoute(root: string, pred: (r: RouteInfo) => boolean, focus?: boolean): Promise<boolean>;
+  /** Reveal the first route matching `pred` (clearing a filter that hides it, unless `quiet`: following the editor). */
+  revealRoute(root: string, pred: (r: RouteInfo) => boolean, focus?: boolean, quiet?: boolean): Promise<boolean>;
   /** Show only the routes of one owner (`api::x`, `plugin::y`). */
   showOwner(owner: string): Promise<void>;
+  visible(): boolean;
 }
 
 async function pickFilter(current: RouteFilter): Promise<RouteFilter | undefined> {
@@ -411,11 +412,12 @@ export function registerRoutesView(context: vscode.ExtensionContext, engine: Str
   const routesView: RoutesView = {
     refresh: () => provider.refresh(),
     provider,
-    async revealRoute(root, pred, focus = true) {
+    visible: () => view.visible,
+    async revealRoute(root, pred, focus = true, quiet = false) {
       const into = (n: Node): boolean => n.kind === 'project' || n.kind === 'group' || n.kind === 'owner';
       const find = (): Promise<Node | undefined> => provider.find((n) => n.kind === 'route' && n.root === root && pred(n.route), into);
       let node = await find();
-      if (!node && Object.keys(provider.filter).length) {
+      if (!node && !quiet && Object.keys(provider.filter).length) {
         await provider.setFilter({});
         node = await find();
       }

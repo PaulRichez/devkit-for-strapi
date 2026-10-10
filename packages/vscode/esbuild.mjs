@@ -107,6 +107,21 @@ async function buildMcp() {
   });
 }
 
+/** The relations diagram's script: runs in the webview (browser), talks to the extension by messages. */
+async function buildWebviews() {
+  await esbuild.build({
+    entryPoints: [resolve(here, 'src/webview/diagram.ts')],
+    bundle: true,
+    outfile: resolve(here, 'dist/diagram.js'),
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2020',
+    sourcemap: !production,
+    minify: production,
+    logLevel: 'silent',
+  });
+}
+
 copyAssets();
 
 // A production bundle ships no source map; remove any left by a prior dev build
@@ -126,3 +141,4 @@ if (watch) {
 
 // The extension bundle and the MCP server bundle ship together in the .vsix.
 await buildMcp();
+await buildWebviews();

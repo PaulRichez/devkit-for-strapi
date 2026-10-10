@@ -207,6 +207,18 @@
         "title": "Create Plugin…",
         "category": "DevKit for Strapi",
         "icon": "$(add)"
+      },
+      {
+        "command": "strapiDevkit.revealInPanel",
+        "title": "Reveal in DevKit Panel",
+        "category": "DevKit for Strapi",
+        "icon": "$(target)"
+      },
+      {
+        "command": "strapiDevkit.model.diagram",
+        "title": "Open Relations Diagram",
+        "category": "DevKit for Strapi",
+        "icon": "$(type-hierarchy)"
       }
     ],
     "configuration": {
@@ -265,6 +277,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show the content-types installed plugins declare (read from node_modules) in the Model view, e.g. the fields of plugin::users-permissions.user."
+        },
+        "strapiDevkit.views.followActiveEditor": {
+          "type": "boolean",
+          "default": true,
+          "description": "When the Model or Routes view is open, reveal the schema, controller or route file of the active editor in it (without taking the focus)."
         }
       }
     },
@@ -364,6 +381,11 @@
         {
           "command": "strapiDevkit.refactor.createPlugin",
           "when": "view == strapiDevkit.plugins",
+          "group": "navigation@1"
+        },
+        {
+          "command": "strapiDevkit.model.diagram",
+          "when": "view == strapiDevkit.model",
           "group": "navigation@1"
         }
       ],
@@ -535,14 +557,76 @@
         {
           "command": "strapiDevkit.refactor.renameMethod",
           "when": "false"
+        },
+        {
+          "command": "strapiDevkit.model.diagram",
+          "when": "strapiDevkit.hasProject"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "strapiDevkit.revealInPanel",
+          "when": "strapiDevkit.hasProject && resourceExtname =~ /^\\.(json|[cm]?[jt]s)$/",
+          "group": "navigation@99"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "strapiDevkit.revealInPanel",
+          "when": "strapiDevkit.hasProject && resourceExtname =~ /^\\.(json|[cm]?[jt]s)$/",
+          "group": "navigation@99"
         }
       ]
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "strapiDevkit.start",
+        "title": "Get started with DevKit for Strapi",
+        "description": "See your Strapi project as Strapi does: names, routes, model and problems — in the editor and for your AI agent.",
+        "steps": [
+          {
+            "id": "panel",
+            "title": "Open the DevKit panel",
+            "description": "Health, Routes, Model and Plugins, read from your code.\n[Open the Panel](command:workbench.view.extension.strapiDevkit)",
+            "media": {
+              "markdown": "assets/walkthrough/panel.md"
+            },
+            "completionEvents": ["onView:strapiDevkit.health", "onView:strapiDevkit.routes"]
+          },
+          {
+            "id": "completion",
+            "title": "Write Strapi calls with completion",
+            "description": "Real UIDs, services and routes as you type; unknown names underlined.\n[Show Detected Projects](command:strapiDevkit.showProjects)",
+            "media": {
+              "markdown": "assets/walkthrough/completion.md"
+            },
+            "completionEvents": ["onCommand:strapiDevkit.showProjects"]
+          },
+          {
+            "id": "agent",
+            "title": "Give your AI agent the same knowledge",
+            "description": "The bundled MCP server answers your agent from the project itself.\n[MCP setup](https://devkit-for-strapi.paulrichez.fr/mcp/)",
+            "media": {
+              "markdown": "assets/walkthrough/agent.md"
+            }
+          },
+          {
+            "id": "pro",
+            "title": "Refactor safely with Pro",
+            "description": "Propagated rename, refactors from the panel, each through the Refactor Preview.\n[Enter License Key](command:strapiDevkit.enterLicenseKey)",
+            "media": {
+              "markdown": "assets/walkthrough/pro.md"
+            },
+            "completionEvents": ["onCommand:strapiDevkit.enterLicenseKey"]
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "build": "node esbuild.mjs --production",
     "watch": "node esbuild.mjs --watch",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p src/webview/tsconfig.json",
     "compile-tests": "node esbuild.mjs --tests",
     "test:integration": "node esbuild.mjs --tests && vscode-test",
     "package": "node esbuild.mjs --production && vsce package --no-dependencies",

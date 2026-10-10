@@ -9,6 +9,9 @@ import { registerReferenceProvider } from './providers/references';
 import { registerCodeLensProvider } from './providers/codeLens';
 import { registerRenameProvider } from './providers/rename';
 import { registerRoutesCodeLens } from './providers/routesCodeLens';
+import { registerWorkspaceSymbols } from './providers/workspaceSymbols';
+import { registerDiagram } from './views/diagram';
+import { registerFollow } from './views/follow';
 import { RefreshBus, setContext } from './views/panel';
 import { type HealthProvider, registerHealthView } from './views/health';
 import { type ModelProvider, registerModelView } from './views/model';
@@ -79,8 +82,9 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
   }
 
   const output = vscode.window.createOutputChannel('DevKit for Strapi');
-  const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-  status.command = 'strapiDevkit.showProjects';
+  const status = vscode.window.createStatusBarItem('strapiDevkit.status', vscode.StatusBarAlignment.Left, 50);
+  status.name = 'DevKit for Strapi';
+  status.command = 'workbench.view.extension.strapiDevkit';
   context.subscriptions.push(output, status);
 
   const fs = new VscodeFileSystem();
@@ -101,6 +105,10 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
   const healthView = registerHealthView(context, engine, fs);
   const pluginsView = registerPluginsView(context, engine, fs, routesView);
   registerRefactorCommands(context, engine, fs, license.isLicensed);
+  registerFollow(context, engine, modelView, routesView);
+  const diagram = registerDiagram(context, engine, modelView, license.isLicensed);
+  registerWorkspaceSymbols(context, engine);
+  context.subscriptions.push(healthView.provider.onDidCount((n) => updateStatus(engine, status, n)));
   const diagnostics = registerDiagnostics(context, engine);
   registerCompletionProvider(context, engine);
 
@@ -112,8 +120,9 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
     modelView.refresh();
     healthView.refresh();
     pluginsView.refresh();
+    diagram.refresh();
     diagnostics.revalidateAll(); // the index changed → refresh open files
-    updateStatus(engine, status); // counts include installed plugins once they land
+    updateStatus(engine, status, healthView.provider.count); // counts include installed plugins once they land
     setContext('strapiDevkit.hasProject', engine.getProjects().length > 0);
     setContext('strapiDevkit.pluginsLoading', pluginsLoading(engine));
   });
@@ -192,13 +201,30 @@ export function deactivate(): void {
   /* nothing to clean up beyond context.subscriptions */
 }
 
-function updateStatus(engine: StrapiEngine, status: vscode.StatusBarItem): void {
-  const n = engine.getProjects().length;
-  status.text = n > 0 ? `$(database) DevKit for Strapi: ${n}` : '$(database) DevKit for Strapi: 0';
-  status.tooltip =
-    n > 0
-      ? `DevKit for Strapi active — ${n} Strapi project(s) detected. Click for details.`
-      : 'DevKit for Strapi active — no Strapi project found in this workspace.';
+/** `$(database) Strapi 5.48 · ⚠ 2` — the project, its problems, and how current DevKit's view of it is. */
+function updateStatus(engine: StrapiEngine, status: vscode.StatusBarItem, problems = 0): void {
+  const projects = engine.getProjects();
+  const loading = projects.some((p) => p.freshness.pluginsLoading);
+  const icon = loading ? '$(sync~spin)' : '$(database)';
+  const version = (p: (typeof projects)[number]): string => p.strapiVersion ?? p.declaredVersion?.replace(/^[\^~>=<\s]+/, '') ?? `v${p.version}`;
+  if (!projects.length) {
+    status.text = '$(database) DevKit for Strapi';
+    status.tooltip = 'DevKit for Strapi — no Strapi project found in this workspace. Click to open the panel.';
+    status.show();
+    return;
+  }
+  const label = projects.length === 1 ? `Strapi ${version(projects[0]!)}` : `DevKit: ${projects.length} projects`;
+  status.text = `${icon} ${label}${problems ? ` · $(warning) ${problems}` : ''}`;
+  const md = new vscode.MarkdownString(undefined, true);
+  md.isTrusted = { enabledCommands: ['workbench.view.extension.strapiDevkit', 'strapiDevkit.showProjects', 'strapiDevkit.rescan', 'strapiDevkit.health.validateAll'] };
+  md.appendMarkdown('**DevKit for Strapi**\n\n');
+  for (const p of projects) {
+    const c = p.counts;
+    md.appendMarkdown(`$(folder) **${paths.basename(p.root)}** — Strapi ${version(p)} · ${c.contentTypes} content-types · ${c.components} components${p.freshness.pluginsLoading ? ' · reading installed plugins…' : ''}\n\n`);
+  }
+  md.appendMarkdown(problems ? `$(warning) ${problems} problem${problems === 1 ? '' : 's'} Strapi would hit (broken references, names it won't find)\n\n` : '$(pass) No broken reference found\n\n');
+  md.appendMarkdown('[Open the panel](command:workbench.view.extension.strapiDevkit) · [Check the whole project](command:strapiDevkit.health.validateAll) · [Projects](command:strapiDevkit.showProjects) · [Rescan](command:strapiDevkit.rescan)');
+  status.tooltip = md;
   status.show();
 }
 

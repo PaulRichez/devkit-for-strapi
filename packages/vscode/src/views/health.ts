@@ -72,6 +72,11 @@ function ago(iso: string | undefined): string {
 export class HealthProvider extends CachedTree<Node> {
   private reports = new Map<string, Report>();
   private loading: Promise<void> | undefined;
+  private readonly counted = new vscode.EventEmitter<number>();
+  /** Fired with the problem count (badge) each time it is recomputed. */
+  readonly onDidCount = this.counted.event;
+  /** The last problem count (broken refs + names Strapi won't find). */
+  count = 0;
   view: vscode.TreeView<Node> | undefined;
 
   constructor(
@@ -104,7 +109,9 @@ export class HealthProvider extends CachedTree<Node> {
   }
 
   private setBadge(n: number): void {
+    this.count = n;
     if (this.view) this.view.badge = n ? { value: n, tooltip: `${n} problem${n === 1 ? '' : 's'} Strapi would hit` } : undefined;
+    this.counted.fire(n);
   }
 
   /** Names Strapi won't find at startup: in the project's own routes and middleware stack (one entry per declaration). */
