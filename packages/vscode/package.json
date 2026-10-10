@@ -93,6 +93,120 @@
         "title": "Go to Handler",
         "category": "DevKit for Strapi",
         "icon": "$(symbol-method)"
+      },
+      {
+        "command": "strapiDevkit.routes.filter",
+        "title": "Filter Routes…",
+        "category": "DevKit for Strapi",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "strapiDevkit.routes.clearFilter",
+        "title": "Clear Routes Filter",
+        "category": "DevKit for Strapi",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "strapiDevkit.routes.copyPath",
+        "title": "Copy Route Path",
+        "category": "DevKit for Strapi",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "strapiDevkit.routes.handlerReferences",
+        "title": "Find Handler References",
+        "category": "DevKit for Strapi",
+        "icon": "$(references)"
+      },
+      {
+        "command": "strapiDevkit.routes.openDeclared",
+        "title": "Open Where Declared",
+        "category": "DevKit for Strapi",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "strapiDevkit.model.copyUid",
+        "title": "Copy UID",
+        "category": "DevKit for Strapi",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "strapiDevkit.model.openField",
+        "title": "Open in Schema",
+        "category": "DevKit for Strapi",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "strapiDevkit.model.showRoutes",
+        "title": "Show Routes",
+        "category": "DevKit for Strapi",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "strapiDevkit.health.validateAll",
+        "title": "Check the Whole Project",
+        "category": "DevKit for Strapi",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "strapiDevkit.health.replace",
+        "title": "Replace with the Suggestion",
+        "category": "DevKit for Strapi",
+        "icon": "$(lightbulb)"
+      },
+      {
+        "command": "strapiDevkit.plugins.openConfig",
+        "title": "Open in config/plugins",
+        "category": "DevKit for Strapi",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "strapiDevkit.plugins.openEntry",
+        "title": "Open Server Entry",
+        "category": "DevKit for Strapi",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "strapiDevkit.plugins.openPackage",
+        "title": "Open package.json",
+        "category": "DevKit for Strapi",
+        "icon": "$(json)"
+      },
+      {
+        "command": "strapiDevkit.refactor.renameType",
+        "title": "Rename…",
+        "category": "DevKit for Strapi",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "strapiDevkit.refactor.renameField",
+        "title": "Rename Field…",
+        "category": "DevKit for Strapi",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "strapiDevkit.refactor.changeRelation",
+        "title": "Change Relation Target…",
+        "category": "DevKit for Strapi",
+        "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "strapiDevkit.refactor.moveToPlugin",
+        "title": "Move to Plugin…",
+        "category": "DevKit for Strapi",
+        "icon": "$(move)"
+      },
+      {
+        "command": "strapiDevkit.refactor.renameMethod",
+        "title": "Rename Action…",
+        "category": "DevKit for Strapi",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "strapiDevkit.refactor.createPlugin",
+        "title": "Create Plugin…",
+        "category": "DevKit for Strapi",
+        "icon": "$(add)"
       }
     ],
     "configuration": {
@@ -136,25 +250,83 @@
         },
         "strapiDevkit.exclude": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Glob patterns of paths to exclude from Strapi project discovery (e.g. 'examples', '**/fixtures/**'). A discovered project whose path matches any pattern is ignored."
+        },
+        "strapiDevkit.routesCodeLens.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the routes a controller action handles above it (e.g. 'GET /api/articles/:id'). Click to open the route and see its pipeline in the Routes view."
+        },
+        "strapiDevkit.model.showPluginTypes": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the content-types installed plugins declare (read from node_modules) in the Model view, e.g. the fields of plugin::users-permissions.user."
         }
       }
     },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "strapiDevkit",
+          "title": "DevKit for Strapi",
+          "icon": "assets/activity.svg"
+        }
+      ]
+    },
     "views": {
-      "explorer": [
+      "strapiDevkit": [
+        {
+          "id": "strapiDevkit.health",
+          "name": "Health",
+          "contextualTitle": "DevKit for Strapi",
+          "icon": "assets/activity.svg"
+        },
         {
           "id": "strapiDevkit.routes",
-          "name": "Strapi Routes",
-          "contextualTitle": "DevKit for Strapi"
+          "name": "Routes",
+          "contextualTitle": "DevKit for Strapi",
+          "icon": "assets/activity.svg"
+        },
+        {
+          "id": "strapiDevkit.model",
+          "name": "Model",
+          "contextualTitle": "DevKit for Strapi",
+          "icon": "assets/activity.svg"
+        },
+        {
+          "id": "strapiDevkit.plugins",
+          "name": "Plugins",
+          "contextualTitle": "DevKit for Strapi",
+          "icon": "assets/activity.svg"
         }
       ]
     },
     "viewsWelcome": [
       {
         "view": "strapiDevkit.routes",
-        "contents": "No Strapi routes found yet. DevKit for Strapi lists them as soon as a Strapi project is detected in the workspace.\n[Rescan Workspace](command:strapiDevkit.rescan)"
+        "contents": "No Strapi routes found yet. DevKit for Strapi lists them as soon as a Strapi project is detected in the workspace.\n[Rescan Workspace](command:strapiDevkit.rescan)",
+        "when": "!strapiDevkit.routesFiltered"
+      },
+      {
+        "view": "strapiDevkit.routes",
+        "contents": "No route matches the filter.\n[Clear Filter](command:strapiDevkit.routes.clearFilter)",
+        "when": "strapiDevkit.routesFiltered"
+      },
+      {
+        "view": "strapiDevkit.model",
+        "contents": "No Strapi project detected in this workspace yet.\n[Rescan Workspace](command:strapiDevkit.rescan)"
+      },
+      {
+        "view": "strapiDevkit.health",
+        "contents": "No Strapi project detected in this workspace yet.\n[Rescan Workspace](command:strapiDevkit.rescan)"
+      },
+      {
+        "view": "strapiDevkit.plugins",
+        "contents": "No plugin found: DevKit lists the local plugins and the ones installed in node_modules once a Strapi project is detected.\n[Rescan Workspace](command:strapiDevkit.rescan)"
       }
     ],
     "menus": {
@@ -173,6 +345,26 @@
           "command": "strapiDevkit.routes.hideAdmin",
           "when": "view == strapiDevkit.routes && strapiDevkit.routesShowAdmin",
           "group": "navigation@1"
+        },
+        {
+          "command": "strapiDevkit.routes.filter",
+          "when": "view == strapiDevkit.routes",
+          "group": "navigation@0"
+        },
+        {
+          "command": "strapiDevkit.routes.clearFilter",
+          "when": "view == strapiDevkit.routes && strapiDevkit.routesFiltered",
+          "group": "navigation@0"
+        },
+        {
+          "command": "strapiDevkit.health.validateAll",
+          "when": "view == strapiDevkit.health",
+          "group": "navigation@1"
+        },
+        {
+          "command": "strapiDevkit.refactor.createPlugin",
+          "when": "view == strapiDevkit.plugins",
+          "group": "navigation@1"
         }
       ],
       "view/item/context": [
@@ -180,6 +372,91 @@
           "command": "strapiDevkit.routes.goToHandler",
           "when": "view == strapiDevkit.routes && viewItem == strapiRoute.withHandler",
           "group": "inline"
+        },
+        {
+          "command": "strapiDevkit.routes.copyPath",
+          "when": "view == strapiDevkit.routes && viewItem =~ /^strapiRoute/",
+          "group": "1_route@1"
+        },
+        {
+          "command": "strapiDevkit.routes.handlerReferences",
+          "when": "view == strapiDevkit.routes && viewItem == strapiRoute.withHandler",
+          "group": "1_route@3"
+        },
+        {
+          "command": "strapiDevkit.routes.openDeclared",
+          "when": "view == strapiDevkit.routes && viewItem =~ /^strapiStep.*\\.declared$/",
+          "group": "1_step@1"
+        },
+        {
+          "command": "strapiDevkit.model.copyUid",
+          "when": "view == strapiDevkit.model && viewItem =~ /^strapiModel\\.(type|component)/",
+          "group": "1_model@1"
+        },
+        {
+          "command": "strapiDevkit.model.showRoutes",
+          "when": "view == strapiDevkit.model && viewItem =~ /^strapiModel\\.type/",
+          "group": "1_model@2"
+        },
+        {
+          "command": "strapiDevkit.model.openField",
+          "when": "view == strapiDevkit.model && viewItem =~ /^strapiModel\\.field/",
+          "group": "1_model@1"
+        },
+        {
+          "command": "strapiDevkit.model.openField",
+          "when": "view == strapiDevkit.model && viewItem =~ /^strapiModel\\.field\\.relation/",
+          "group": "inline"
+        },
+        {
+          "command": "strapiDevkit.health.replace",
+          "when": "view == strapiDevkit.health && viewItem == strapiHealth.location.fixable",
+          "group": "inline"
+        },
+        {
+          "command": "strapiDevkit.plugins.openConfig",
+          "when": "view == strapiDevkit.plugins && viewItem =~ /^strapiPlugin/",
+          "group": "1_plugin@1"
+        },
+        {
+          "command": "strapiDevkit.plugins.openEntry",
+          "when": "view == strapiDevkit.plugins && viewItem =~ /^strapiPlugin/",
+          "group": "1_plugin@2"
+        },
+        {
+          "command": "strapiDevkit.plugins.openPackage",
+          "when": "view == strapiDevkit.plugins && viewItem == strapiPlugin.installed",
+          "group": "1_plugin@3"
+        },
+        {
+          "command": "strapiDevkit.refactor.renameType",
+          "when": "view == strapiDevkit.model && viewItem =~ /^strapiModel\\.(type|component)$/",
+          "group": "2_pro@1"
+        },
+        {
+          "command": "strapiDevkit.refactor.moveToPlugin",
+          "when": "view == strapiDevkit.model && viewItem == strapiModel.type",
+          "group": "2_pro@2"
+        },
+        {
+          "command": "strapiDevkit.refactor.renameField",
+          "when": "view == strapiDevkit.model && viewItem =~ /^strapiModel\\.field(\\.relation)?$/",
+          "group": "2_pro@1"
+        },
+        {
+          "command": "strapiDevkit.refactor.changeRelation",
+          "when": "view == strapiDevkit.model && viewItem == strapiModel.field.relation",
+          "group": "2_pro@2"
+        },
+        {
+          "command": "strapiDevkit.refactor.renameMethod",
+          "when": "view == strapiDevkit.routes && viewItem =~ /^strapiStep\\.handler/",
+          "group": "2_pro@1"
+        },
+        {
+          "command": "strapiDevkit.refactor.renameMethod",
+          "when": "view == strapiDevkit.plugins && viewItem == strapiPlugin.action",
+          "group": "2_pro@1"
         }
       ],
       "commandPalette": [
@@ -193,6 +470,70 @@
         },
         {
           "command": "strapiDevkit.routes.hideAdmin",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.routes.copyPath",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.routes.handlerReferences",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.routes.openDeclared",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.routes.clearFilter",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.model.copyUid",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.model.openField",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.model.showRoutes",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.health.replace",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.plugins.openConfig",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.plugins.openEntry",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.plugins.openPackage",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.refactor.renameType",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.refactor.renameField",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.refactor.changeRelation",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.refactor.moveToPlugin",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.refactor.renameMethod",
           "when": "false"
         }
       ]

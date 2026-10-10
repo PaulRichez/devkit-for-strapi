@@ -9,6 +9,8 @@
  * as *unknown* — callers must then stay silent rather than guess.
  */
 
+import ts from 'typescript';
+import { parseSource } from '../analyze/parse';
 import type { FileSystem } from '../fs/FileSystem';
 import { FileType } from '../fs/FileSystem';
 import { join } from '../fs/paths';
@@ -131,4 +133,40 @@ export async function readPluginsConfig(fs: FileSystem, root: string, ev = new S
     }
   }
   return { exhaustive, declarations, ...(file ? { file } : {}) };
+}
+
+/**
+ * Where each plugin key is written in a `config/plugins` file (for "open at the
+ * plugin"): the top-level keys of the exported object, or of the object a config
+ * function returns. Only literal keys; a key not found is simply absent.
+ */
+export function pluginKeyOffsets(filePath: string, text: string): Map<string, number> {
+  const out = new Map<string, number>();
+  const sf = parseSource(filePath, text);
+  const unwrap = (e: ts.Expression | undefined): ts.Expression | undefined => {
+    while (e && (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isSatisfiesExpression(e))) e = e.expression;
+    return e;
+  };
+  let expr: ts.Expression | undefined;
+  for (const stmt of sf.statements) {
+    if (ts.isExportAssignment(stmt)) expr = stmt.expression;
+    else if (ts.isExpressionStatement(stmt) && ts.isBinaryExpression(stmt.expression) && stmt.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken && stmt.expression.left.getText(sf) === 'module.exports') {
+      expr = stmt.expression.right;
+    }
+  }
+  expr = unwrap(expr);
+  if (expr && (ts.isArrowFunction(expr) || ts.isFunctionExpression(expr))) {
+    if (!ts.isBlock(expr.body)) expr = unwrap(expr.body);
+    else {
+      const ret = expr.body.statements.find(ts.isReturnStatement);
+      expr = unwrap(ret?.expression);
+    }
+  }
+  if (!expr || !ts.isObjectLiteralExpression(expr)) return out;
+  for (const p of expr.properties) {
+    if (!p.name) continue;
+    const key = ts.isIdentifier(p.name) || ts.isStringLiteralLike(p.name) ? p.name.text : undefined;
+    if (key !== undefined && !out.has(key)) out.set(key, p.name.getStart(sf));
+  }
+  return out;
 }

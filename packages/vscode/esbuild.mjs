@@ -67,12 +67,15 @@ const options = {
 async function buildTests() {
   const testDir = resolve(here, 'src/test');
   if (!existsSync(testDir)) return;
-  const entryPoints = readdirSync(testDir)
+  // src/test/*.test.ts → out/test/ (editor suite), src/test/panel/*.test.ts → out/test/panel/ (panel suite).
+  const entryPoints = readdirSync(testDir, { recursive: true })
+    .map((f) => String(f).replace(/\\/g, '/'))
     .filter((f) => f.endsWith('.test.ts'))
     .map((f) => resolve(testDir, f));
   if (entryPoints.length === 0) return;
   await esbuild.build({
     entryPoints,
+    outbase: testDir,
     outdir: resolve(here, 'out/test'),
     bundle: true,
     format: 'cjs',

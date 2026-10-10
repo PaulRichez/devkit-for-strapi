@@ -2,6 +2,7 @@ import { analyzeAt, paths, refKind, renamedUid, storedUidWarnings, touchedPaths 
 import type { FileSystem, StrapiEngine, StrapiProject } from 'devkit-for-strapi-core';
 import { computeRename, prepareRename as prepareRenameAt } from 'devkit-for-strapi-pro';
 import * as vscode from 'vscode';
+import { toVscodeWorkspaceEdit } from '../conv';
 import { DOCUMENT_SELECTOR, docPath } from '../selector';
 
 /**
@@ -62,25 +63,7 @@ export function registerRenameProvider(
         }
         // UIDs Strapi also stores in the database (permissions, media links, components): say it.
         for (const w of databaseWarnings(project, filePath, document, position, newName)) void vscode.window.showWarningMessage(`DevKit for Strapi — ${w}`);
-        const edit = new vscode.WorkspaceEdit();
-        // Text edits first, then creates, renames, deletes (they move/remove the edited files).
-        for (const t of result.textEdits) {
-          edit.replace(
-            vscode.Uri.file(t.filePath),
-            new vscode.Range(t.start.line, t.start.character, t.end.line, t.end.character),
-            t.newText,
-          );
-        }
-        for (const c of result.fileCreates ?? []) {
-          edit.createFile(vscode.Uri.file(c.path), { overwrite: false, contents: Buffer.from(c.content) });
-        }
-        for (const r of result.fileRenames) {
-          edit.renameFile(vscode.Uri.file(r.from), vscode.Uri.file(r.to), { overwrite: false });
-        }
-        for (const d of result.fileDeletes ?? []) {
-          edit.deleteFile(vscode.Uri.file(d), { ignoreIfNotExists: true });
-        }
-        return edit;
+        return toVscodeWorkspaceEdit(result);
       },
     }),
   );

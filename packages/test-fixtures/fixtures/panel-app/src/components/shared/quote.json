@@ -1,0 +1,12 @@
+{
+  "info": {
+    "displayName": "Quote"
+  },
+  "attributes": {
+    "by": {
+      "type": "relation",
+      "relation": "oneToOne",
+      "target": "api::author.author"
+    }
+  }
+}

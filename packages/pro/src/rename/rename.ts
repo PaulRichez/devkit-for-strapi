@@ -50,6 +50,7 @@ export function planRename(
   _ref: string,
   _newName: string,
   _method?: string,
+  _owner?: 'service' | 'controller',
 ): Promise<WorkspaceEdit | null> {
   throw new Error(PRO_ONLY);
 }

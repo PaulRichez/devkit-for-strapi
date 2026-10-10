@@ -1,0 +1,10 @@
+{
+  "info": {
+    "displayName": "Seo"
+  },
+  "attributes": {
+    "metaTitle": {
+      "type": "string"
+    }
+  }
+}

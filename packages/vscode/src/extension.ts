@@ -2,14 +2,26 @@ import { createEngine, paths, type StrapiEngine } from 'devkit-for-strapi-core';
 import * as vscode from 'vscode';
 import { VscodeFileSystem } from './fileSystem';
 import { registerDefinitionProvider } from './providers/definition';
-import { type Diagnostics, registerDiagnostics } from './providers/diagnostics';
+import { registerDiagnostics } from './providers/diagnostics';
 import { registerCompletionProvider } from './providers/completion';
 import { registerHoverProvider } from './providers/hover';
 import { registerReferenceProvider } from './providers/references';
-import { type CodeLenses, registerCodeLensProvider } from './providers/codeLens';
+import { registerCodeLensProvider } from './providers/codeLens';
 import { registerRenameProvider } from './providers/rename';
-import { registerRoutesView, type RoutesView } from './views/routes';
+import { registerRoutesCodeLens } from './providers/routesCodeLens';
+import { RefreshBus, setContext } from './views/panel';
+import { type HealthProvider, registerHealthView } from './views/health';
+import { type ModelProvider, registerModelView } from './views/model';
+import { type PluginsProvider, registerPluginsView } from './views/plugins';
+import { registerRefactorCommands } from './views/refactor';
+import { registerRoutesView, type RoutesProvider } from './views/routes';
+import { openAt, pluginsLoading } from './views/tree';
 import { createLicenseManager, type LicenseManager } from './license';
+
+/** What `activate` returns: read access to the panel's trees (integration tests). */
+export interface DevkitExports {
+  views: { routes: RoutesProvider; model: ModelProvider; health: HealthProvider; plugins: PluginsProvider };
+}
 
 function workspaceFolderPaths(): string[] {
   return (vscode.workspace.workspaceFolders ?? []).map((f) => paths.normalize(f.uri.fsPath));
@@ -50,9 +62,9 @@ function registerMcpServer(context: vscode.ExtensionContext, license: LicenseMan
   );
 }
 
-export function activate(context: vscode.ExtensionContext): void {
+export function activate(context: vscode.ExtensionContext): DevkitExports | undefined {
   try {
-    activateImpl(context);
+    return activateImpl(context);
   } catch (err) {
     // Surface any synchronous activation failure instead of dying silently.
     void vscode.window.showErrorMessage(`DevKit for Strapi failed to activate: ${String(err)}`);
@@ -60,10 +72,10 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 }
 
-function activateImpl(context: vscode.ExtensionContext): void {
+function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefined {
   if (!vscode.workspace.getConfiguration('strapiDevkit').get<boolean>('enable', true)) {
     void vscode.window.showWarningMessage('DevKit for Strapi is disabled (strapiDevkit.enable = false).');
-    return;
+    return undefined;
   }
 
   const output = vscode.window.createOutputChannel('DevKit for Strapi');
@@ -74,6 +86,8 @@ function activateImpl(context: vscode.ExtensionContext): void {
   const fs = new VscodeFileSystem();
   const engine = createEngine(fs);
   const license = createLicenseManager(context);
+  const bus = new RefreshBus();
+  context.subscriptions.push(bus);
 
   // Register language features synchronously — they work as soon as init resolves.
   registerDefinitionProvider(context, engine);
@@ -81,17 +95,39 @@ function activateImpl(context: vscode.ExtensionContext): void {
   registerReferenceProvider(context, engine);
   registerRenameProvider(context, engine, fs, license.isLicensed);
   const codeLenses = registerCodeLensProvider(context, engine);
-  // The reference index builds in the background → refresh lenses when it lands.
+  const routeLenses = registerRoutesCodeLens(context, engine);
   const routesView = registerRoutesView(context, engine);
-  engine.onReferencesChanged(() => {
-    codeLenses.refresh();
-    routesView.refresh();
-    diagnostics.revalidateAll(); // also fired when installed plugins were re-read
-    updateStatus(engine, status); // counts include installed plugins once they land
-  });
+  const modelView = registerModelView(context, engine, routesView);
+  const healthView = registerHealthView(context, engine, fs);
+  const pluginsView = registerPluginsView(context, engine, fs, routesView);
+  registerRefactorCommands(context, engine, fs, license.isLicensed);
   const diagnostics = registerDiagnostics(context, engine);
   registerCompletionProvider(context, engine);
-  registerFileWatcher(context, engine, status, diagnostics, codeLenses, routesView);
+
+  // Every surface showing index data refreshes on one debounced signal.
+  bus.event(() => {
+    codeLenses.refresh();
+    routeLenses.refresh();
+    routesView.refresh();
+    modelView.refresh();
+    healthView.refresh();
+    pluginsView.refresh();
+    diagnostics.revalidateAll(); // the index changed → refresh open files
+    updateStatus(engine, status); // counts include installed plugins once they land
+    setContext('strapiDevkit.hasProject', engine.getProjects().length > 0);
+    setContext('strapiDevkit.pluginsLoading', pluginsLoading(engine));
+  });
+  // The reference index landing, installed plugins re-read.
+  engine.onReferencesChanged(() => bus.fire());
+  registerFileWatcher(context, engine, bus);
+
+  // Pro entries stay visible; this key lets menus mark them (and future Pro views appear).
+  const updatePro = async (): Promise<void> => setContext('strapiDevkit.pro', await license.isLicensed());
+  void updatePro();
+  context.subscriptions.push(
+    license.onDidChange(() => void updatePro()),
+    vscode.commands.registerCommand('strapiDevkit.open', (filePath: string, offset?: number) => openAt(filePath, offset ?? 0)),
+  );
 
   registerMcpServer(context, license);
 
@@ -116,10 +152,7 @@ function activateImpl(context: vscode.ExtensionContext): void {
       // silent until they land, then onReferencesChanged revalidates.
       await engine.init(folders, { waitForInstalled: false });
       logProjects(engine, output);
-      updateStatus(engine, status);
-      diagnostics.revalidateAll(); // open files were indexed-empty during init
-      codeLenses.refresh();
-      routesView.refresh();
+      bus.fireNow(); // open files were indexed-empty during init
     } catch (err) {
       output.appendLine(`[init] FAILED: ${String(err)}`);
       output.show(true);
@@ -139,22 +172,20 @@ function activateImpl(context: vscode.ExtensionContext): void {
       engine.setExcludes(vscode.workspace.getConfiguration('strapiDevkit').get<string[]>('exclude', []));
       try {
         await engine.rescan();
-        updateStatus(engine, status);
-        diagnostics.revalidateAll();
-        codeLenses.refresh();
-        routesView.refresh();
+        bus.fireNow();
       } catch (err) {
         output.appendLine(`[exclude] rescan FAILED: ${String(err)}`);
       }
     }),
   );
 
-  registerCommands(context, engine, output, status, ready, diagnostics, codeLenses);
+  registerCommands(context, engine, output, ready, bus);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('strapiDevkit.enterLicenseKey', () => license.enterKey()),
     vscode.commands.registerCommand('strapiDevkit.clearLicenseKey', () => license.clearKey()),
   );
+  return { views: { routes: routesView.provider, model: modelView.provider, health: healthView.provider, plugins: pluginsView.provider } };
 }
 
 export function deactivate(): void {
@@ -172,14 +203,7 @@ function updateStatus(engine: StrapiEngine, status: vscode.StatusBarItem): void 
 }
 
 /** Batch + debounce watcher events into a single incremental engine update. */
-function registerFileWatcher(
-  context: vscode.ExtensionContext,
-  engine: StrapiEngine,
-  status: vscode.StatusBarItem,
-  diagnostics: Diagnostics,
-  codeLenses: CodeLenses,
-  routesView: RoutesView,
-): void {
+function registerFileWatcher(context: vscode.ExtensionContext, engine: StrapiEngine, bus: RefreshBus): void {
   const watcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,tsx,js,jsx,mjs,cjs,json}');
   const changed = new Set<string>();
   const deleted = new Set<string>();
@@ -191,14 +215,7 @@ function registerFileWatcher(
     const d = [...deleted];
     changed.clear();
     deleted.clear();
-    if (c.length || d.length) {
-      void engine.onFilesChanged(c, d).then(() => {
-        updateStatus(engine, status);
-        diagnostics.revalidateAll(); // the index changed → refresh open files
-        codeLenses.refresh();
-        routesView.refresh();
-      });
-    }
+    if (c.length || d.length) void engine.onFilesChanged(c, d).then(() => bus.fireNow());
   };
   const schedule = (): void => {
     if (timer) clearTimeout(timer);
@@ -230,10 +247,8 @@ function registerCommands(
   context: vscode.ExtensionContext,
   engine: StrapiEngine,
   output: vscode.OutputChannel,
-  status: vscode.StatusBarItem,
   ready: Promise<void>,
-  diagnostics: Diagnostics,
-  codeLenses: CodeLenses,
+  bus: RefreshBus,
 ): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('strapiDevkit.showProjects', async () => {
@@ -245,9 +260,7 @@ function registerCommands(
       try {
         await engine.rescan();
         logProjects(engine, output);
-        updateStatus(engine, status);
-        diagnostics.revalidateAll();
-        codeLenses.refresh();
+        bus.fireNow();
         output.show(true);
         void vscode.window.showInformationMessage('DevKit for Strapi: workspace rescanned.');
       } catch (err) {

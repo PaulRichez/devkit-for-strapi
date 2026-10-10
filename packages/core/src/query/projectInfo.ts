@@ -8,7 +8,7 @@
 import { type FileSystem, FileType } from '../fs/FileSystem';
 import { basename, join } from '../fs/paths';
 import { listRoutes } from '../index/routes';
-import type { ProjectSummary, StrapiProject } from '../model/types';
+import type { ProjectSummary, RouteInfo, StrapiProject } from '../model/types';
 import { isFrameworkRef, parseRef } from '../model/uid';
 import { StaticEvaluator } from '../plugins/evaluate';
 import { readApiPrefix } from '../plugins/installed';
@@ -71,7 +71,8 @@ const LOCKFILES: Array<[string, NonNullable<ProjectInfo['packageManager']>]> = [
   ['npm-shrinkwrap.json', 'npm'],
 ];
 
-export async function projectInfo(fs: FileSystem, project: StrapiProject, summary: ProjectSummary): Promise<ProjectInfo> {
+/** `routes`: the project's route table (non-admin) when the caller has it cached — else it is read. */
+export async function projectInfo(fs: FileSystem, project: StrapiProject, summary: ProjectSummary, cached?: { routes?: readonly RouteInfo[] }): Promise<ProjectInfo> {
   const idx = project.index;
   const root = project.root;
   const rel = (p: string): string => (p.startsWith(`${root}/`) ? p.slice(root.length + 1) : p);
@@ -106,7 +107,7 @@ export async function projectInfo(fs: FileSystem, project: StrapiProject, summar
   }
   let routes = { api: 0, plugins: 0 };
   try {
-    for (const r of await listRoutes(fs, project, { plugins: true })) {
+    for (const r of cached?.routes ?? (await listRoutes(fs, project, { plugins: true }))) {
       if (r.owner?.startsWith('plugin::')) routes.plugins++;
       else routes.api++;
     }

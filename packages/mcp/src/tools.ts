@@ -333,7 +333,8 @@ export function registerTools(
       if ('result' in p) return p.result;
       const summary = engine.getProjects().find((s) => s.root === p.project.root);
       if (!summary) return json({ error: 'The project was re-indexed meanwhile: call project_info again.' });
-      return json(await projectInfo(fs, p.project, summary));
+      const routes = (await engine.getRoutes({ root: p.project.root }))[0]?.routes;
+      return json(await projectInfo(fs, p.project, summary, { routes }));
     },
   );
 

@@ -3,6 +3,7 @@ import type {
   DiagnosticEntry,
   ReferenceLocation,
   TargetLocation,
+  WorkspaceEdit,
 } from 'devkit-for-strapi-core';
 import * as vscode from 'vscode';
 
@@ -76,4 +77,27 @@ export function toCompletionItem(
   if (e.insertText) item.insertText = e.insertText;
   if (replace) item.range = replace;
   return item;
+}
+
+/**
+ * A core edit as a VS Code WorkspaceEdit — text edits first, then creates, renames,
+ * deletes (they move/remove the edited files). With `meta`, every entry needs
+ * confirmation: `applyEdit` then opens the Refactor Preview instead of applying.
+ */
+export function toVscodeWorkspaceEdit(result: WorkspaceEdit, meta?: { label: string; description?: string }): vscode.WorkspaceEdit {
+  const edit = new vscode.WorkspaceEdit();
+  const m: vscode.WorkspaceEditEntryMetadata | undefined = meta ? { needsConfirmation: true, label: meta.label, ...(meta.description ? { description: meta.description } : {}) } : undefined;
+  for (const t of result.textEdits) {
+    edit.replace(vscode.Uri.file(t.filePath), new vscode.Range(t.start.line, t.start.character, t.end.line, t.end.character), t.newText, m);
+  }
+  for (const c of result.fileCreates ?? []) {
+    edit.createFile(vscode.Uri.file(c.path), { overwrite: false, contents: Buffer.from(c.content) }, m);
+  }
+  for (const r of result.fileRenames) {
+    edit.renameFile(vscode.Uri.file(r.from), vscode.Uri.file(r.to), { overwrite: false }, m);
+  }
+  for (const d of result.fileDeletes ?? []) {
+    edit.deleteFile(vscode.Uri.file(d), { ignoreIfNotExists: true }, m);
+  }
+  return edit;
 }
