@@ -32,6 +32,7 @@ survives server respawns. Returns the projects now known.
 | Tool | Params | What it returns |
 |---|---|---|
 | `list_projects` | — | The Strapi projects in the workspace (name, root, version, counts). Call first in a multi-project workspace. |
+| `project_info` | `from?` \| `project?` | One project in full: Strapi version (installed / declared), TypeScript or JavaScript, package manager, API prefix, counts (APIs, content-types by kind, components, services, controllers, policies, middlewares, routes), every local and installed plugin with whether its refs are verified and, when not, **why** (no `node_modules`, rewritten at boot by a project file, a `src/extensions` override, Enterprise-only code…), health (broken refs, refs into unverified plugins) and `freshness`. The answer to "why is this plugin ref `external`?" |
 | `list_content_types` | — | Real content-type UIDs (e.g. `api::article.article`). Use these exact UIDs. |
 | `list_components` | — | Real component UIDs (e.g. `shared.seo`). |
 | `list_artifacts` | `kind?` | Real refs of services / controllers / policies / middlewares (optionally one kind). |

@@ -89,7 +89,7 @@ grepping for them**. 31 stdio tools, in three layers.
 > projects want both.
 
 **Know** — read the project's truth
-`server_info` · `list_projects` · `list_content_types` · `list_components` · `list_artifacts` · `get_schema` ·
+`server_info` · `list_projects` · `project_info` · `list_content_types` · `list_components` · `list_artifacts` · `get_schema` ·
 `resolve` · `validate_reference` · `find_references` · `list_routes` · `refresh`
 
 **Understand** — health & impact analysis

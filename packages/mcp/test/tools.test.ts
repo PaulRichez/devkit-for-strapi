@@ -32,7 +32,7 @@ describe('MCP tools (engine-backed handlers)', () => {
     registerTools(fakeServer, engine, fs, Promise.resolve());
   });
 
-  it('registers all thirty-one tools (server_info + read + graph + move/extract/rename/schema/apply; schema helpers are plan_* + deprecated aliases)', () => {
+  it('registers all thirty-two tools (server_info + read + graph + move/extract/rename/schema/apply; schema helpers are plan_* + deprecated aliases)', () => {
     expect([...handlers.keys()].sort()).toEqual(
       [
         'add_project',
@@ -61,6 +61,7 @@ describe('MCP tools (engine-backed handlers)', () => {
         'plan_rename_attribute',
         'plan_rename_entity',
         'plan_rename_method',
+        'project_info',
         'refresh',
         'rename_attribute', // deprecated alias
         'resolve',
@@ -68,6 +69,18 @@ describe('MCP tools (engine-backed handlers)', () => {
         'validate_reference',
       ].sort(),
     );
+  });
+
+  it('project_info describes the project, its plugins and its health', async () => {
+    const info = await call('project_info', { from: cmsARoot });
+    expect(info.root).toBe(cmsARoot);
+    expect(info.strapi.major).toBeGreaterThanOrEqual(4);
+    expect(['typescript', 'javascript']).toContain(info.language);
+    expect(info.nodeModules).toBe(false);
+    expect(info.notes.join(' ')).toMatch(/not installed/);
+    expect(typeof info.counts.contentTypes.collectionTypes).toBe('number');
+    expect(typeof info.health.brokenRefs).toBe('number');
+    expect(info.freshness.indexedAt).toMatch(/^\d{4}-/);
   });
 
   it('server_info and refresh say how current the index is; refresh can drop every cache', async () => {

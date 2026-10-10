@@ -8,6 +8,7 @@ import {
   getSchema,
   listArtifacts,
   listBrokenRefs,
+  projectInfo,
   listComponents,
   listContentTypes,
   listRefs,
@@ -263,6 +264,24 @@ export function registerTools(
     async () => {
       await ready;
       return json(engine.getProjects().map((p) => tagFixture({ name: paths.basename(p.root), ...p })));
+    },
+  );
+
+  reg(
+    'project_info',
+    {
+      title: 'Describe one Strapi project (and why a plugin ref may be unverified)',
+      description:
+        "Everything about one project before acting on it: Strapi version (installed / declared), TypeScript or JavaScript, package manager, API prefix, counts (APIs, content-types by kind, components, services, controllers, policies, middlewares, routes), every local and installed plugin with whether DevKit verifies refs into it and, if not, why (no node_modules, rewritten at boot by a project file, a src/extensions override, Enterprise-only code…), health (broken refs, refs into unverified plugins) and freshness. Call it to orient yourself in an unknown project, or when a plugin ref comes back `external`.",
+      inputSchema: { ...selector },
+    },
+    async (args) => {
+      await ready;
+      await engine.whenReferencesReady();
+      const p = pick(engine, args, roots());
+      if ('result' in p) return p.result;
+      const summary = engine.getProjects().find((s) => s.root === p.project.root)!;
+      return json(await projectInfo(fs, p.project, summary));
     },
   );
 

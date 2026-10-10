@@ -88,3 +88,4 @@ export {
   type ProjectSelector,
 } from './query/select';
 export { dependencies, dependents, listRefs, type GraphOptions, type RefSummary } from './query/graph';
+export { projectInfo, type PluginInfo, type ProjectInfo } from './query/projectInfo';
