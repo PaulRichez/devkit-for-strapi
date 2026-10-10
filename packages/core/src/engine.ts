@@ -18,9 +18,11 @@ import type {
   OutlineRelation,
   ProjectSummary,
   ReferenceLocation,
+  RouteInfo,
   StrapiProject,
   TargetLocation,
 } from './model/types';
+import { listRoutes, type ListRoutesOptions } from './index/routes';
 import { buildModelMaps, componentInsights, contentTypeInsights, type ModelMaps } from './reference/insights';
 import {
   buildReferenceIndex,
@@ -90,6 +92,8 @@ export interface StrapiEngine {
    * a watcher on node_modules.
    */
   refreshInstalledIfStale(): Promise<void>;
+  /** Every project's HTTP routes (see `listRoutes`), for the editor's Routes view. */
+  getRoutes(opts?: ListRoutesOptions): Promise<Array<{ root: string; routes: RouteInfo[] }>>;
 }
 
 /** Minimum delay between two installed-plugin freshness checks. */
@@ -299,6 +303,19 @@ class Engine implements StrapiEngine {
   projectForFile(filePath: string): StrapiProject | undefined {
     const f = normalize(filePath);
     return this.projects.find((p) => isPathInside(p.root, f));
+  }
+
+  async getRoutes(opts?: ListRoutesOptions): Promise<Array<{ root: string; routes: RouteInfo[] }>> {
+    await this.refreshInstalledIfStale();
+    const out: Array<{ root: string; routes: RouteInfo[] }> = [];
+    for (const project of [...this.projects].sort((a, b) => a.root.localeCompare(b.root))) {
+      try {
+        out.push({ root: project.root, routes: await listRoutes(this.fs, project, opts) });
+      } catch {
+        out.push({ root: project.root, routes: [] });
+      }
+    }
+    return out;
   }
 
   refreshInstalledIfStale(): Promise<void> {

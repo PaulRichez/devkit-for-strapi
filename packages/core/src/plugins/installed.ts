@@ -198,6 +198,17 @@ class PluginReader {
     return v;
   }
 
+  /** Only the routes of the server entry (used for local plugins). */
+  async readRoutesFrom(entryFile: string): Promise<void> {
+    const server = await configModuleValue(this.ev, entryFile);
+    if (server.k !== 'obj') {
+      this.gap(`server entry: ${server.k === 'unknown' ? server.why : server.k}`);
+      return;
+    }
+    if (server.open) this.gap('server object not exhaustive');
+    await this.readRoutes(server);
+  }
+
   async read(entryFile: string): Promise<void> {
     const server = await configModuleValue(this.ev, entryFile);
     if (server.k !== 'obj') {
@@ -457,8 +468,37 @@ export async function contentTypeFromDefinition(
   return ct;
 }
 
+/**
+ * The routes a plugin server entry declares (Strapi's rules: an array is one
+ * `admin` router; routers default to `admin` / `/<plugin>`). Used for local
+ * plugins, whose installed counterpart is read by {@link readInstalledPlugins}.
+ */
+export async function readPluginRoutes(
+  fs: FileSystem,
+  pluginName: string,
+  entryFile: string,
+  apiPrefix: string | undefined,
+): Promise<{ routes: PluginRoute[]; complete: boolean }> {
+  const ev = new StaticEvaluator(fs, {}, strapiExternals);
+  const plugin: InstalledPlugin = {
+    name: pluginName,
+    packageName: pluginName,
+    dir: dirname(entryFile),
+    origin: 'dependency',
+    enabled: 'yes',
+    hasServer: true,
+    complete: true,
+    gaps: [],
+    contentTypes: [],
+    artifacts: [],
+    routes: [],
+  };
+  await new PluginReader(ev, plugin, apiPrefix).readRoutesFrom(entryFile);
+  return { routes: plugin.routes, complete: plugin.complete };
+}
+
 /** `api.rest.prefix` from `config/api.*` (default `/api`). */
-async function readApiPrefix(fs: FileSystem, root: string, ev: StaticEvaluator): Promise<string | undefined> {
+export async function readApiPrefix(fs: FileSystem, root: string, ev: StaticEvaluator): Promise<string | undefined> {
   for (const ext of ['.ts', '.js', '.mjs', '.cjs']) {
     const file = join(root, 'config', `api${ext}`);
     if ((await fs.stat(file))?.type !== FileType.File) continue;

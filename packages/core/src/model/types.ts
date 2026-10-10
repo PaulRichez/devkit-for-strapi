@@ -53,6 +53,8 @@ export interface ContentType {
   installed?: boolean;
   /** True when the schema's attributes could not be read exhaustively (the UID itself is certain). */
   partialAttributes?: boolean;
+  /** `pluginOptions.i18n.localized === true` (drives Strapi 4 i18n's injected localization route). */
+  i18nLocalized?: boolean;
 }
 
 export interface ComponentDef {
@@ -430,14 +432,31 @@ export interface ProjectSummary {
   };
 }
 
-/** One HTTP route, parsed statically from a `routes/*` file. */
+/** One HTTP route, parsed statically (project route files, local and installed plugins). */
 export interface RouteInfo {
   method: string;
+  /** Path as declared (router-relative, without the API prefix). */
   path: string;
-  /** Route handler ref, e.g. `api::product.product.find`. */
+  /** Route handler ref, e.g. `api::product.product.find` (`<inline>` for a function handler). */
   handler: string;
   policies?: string[];
   middlewares?: string[];
-  /** `router-file` = explicit route; `core-router` = synthesized from `createCoreRouter`. */
-  source: 'router-file' | 'core-router';
+  /**
+   * `router-file` = explicit route; `core-router` = synthesized from `createCoreRouter`;
+   * `plugin` = declared by a plugin's server; `plugin-injected` = added to an API by a
+   * plugin at boot (Strapi 4 i18n's `/:id/localizations`).
+   */
+  source: 'router-file' | 'core-router' | 'plugin' | 'plugin-injected';
+  /** Where the route is declared (route object, `createCoreRouter` call, plugin route). */
+  filePath?: string;
+  offset?: number;
+  /** Mounted path, API prefix included (`/api/articles/:id`); absent when the prefix isn't literal. */
+  fullPath?: string;
+  /** `content-api` (public API) or `admin` (admin panel). */
+  type?: 'content-api' | 'admin';
+  /** `api::<api>` or `plugin::<name>`. */
+  owner?: string;
+  origin?: 'project' | 'local-plugin' | 'installed-plugin';
+  /** `config.auth === false` — reachable without authentication. */
+  public?: boolean;
 }

@@ -72,5 +72,7 @@ export function parseSchemaFile(raw: string, ctx: SchemaContext): ContentType | 
     defOffset: Math.max(0, raw.indexOf('"kind"')),
   };
   if (ctx.pluginName) result.pluginName = ctx.pluginName;
+  const i18n = asRecord(asRecord(json.pluginOptions)?.i18n);
+  if (i18n?.localized === true) result.i18nLocalized = true;
   return result;
 }

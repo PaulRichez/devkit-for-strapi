@@ -15,6 +15,9 @@ import { FileType } from '../fs/FileSystem';
 import { join } from '../fs/paths';
 import { CORE_ACTIONS } from '../model/constants';
 import type { RouteInfo, StrapiProject } from '../model/types';
+import { StaticEvaluator } from '../plugins/evaluate';
+import { type PluginRoute, readApiPrefix, readPluginRoutes } from '../plugins/installed';
+import { pluginLayoutOf } from './indexer';
 
 interface CoreRouter {
   uid: string;
@@ -84,7 +87,7 @@ function strArrayProp(obj: ts.ObjectLiteralExpression, name: string): string[] |
   return out;
 }
 
-function parseCustomRoutes(obj: ts.ObjectLiteralExpression): RouteInfo[] {
+function parseCustomRoutes(obj: ts.ObjectLiteralExpression, filePath: string, sf: ts.SourceFile): RouteInfo[] {
   const routesProp = findProp(obj, 'routes');
   if (!routesProp || !ts.isArrayLiteralExpression(routesProp.initializer)) return [];
   const out: RouteInfo[] = [];
@@ -95,7 +98,9 @@ function parseCustomRoutes(obj: ts.ObjectLiteralExpression): RouteInfo[] {
     const handler = strProp(el, 'handler');
     if (!method || !path || !handler) continue;
     const config = objProp(el, 'config');
-    const route: RouteInfo = { method, path, handler, source: 'router-file' };
+    const route: RouteInfo = { method, path, handler, source: 'router-file', filePath, offset: el.getStart(sf) };
+    const auth = config && findProp(config, 'auth');
+    if (auth && auth.initializer.kind === ts.SyntaxKind.FalseKeyword) route.public = true;
     const policies = config && strArrayProp(config, 'policies');
     const middlewares = config && strArrayProp(config, 'middlewares');
     if (policies?.length) route.policies = policies;
@@ -139,7 +144,7 @@ const SINGLE_TYPE_CRUD: { action: string; method: string; suffix: string }[] = [
   { action: 'delete', method: 'DELETE', suffix: '' },
 ];
 
-function synthesizeCrud(cr: CoreRouter, project: StrapiProject): RouteInfo[] {
+function synthesizeCrud(cr: CoreRouter, project: StrapiProject, filePath?: string, offset?: number): RouteInfo[] {
   const ct = project.index.contentTypes.get(cr.uid);
   const single = ct?.kind === 'singleType';
   const name = single
@@ -151,6 +156,8 @@ function synthesizeCrud(cr: CoreRouter, project: StrapiProject): RouteInfo[] {
   ).map((r) => {
     const cfg = cr.perAction.get(r.action);
     const route: RouteInfo = { method: r.method, path: base + r.suffix, handler: `${cr.uid}.${r.action}`, source: 'core-router' };
+    if (filePath !== undefined) route.filePath = filePath;
+    if (offset !== undefined) route.offset = offset;
     if (cfg?.policies?.length) route.policies = cfg.policies;
     if (cfg?.middlewares?.length) route.middlewares = cfg.middlewares;
     return route;
@@ -158,14 +165,91 @@ function synthesizeCrud(cr: CoreRouter, project: StrapiProject): RouteInfo[] {
 }
 
 function routesOfFile(filePath: string, text: string, project: StrapiProject): RouteInfo[] {
-  const expr = exportExpression(parseSource(filePath, text));
+  const sf = parseSource(filePath, text);
+  let expr = exportExpression(sf);
+  // `const customRoutes = { routes: [...] }; export default customRoutes;` — follow a
+  // top-level const of the same file (the only indirection Strapi route files use).
+  if (expr && ts.isIdentifier(expr)) expr = localConstInitializer(sf, expr.text);
   if (!expr) return [];
   if (ts.isCallExpression(expr) && isCalleeNamed(expr, 'createCoreRouter')) {
     const cr = parseCoreRouter(expr);
-    return cr ? synthesizeCrud(cr, project) : [];
+    return cr ? synthesizeCrud(cr, project, filePath, expr.getStart(sf)) : [];
   }
-  if (ts.isObjectLiteralExpression(expr)) return parseCustomRoutes(expr);
+  if (ts.isObjectLiteralExpression(expr)) return parseCustomRoutes(expr, filePath, sf);
   return [];
+}
+
+/** The initializer of a top-level `const`/`let`/`var <name> = …` in `sf`, if unique. */
+function localConstInitializer(sf: ts.SourceFile, name: string): ts.Expression | undefined {
+  let found: ts.Expression | undefined;
+  let count = 0;
+  for (const stmt of sf.statements) {
+    if (!ts.isVariableStatement(stmt)) continue;
+    for (const d of stmt.declarationList.declarations) {
+      if (ts.isIdentifier(d.name) && d.name.text === name && d.initializer) {
+        found = d.initializer;
+        count++;
+      }
+    }
+  }
+  if (count !== 1 || !found) return undefined;
+  while (ts.isParenthesizedExpression(found) || ts.isAsExpression(found) || ts.isSatisfiesExpression(found)) found = found.expression;
+  return found;
+}
+
+/** Mount a route path under a prefix the way koa-router does (no `//`, no trailing `/`). */
+function mountPath(...parts: string[]): string {
+  let p = parts.join('').replace(/\/{2,}/g, '/');
+  if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+  return p || '/';
+}
+
+function fromPluginRoute(r: PluginRoute, origin: 'local-plugin' | 'installed-plugin'): RouteInfo {
+  const route: RouteInfo = {
+    method: r.method,
+    path: r.path,
+    handler: r.handler ?? '<inline>',
+    source: 'plugin',
+    fullPath: r.fullPath,
+    type: r.type,
+    owner: `plugin::${r.plugin}`,
+    origin,
+  };
+  if (r.policies.length) route.policies = r.policies;
+  if (r.middlewares.length) route.middlewares = r.middlewares;
+  if (r.public) route.public = true;
+  if (r.loc) {
+    route.filePath = r.loc.file;
+    route.offset = r.loc.pos;
+  }
+  return route;
+}
+
+const ENTRY_NAMES = ['index.ts', 'index.js', 'index.mts', 'index.mjs', 'index.cts', 'index.cjs'];
+
+/** The source entry of a local plugin's server (source first: it is what the developer edits). */
+async function localPluginEntry(fs: FileSystem, srcDir: string, name: string): Promise<string | undefined> {
+  const base = join(srcDir, 'plugins', name);
+  const layout = await pluginLayoutOf(fs, srcDir, name);
+  const dirs = layout === 'root' ? [base] : [join(base, layout)];
+  for (const d of dirs) {
+    for (const n of ENTRY_NAMES) {
+      const p = join(d, n);
+      if ((await fs.stat(p))?.type === FileType.File) return p;
+    }
+  }
+  for (const n of ['strapi-server.ts', 'strapi-server.js', 'strapi-server.mjs', 'strapi-server.cjs']) {
+    const p = join(base, n);
+    if ((await fs.stat(p))?.type === FileType.File) return p;
+  }
+  return undefined;
+}
+
+export interface ListRoutesOptions {
+  /** Include routes declared by local and installed plugins (default true). */
+  plugins?: boolean;
+  /** Include `admin`-type routes (the admin panel's own API; default false). */
+  admin?: boolean;
 }
 
 // Aligned with the reference walk's EXT and the indexer's CODE_EXT (incl. .mts/.cts)
@@ -225,9 +309,15 @@ export function collectCoreRouterHandlers(filePath: string, text: string, projec
   return out;
 }
 
-/** The HTTP route table of a project (static parse of `src/api/<api>/routes/*`). */
-export async function listRoutes(fs: FileSystem, project: StrapiProject): Promise<RouteInfo[]> {
+/**
+ * The HTTP route table of a project: its own API routes (static parse of
+ * `src/api/<api>/routes/*`, auto-CRUD synthesized from `createCoreRouter`) and,
+ * unless `plugins: false`, the routes local and installed plugins declare —
+ * each with its declaration location and mounted path. Never boots Strapi.
+ */
+export async function listRoutes(fs: FileSystem, project: StrapiProject, opts: ListRoutesOptions = {}): Promise<RouteInfo[]> {
   const out: RouteInfo[] = [];
+  const prefix = project.installed ? project.installed.apiPrefix : await readApiPrefix(fs, project.root, new StaticEvaluator(fs));
   const apiDir = join(project.srcDir, 'api');
   for (const api of await entries(fs, apiDir)) {
     if (api.type !== FileType.Directory) continue;
@@ -236,11 +326,50 @@ export async function listRoutes(fs: FileSystem, project: StrapiProject): Promis
       if (f.type !== FileType.File || !ROUTE_FILE.test(f.name) || f.name.endsWith('.d.ts')) continue;
       const file = join(routesDir, f.name);
       try {
-        out.push(...routesOfFile(file, await fs.readFile(file), project));
+        for (const r of routesOfFile(file, await fs.readFile(file), project)) {
+          r.owner = `api::${api.name}`;
+          r.type = 'content-api';
+          r.origin = 'project';
+          if (prefix !== undefined) r.fullPath = mountPath(prefix, r.path);
+          out.push(r);
+        }
       } catch {
         /* unreadable route file — skip */
       }
     }
   }
-  return out;
+
+  // Strapi 4 i18n adds `POST …/localizations` to every localized content-type's core router.
+  if (project.version === 4 && project.installed?.plugins.some((p) => p.name === 'i18n')) {
+    for (const r of [...out]) {
+      if (r.source !== 'core-router' || r.method !== 'GET' || !r.handler.endsWith('.find')) continue;
+      const uid = r.handler.slice(0, -'.find'.length);
+      const ct = project.index.contentTypes.get(uid);
+      if (!ct?.i18nLocalized) continue;
+      const path = ct.kind === 'singleType' ? `${r.path}/localizations` : `${r.path}/:id/localizations`;
+      const injected: RouteInfo = { ...r, method: 'POST', path, handler: `${uid}.createLocalization`, source: 'plugin-injected' };
+      delete injected.policies;
+      delete injected.middlewares;
+      if (prefix !== undefined) injected.fullPath = mountPath(prefix, path);
+      out.push(injected);
+    }
+  }
+
+  if (opts.plugins !== false) {
+    for (const name of [...project.index.pluginNames].sort()) {
+      const entry = await localPluginEntry(fs, project.srcDir, name);
+      if (!entry) continue;
+      try {
+        const { routes } = await readPluginRoutes(fs, name, entry, prefix);
+        out.push(...routes.map((r) => fromPluginRoute(r, 'local-plugin')));
+      } catch {
+        /* unreadable plugin — skip */
+      }
+    }
+    for (const p of project.installed?.plugins ?? []) {
+      if (project.index.pluginNames.has(p.name)) continue; // a local plugin of that name wins
+      out.push(...p.routes.map((r) => fromPluginRoute(r, 'installed-plugin')));
+    }
+  }
+  return opts.admin ? out : out.filter((r) => r.type !== 'admin');
 }

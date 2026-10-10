@@ -449,13 +449,18 @@ export function registerTools(
     {
       title: 'List HTTP routes',
       description:
-        'List a project\'s HTTP route table (method, path, handler, policies, middlewares) — explicit routes plus the auto-CRUD routes synthesized from createCoreRouter. Statically parsed (no Strapi boot); framework/plugin-injected routes are not included.',
-      inputSchema: { ...selector },
+        'List a project\'s HTTP route table: method, path, mounted `fullPath` (API prefix included), handler, policies, middlewares, `public` (auth: false), and where each route is declared (`filePath`/`offset`). Covers the project\'s explicit routes, the auto-CRUD routes synthesized from createCoreRouter, and the routes local and installed plugins declare (`origin`), read from node_modules without booting Strapi. Admin-panel routes are left out unless `admin: true`.',
+      inputSchema: {
+        ...selector,
+        plugins: z.boolean().optional().describe('Include routes declared by local and installed plugins (default true).'),
+        admin: z.boolean().optional().describe('Include admin-panel (`type: "admin"`) routes (default false).'),
+      },
     },
     async (args) => {
       await ready;
       const p = pick(engine, args, roots());
-      return 'result' in p ? p.result : json(await listRoutes(fs, p.project));
+      if ('result' in p) return p.result;
+      return json(await listRoutes(fs, p.project, { ...(args.plugins !== undefined ? { plugins: args.plugins } : {}), ...(args.admin !== undefined ? { admin: args.admin } : {}) }));
     },
   );
 

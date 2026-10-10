@@ -12,6 +12,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { createEngine } from '../src/engine';
+import { listRoutes } from '../src/index/routes';
 import { readInstalledPlugins } from '../src/plugins/installed';
 import { NodeFileSystem } from './helpers/nodeFs';
 
@@ -150,3 +152,36 @@ describe.skipIf(APPS.length === 0)('oracle: static installed-plugin reading vs r
   }
 });
 
+
+describe.skipIf(APPS.length === 0)('oracle: project + local-plugin routes vs real Strapi', () => {
+  for (const app of APPS) {
+    it(`routes match Strapi for ${app}`, { timeout: 240_000 }, async () => {
+      const oracle = runOracle(app);
+      const engine = createEngine(new NodeFileSystem());
+      await engine.init([app.replace(/\\/g, '/')]);
+      const project = engine.allProjects().find((p) => normalizeRoot(p.root) === normalizeRoot(app))!;
+      expect(project, 'project discovered').toBeDefined();
+      const local = new Set(project.index.pluginNames);
+      const qualify = (owner: string, h: string | null | undefined): string =>
+        !h || h === '<inline>' ? '<fn>' : h.includes('::') ? h : `${owner}.${h}`;
+      const key = (type: string | undefined, method: string, fullPath: string | undefined, owner: string, h: string | null | undefined): string =>
+        `${type} ${method.toUpperCase()} ${fullPath} -> ${qualify(owner, h)}`;
+      const isOurs = (owner: string): boolean => owner.startsWith('api::') || local.has(owner.slice('plugin::'.length));
+      const truth = new Set(oracle.routes.filter((r) => isOurs(r.owner)).map((r) => key(r.type, r.method, r.fullPath, r.owner, r.handler)));
+      const mine = new Set(
+        (await listRoutes(new NodeFileSystem(), project, { admin: true }))
+          .filter((r) => r.origin !== 'installed-plugin')
+          .map((r) => key(r.type, r.method, r.fullPath, r.owner ?? '?', r.handler)),
+      );
+      const extra = [...mine].filter((x) => !truth.has(x));
+      const missing = [...truth].filter((x) => !mine.has(x));
+      console.log(`\n=== routes ${app}: ${mine.size} static / ${truth.size} Strapi (api + local plugins)` +
+        (extra.length ? `\n  EXTRA: ${extra.join('\n         ')}` : '') + (missing.length ? `\n  missing: ${missing.join('\n           ')}` : ''));
+      expect({ extra, missing }).toEqual({ extra: [], missing: [] });
+    });
+  }
+});
+
+function normalizeRoot(p: string): string {
+  return p.replace(/\\/g, '/').replace(/^([A-Z]):/, (_, d: string) => `${d.toLowerCase()}:`).replace(/\/$/, '');
+}
