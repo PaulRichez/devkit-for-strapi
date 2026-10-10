@@ -78,6 +78,9 @@ Inside a Strapi project — zero config, no type generation:
   - **Model** — content-types and components with their fields, the fields pointing at each one, the
     routes exposing it, its usage, and the types installed plugins bring (read-only).
   - **Plugins** — what each plugin adds, and whether DevKit checks the refs into it (and why not).
+  - **Config Sync** — with strapi-plugin-config-sync: its options and where they come from, and the
+    files of `config/sync` with readable names and their status (a file the plugin can't read is an
+    error in it).
 - **Ctrl+T on Strapi names** — UIDs, services, controllers and their actions, policies, middlewares,
   routes.
 - **Pro in the panel** — refactors from a right-click, through VS Code's Refactor Preview, and the
@@ -107,7 +110,8 @@ grepping for them**. 31 stdio tools (plus 2 deprecated aliases), in three layers
 
 **Understand** — health & impact analysis
 `list_unused` (dead code) · `list_broken_refs` · `coverage` · `find_relation_usages` · `list_refs` (glob) ·
-`dependencies` / `dependents` (the dependency graph, for cut analysis) · `get_model_diagram` (the data
+`dependencies` / `dependents` (the dependency graph, for cut analysis) · `config_sync_status` (the
+config-sync options and files) · `get_model_diagram` (the data
 model as a Mermaid `erDiagram`, Pro). `list_routes` also explains a route: what a request goes through,
 in Strapi's order.
 

@@ -58,6 +58,20 @@
   fields Strapi adds to every content-type on demand; export as Markdown (Mermaid),
   PNG or SVG.
 
+**New: Config Sync**
+
+- For projects using strapi-plugin-config-sync, read from the files, without starting
+  Strapi or reading the database: the plugin's options and where each comes from (a
+  short `excludedConfig` is merged index by index with the plugin's defaults, as
+  Strapi does — DevKit says which defaults it no longer excludes), and the files of
+  the sync directory with readable names and their status. A file config-sync can't
+  read is an error in it.
+- A **Config Sync** view in the panel, a content-manager view entry per type in
+  **Model**, the roles of `config/sync` that allow a route in **Routes**, the files
+  config-sync can't read in **Health**.
+- MCP: `config_sync_status`; `project_info` says when a project uses config-sync;
+  `list_routes` with `pipeline: true` adds the synced roles on the auth step.
+
 **Routes: what Strapi really does with names**
 
 - Policy and middleware names are checked the way Strapi looks them up (read in

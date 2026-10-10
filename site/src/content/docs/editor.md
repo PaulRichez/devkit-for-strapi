@@ -68,7 +68,8 @@ usage insights (incoming relations, route handlers, data usages).
 
 ## The DevKit panel
 
-The **DevKit for Strapi** icon in the activity bar opens four views. They are read
+The **DevKit for Strapi** icon in the activity bar opens four views, and a fifth,
+**Config Sync**, in projects using strapi-plugin-config-sync. They are read
 from your code (schemas, route files, `config/`, the plugins in `node_modules`)
 without starting Strapi, and show the saved files.
 
@@ -130,6 +131,12 @@ Local and installed plugins:
 - whether DevKit checks the refs into it, and when not, why;
 - the ones disabled in `config/plugins`;
 - the ones your code rewrites or extends.
+
+### Config Sync
+
+In projects using strapi-plugin-config-sync: the plugin's options and where they
+come from, and the files of `config/sync` with readable names and their status — a
+file config-sync can't read is an error in the file. See [Config Sync](/config-sync/).
 
 ### Relations diagram — Pro
 

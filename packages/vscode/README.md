@@ -54,6 +54,9 @@ starting Strapi:
   the types installed plugins bring (read-only).
 - **Plugins** — local and installed: what each adds, whether DevKit checks the refs
   into it (and why not), the disabled ones, the ones your code rewrites.
+- **Config Sync** — in projects using strapi-plugin-config-sync: its options and
+  where they come from, and the files of `config/sync` with readable names and their
+  status (a file the plugin can't read is an error in it).
 
 ![The DevKit panel (Health, Routes with a route's pipeline, Model, Plugins) next to the relations diagram in its MCD view](https://devkit-for-strapi.paulrichez.fr/screenshots/panel-diagram.png)
 

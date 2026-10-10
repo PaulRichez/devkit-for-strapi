@@ -80,6 +80,7 @@ export default defineConfig({
             { label: 'In your editor', link: '/editor/' },
             { label: 'For your AI agent (MCP)', link: '/mcp/' },
             { label: 'MCP tool reference', link: '/mcp-tools/' },
+            { label: 'Config Sync', link: '/config-sync/' },
             { label: 'Pro', link: '/pro/' },
           ],
         },
