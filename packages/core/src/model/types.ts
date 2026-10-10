@@ -27,6 +27,8 @@ export interface AttributeInfo {
   inversedBy?: string;
   /** A repeatable component. */
   repeatable?: boolean;
+  /** A media field holding several files. */
+  multiple?: boolean;
   required?: boolean;
   unique?: boolean;
   /** Not returned by the API. */
@@ -50,6 +52,8 @@ export interface ContentType {
   info: { singularName?: string; pluralName?: string; displayName?: string };
   /** The database table (`collectionName`), when declared. */
   collectionName?: string;
+  /** `options.draftAndPublish === true`. */
+  draftAndPublish?: boolean;
   attributes: Record<string, AttributeInfo>;
   /** Char offset to anchor UI (e.g. a CodeLens) on, near the definition. */
   defOffset?: number;

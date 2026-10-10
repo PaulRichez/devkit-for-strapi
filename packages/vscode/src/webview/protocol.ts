@@ -1,38 +1,17 @@
 /** Messages between the extension and the relations diagram webview (no DOM, no vscode: shared by both). */
 
-export interface DiagramNode {
-  /** The UID. */
-  id: string;
-  label: string;
-  kind: 'collectionType' | 'singleType' | 'component';
-  /** `api`, `local-plugin`, `installed-plugin`, `component`. */
-  origin: string;
-  fields: number;
-}
+import type { DiagramData, DiagramOptions } from 'devkit-for-strapi-core/diagram';
 
-export interface DiagramEdge {
-  from: string;
-  to: string;
-  /** The field. */
-  label: string;
-  kind: 'relation' | 'component';
-  /** The relation kind (`manyToOne`, …). */
-  relation?: string;
-}
+export type { DiagramAttr, DiagramData, DiagramEdge, DiagramLink, DiagramNode, DiagramOptions } from 'devkit-for-strapi-core/diagram';
 
-export interface DiagramData {
-  root: string;
-  project: string;
-  projects: Array<{ root: string; name: string }>;
-  nodes: DiagramNode[];
-  edges: DiagramEdge[];
-}
-
-export type ToWebview = { type: 'data'; data: DiagramData };
+export type ToWebview = { type: 'data'; data: DiagramData } | { type: 'render'; format: 'svg' | 'png' };
 
 export type FromWebview =
   | { type: 'ready' }
   | { type: 'reveal'; uid: string }
   | { type: 'open'; uid: string }
   | { type: 'project'; root: string }
-  | { type: 'export'; svg: string };
+  /** "Export…": the extension asks for the format; the options are what the view shows. */
+  | { type: 'exportMenu'; options: DiagramOptions }
+  /** The rendered drawing: SVG text, or PNG as base64. */
+  | { type: 'export'; format: 'svg' | 'png'; data: string };

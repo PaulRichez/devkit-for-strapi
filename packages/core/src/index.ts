@@ -92,6 +92,22 @@ export { projectInfo, type PluginInfo, type ProjectInfo } from './query/projectI
 export { readGlobalMiddlewares, type GlobalMiddlewareEntry, type GlobalMiddlewares } from './index/globalMiddlewares';
 export { pathMatches, qualifiedHandler, routePipeline, routesByAction, type PipelineStep, type RoutePipeline, type StepStatus } from './query/routePipeline';
 export { pluginKeyOffsets } from './plugins/config';
+export {
+  ADMIN_USER,
+  diagramLinks,
+  diagramRows,
+  diagramView,
+  linkEnds,
+  toMermaid,
+  UPLOAD_FILE,
+  type DiagramAttr,
+  type DiagramData,
+  type DiagramEdge,
+  type DiagramLink,
+  type DiagramNode,
+  type DiagramOptions,
+} from './query/diagram';
+export { diagramOf } from './query/diagramOf';
 export { modelOf, type ModelComponent, type ModelContentType, type ModelField, type ModelIncoming, type ProjectModel } from './query/model';
 export { devkitNameCandidates, lookupStrapiName, ownerOf, strapiNameCandidates, type NameLookup, type RouteOwner } from './resolve/strapiNames';
 export { movedUid, refKind, renamedUid, storedUidWarnings, type ActionChange, type RefKind, type UidChange } from './edit/storedUids';

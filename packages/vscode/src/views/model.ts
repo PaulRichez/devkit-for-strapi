@@ -38,6 +38,7 @@ type TypeRef = { kind: 'ct'; ct: ModelContentType } | { kind: 'component'; c: Mo
 type Node = TreeNode &
   (
     | { kind: 'project'; root: string }
+    | { kind: 'diagram'; root: string }
     | { kind: 'section'; root: string; section: 'types' | 'components' | 'plugins' }
     | { kind: 'category'; root: string; label: string; items: ModelComponent[] }
     | { kind: 'plugin'; root: string; plugin: string; items: ModelContentType[] }
@@ -142,8 +143,10 @@ export class ModelProvider extends CachedTree<Node> {
     if (!element) {
       await this.load();
       const roots = orderedRoots(this.engine, [...this.models.keys()]);
-      if (roots.length === 1) return this.sections(roots[0]!);
-      return roots.map((root) => ({ kind: 'project', id: `model|${root}`, root }));
+      // The diagram, in plain sight (a title-bar icon only shows on hover).
+      const diagram: Node[] = [...this.models.values()].some((m) => m.contentTypes.length) ? [{ kind: 'diagram', id: 'model|diagram', root: roots[0] ?? '' }] : [];
+      if (roots.length === 1) return [...diagram, ...this.sections(roots[0]!)];
+      return [...diagram, ...roots.map((root): Node => ({ kind: 'project', id: `model|${root}`, root }))];
     }
     const m = this.models.get(element.root);
     if (!m) return [];
@@ -242,6 +245,15 @@ export class ModelProvider extends CachedTree<Node> {
         item.id = n.id;
         item.tooltip = n.root;
         item.iconPath = new vscode.ThemeIcon('folder');
+        return item;
+      }
+      case 'diagram': {
+        const item = new vscode.TreeItem('Open the relations diagram', vscode.TreeItemCollapsibleState.None);
+        item.id = n.id;
+        item.description = 'Pro';
+        item.iconPath = new vscode.ThemeIcon('type-hierarchy', new vscode.ThemeColor('charts.blue'));
+        item.tooltip = 'Every content-type and its relations as a graph (DevKit for Strapi Pro).';
+        item.command = { command: 'strapiDevkit.model.diagram', title: 'Open the relations diagram' };
         return item;
       }
       case 'section': {

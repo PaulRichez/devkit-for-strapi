@@ -522,6 +522,7 @@ export async function contentTypeFromDefinition(
   };
   const collectionName = asString(plain.collectionName);
   if (collectionName) ct.collectionName = collectionName;
+  if (asRecord(plain.options)?.draftAndPublish === true) ct.draftAndPublish = true;
   const attrsV = await ev.getProp(schemaV, 'attributes');
   if (attrsV.k === 'obj') {
     ct.attributes = await readAttributes(ev, attrsV, ct.schemaPath);

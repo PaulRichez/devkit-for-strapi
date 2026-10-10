@@ -14,6 +14,8 @@ import { createEngine, type StrapiEngine } from '../src/engine';
 import { MemoryFileSystem } from '../src/fs/MemoryFileSystem';
 import { readGlobalMiddlewares } from '../src/index/globalMiddlewares';
 import type { RouteInfo, StrapiProject } from '../src/model/types';
+import { diagramLinks, diagramRows, diagramView, toMermaid } from '../src/query/diagram';
+import { diagramOf } from '../src/query/diagramOf';
 import { modelOf } from '../src/query/model';
 import { qualifiedHandler, routePipeline, routesByAction } from '../src/query/routePipeline';
 import { devkitNameCandidates, lookupStrapiName, strapiNameCandidates } from '../src/resolve/strapiNames';
@@ -267,5 +269,41 @@ describe('modelOf', () => {
     const { components } = modelOf(project);
     expect(components.find((c) => c.uid === 'shared.seo')!.usedBy.map((u) => u.field).sort()).toEqual(['blocks', 'seo']);
     expect(components.find((c) => c.uid === 'shared.orphan')!.usedBy).toEqual([]);
+  });
+});
+
+describe('the data-model diagram (shared by the editor, its exports and the MCP)', () => {
+  let project: StrapiProject;
+  beforeAll(async () => {
+    const engine = createEngine(new MemoryFileSystem(FILES));
+    await engine.init([ROOT]);
+    project = engine.allProjects()[0]!;
+  });
+
+  it('one link per association, told from its owning side, with its cardinalities', () => {
+    const view = diagramView(diagramOf(project), { components: true });
+    const links = diagramLinks(view.edges);
+    const author = links.find((l) => l.label === 'author / articles')!;
+    expect(author).toMatchObject({ from: 'api::article.article', to: 'api::author.author', ends: ['n', '1'] });
+    expect(links.find((l) => l.label === 'mentor')?.ends).toEqual(['1', '1']);
+    expect(links.find((l) => l.label === 'blocks' && l.to === 'shared.quote')?.ends).toEqual(['1', 'n']);
+    expect(links.filter((l) => l.label === 'articles')).toEqual([]); // merged into "author / articles"
+  });
+
+  it("adds what Strapi gives every content-type, on request", () => {
+    const data = diagramOf(project);
+    const view = diagramView(data, { strapiFields: true });
+    expect(view.nodes.some((n) => n.id === 'admin::user')).toBe(true);
+    expect(view.edges.filter((e) => e.kind === 'creator').length).toBe(2); // article, author
+    const rows = diagramRows(view.nodes.find((n) => n.id === 'api::author.author')!, data.version, true).map((r) => r.name);
+    expect(rows).toEqual(['createdAt', 'updatedAt', 'publishedAt']); // Strapi 5: publishedAt always
+  });
+
+  it('writes a Mermaid erDiagram', () => {
+    const { mermaid, entities } = toMermaid(diagramOf(project));
+    expect(entities).toBe(2);
+    expect(mermaid).toContain('api_article_article["Article"] {');
+    expect(mermaid).toContain('string title "required"');
+    expect(mermaid).toContain('api_article_article }o--o| api_author_author : "author / articles"');
   });
 });

@@ -4,6 +4,8 @@ import {
   callFormCoverage,
   dependencies,
   dependents,
+  diagramOf,
+  toMermaid,
   type FileSystem,
   getSchema,
   listArtifacts,
@@ -246,10 +248,11 @@ export function registerTools(
     return kind ? storedUidWarnings({ uids: [{ kind, from: ref, to: renamedUid(ref, newName) }] }) : [];
   };
 
-  // Auto-gate the Pro (write/refactor) tools: without a licence they return the
-  // upsell instead of running, so an agent learns the capability exists and how
-  // to unlock it. Read/analyse tools are never gated; plan_* is gated as well as
-  // apply_* so an agent can't apply a free plan with its own edit tools.
+  // Auto-gate the Pro tools (writes/refactors, and the data-model diagram): without a
+  // licence they return the upsell instead of running, so an agent learns the
+  // capability exists and how to unlock it. The other read/analyse tools are never
+  // gated; plan_* is gated as well as apply_* so an agent can't apply a free plan with
+  // its own edit tools.
   const GATED = new Set<string>(proToolNames());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const gate = (cb: (...a: any[]) => unknown, name: string) =>
@@ -429,6 +432,37 @@ export function registerTools(
       await ready;
       const p = pick(engine, args, roots());
       return 'result' in p ? p.result : json(listArtifacts(p.project, args.kind));
+    },
+  );
+
+  reg(
+    'get_model_diagram',
+    {
+      title: 'Data model diagram (Mermaid)',
+      description:
+        "The project's data model as a Mermaid `erDiagram`: content-types (and, optionally, components) with their fields, one line per association (a bidirectional relation's two fields as one) with its cardinalities, media fields linked to the upload plugin's File, and the plugin types they link to. Read from the schemas, not from a running Strapi. Paste it in a README, a doc or an issue; `focus` narrows it to some types and their neighbours. With `strapiFields`, adds what Strapi gives every content-type (createdAt, updatedAt, publishedAt, createdBy/updatedBy → admin::user).",
+      inputSchema: {
+        ...selector,
+        components: z.boolean().optional().describe('Include components (default false).'),
+        allPlugins: z.boolean().optional().describe('Every installed plugin type, not only those the project links to (default false).'),
+        media: z.boolean().optional().describe("Media fields → the upload plugin's File (default true)."),
+        strapiFields: z.boolean().optional().describe('The fields Strapi adds to every content-type (default false).'),
+        focus: z.array(z.string()).optional().describe('Only these UIDs and the types they link to.'),
+      },
+    },
+    async (args) => {
+      await ready;
+      const p = pick(engine, args, roots());
+      if ('result' in p) return p.result;
+      const opts = {
+        ...(args.components !== undefined ? { components: args.components } : {}),
+        ...(args.allPlugins !== undefined ? { allPlugins: args.allPlugins } : {}),
+        ...(args.media !== undefined ? { media: args.media } : {}),
+        ...(args.strapiFields !== undefined ? { strapiFields: args.strapiFields } : {}),
+        ...(args.focus?.length ? { focus: args.focus } : {}),
+      };
+      const d = toMermaid(diagramOf(p.project), opts);
+      return json({ format: 'mermaid', entities: d.entities, links: d.links, mermaid: d.mermaid });
     },
   );
 

@@ -35,6 +35,7 @@ export interface ModelContentType {
   schemaPath: string;
   defOffset: number;
   collectionName?: string;
+  draftAndPublish?: boolean;
   /** A `src/extensions` overlay: only the extension's own fields (see ContentType.extension). */
   extension?: boolean;
   /** The fields could not all be read: the list is partial. */
@@ -125,6 +126,7 @@ export function modelOf(project: StrapiProject): ProjectModel {
       };
       if (ct.pluginName) out.pluginName = ct.pluginName;
       if (ct.collectionName) out.collectionName = ct.collectionName;
+      if (ct.draftAndPublish) out.draftAndPublish = true;
       if (ct.extension) out.extension = true;
       if (ct.partialAttributes) out.partial = true;
       if (inCode) out.inCode = true;

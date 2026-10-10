@@ -43,9 +43,9 @@ describe('MCP server over stdio (real round-trip)', () => {
     await client?.close();
   });
 
-  it('lists the thirty-two tools (server_info + read + graph + move/extract/rename/schema/apply + 2 deprecated aliases)', async () => {
+  it('lists the thirty-three tools (server_info + read + graph + diagram + move/extract/rename/schema/apply + 2 deprecated aliases)', async () => {
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(32);
+    expect(tools.length).toBe(33);
   });
 
   it('answers get_schema with the real schema', async () => {

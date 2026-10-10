@@ -27,7 +27,7 @@ export interface ProUpsell {
   activate: string;
 }
 
-/** Every Pro (write/refactor) tool, mapped to the capability it belongs to. */
+/** Every Pro tool (writes, refactors, the data-model diagram), mapped to the capability it belongs to. */
 const TOOL_FEATURE: Record<string, string> = {
   plan_rename_method: 'Propagated rename',
   plan_rename_entity: 'Propagated rename',
@@ -41,6 +41,7 @@ const TOOL_FEATURE: Record<string, string> = {
   rename_attribute: 'Schema edits', // deprecated alias of plan_rename_attribute
   apply_edits: 'Safe apply',
   apply_rename: 'Safe apply',
+  get_model_diagram: 'Relations diagram',
 };
 
 /** Is this MCP tool gated behind a Pro license? */
@@ -48,7 +49,7 @@ export function isProTool(tool: string): boolean {
   return tool in TOOL_FEATURE;
 }
 
-/** The names of every gated tool (read tools are never here). */
+/** The names of every gated tool (the read tools are free, except the diagram). */
 export function proToolNames(): string[] {
   return Object.keys(TOOL_FEATURE);
 }

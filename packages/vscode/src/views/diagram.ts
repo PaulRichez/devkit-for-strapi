@@ -1,7 +1,7 @@
-import { modelOf, paths, type StrapiEngine } from 'devkit-for-strapi-core';
+import { diagramOf, paths, type StrapiEngine, toMermaid } from 'devkit-for-strapi-core';
 import { GET_PRO_URL } from 'devkit-for-strapi-pro';
 import * as vscode from 'vscode';
-import type { DiagramData, FromWebview, ToWebview } from '../webview/protocol';
+import type { FromWebview, ToWebview } from '../webview/protocol';
 import type { ModelView } from './model';
 import { openAt, orderedRoots } from './tree';
 
@@ -16,28 +16,6 @@ function nonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   for (let i = 0; i < 32; i++) s += chars[Math.floor(Math.random() * chars.length)];
   return s;
-}
-
-export function diagramData(engine: StrapiEngine, root: string): DiagramData | undefined {
-  const project = engine.allProjects().find((p) => p.root === root);
-  if (!project) return undefined;
-  const m = modelOf(project);
-  const nodes: DiagramData['nodes'] = [
-    ...m.contentTypes.map((c) => ({ id: c.uid, label: c.displayName, kind: c.kind, origin: c.origin, fields: c.fields.length })),
-    ...m.components.map((c) => ({ id: c.uid, label: c.displayName, kind: 'component' as const, origin: 'component', fields: c.fields.length })),
-  ];
-  const edges: DiagramData['edges'] = [];
-  const add = (from: string, fields: typeof m.contentTypes[number]['fields']): void => {
-    for (const f of fields) {
-      if (f.target) edges.push({ from, to: f.target, label: f.name, kind: 'relation', ...(f.relation ? { relation: f.relation } : {}) });
-      if (f.component) edges.push({ from, to: f.component, label: f.name, kind: 'component' });
-      for (const c of new Set(f.components ?? [])) edges.push({ from, to: c, label: f.name, kind: 'component' });
-    }
-  };
-  for (const c of m.contentTypes) add(c.uid, c.fields);
-  for (const c of m.components) add(c.uid, c.fields);
-  const projects = engine.allProjects().map((p) => ({ root: p.root, name: paths.basename(p.root) }));
-  return { root, project: paths.basename(root), projects, nodes, edges };
 }
 
 function html(webview: vscode.Webview, script: vscode.Uri): string {
@@ -58,6 +36,11 @@ function html(webview: vscode.Webview, script: vscode.Uri): string {
   .bar label { display: flex; gap: 4px; align-items: center; color: var(--vscode-descriptionForeground); }
   .bar button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; padding: 4px 10px; border-radius: 2px; cursor: pointer; }
   .bar button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+  .seg { display: inline-flex; }
+  .seg button { border-radius: 0; }
+  .seg button:first-child { border-radius: 2px 0 0 2px; }
+  .seg button:last-child { border-radius: 0 2px 2px 0; }
+  .seg button.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   .spacer { flex: 1; }
   #count, .legend { color: var(--vscode-descriptionForeground); }
   .legend span { margin-left: 10px; }
@@ -77,6 +60,19 @@ function html(webview: vscode.Webview, script: vscode.Uri): string {
   .edge path { fill: none; stroke: var(--vscode-descriptionForeground); stroke-width: 1.3; }
   .edge.component path { stroke-dasharray: 4 3; stroke: var(--vscode-charts-green); }
   .edge .label { fill: var(--vscode-descriptionForeground); font-size: 10.5px; text-anchor: middle; }
+  .edge .label.start { text-anchor: start; }
+  .edge line { stroke: var(--vscode-descriptionForeground); stroke-width: 1.4; }
+  .edge.component line { stroke: var(--vscode-charts-green); stroke-dasharray: 5 3; }
+  .edge.media line, .edge.media path { stroke: var(--vscode-charts-yellow); stroke-dasharray: 2 3; }
+  .edge.creator line { stroke-dasharray: 1 4; }
+  .edge .card { fill: var(--vscode-charts-orange); font-weight: 700; font-size: 12px; text-anchor: middle; }
+  .node.mcd .head { fill: var(--vscode-sideBarSectionHeader-background, rgba(128,128,128,0.12)); stroke: none; }
+  .node.mcd .sep { stroke: var(--vscode-widget-border, rgba(128,128,128,0.35)); }
+  .node.strapi rect:first-of-type { stroke: var(--vscode-descriptionForeground); stroke-dasharray: 2 3; }
+  .node .attr { fill: var(--vscode-foreground); font-size: 11.5px; font-family: var(--vscode-editor-font-family); }
+  .node .attr.req { font-weight: 600; }
+  .node .atype { fill: var(--vscode-descriptionForeground); font-size: 11px; text-anchor: end; font-family: var(--vscode-editor-font-family); }
+  .node .native { font-style: italic; fill: var(--vscode-descriptionForeground); }
   .faded { opacity: 0.14; }
   #arrow path { fill: var(--vscode-descriptionForeground); }
   .hidden { display: none; }
@@ -86,12 +82,15 @@ function html(webview: vscode.Webview, script: vscode.Uri): string {
 <body>
   <div class="bar">
     <select id="project" title="Project"></select>
+    <span class="seg"><button id="mode-mcd" title="Entities with their fields, cardinalities on straight links">MCD</button><button id="mode-graph" title="Compact boxes and arrows">Graph</button></span>
     <input id="search" type="search" placeholder="Find a type (Enter to center)">
     <label><input id="components" type="checkbox"> Components</label>
     <label title="Off: only the plugin types your types point at"><input id="allPlugins" type="checkbox"> All plugin types</label>
+    <label title="Media fields, linked to the upload plugin's File"><input id="media" type="checkbox"> Media</label>
+    <label title="What Strapi adds to every content-type: createdAt, updatedAt, publishedAt, and createdBy / updatedBy → admin::user"><input id="strapiFields" type="checkbox"> Strapi's fields</label>
     <button id="fit" title="Fit to window">Fit</button>
     <button id="relayout" title="Lay out again (unpins dragged boxes)">Re-layout</button>
-    <button id="export" title="Save as SVG">Export SVG</button>
+    <button id="export" title="Markdown (Mermaid), PNG or SVG">Export…</button>
     <span class="spacer"></span>
     <span id="count"></span>
     <span class="legend"><span><i class="lc"></i>collection</span><span><i class="ls"></i>single</span><span><i class="lk"></i>component</span><span><i class="lp"></i>plugin</span></span>
@@ -112,8 +111,16 @@ export function registerDiagram(context: vscode.ExtensionContext, engine: Strapi
   let root: string | undefined;
   const send = (): void => {
     if (!panel || !root) return;
-    const data = diagramData(engine, root);
-    if (data) void panel.webview.postMessage({ type: 'data', data } satisfies ToWebview);
+    const project = engine.allProjects().find((p) => p.root === root);
+    if (project) void panel.webview.postMessage({ type: 'data', data: diagramOf(project, engine.allProjects()) } satisfies ToWebview);
+  };
+
+  const save = async (ext: 'md' | 'png' | 'svg', bytes: Uint8Array): Promise<void> => {
+    const filters: Record<string, string[]> = ext === 'md' ? { Markdown: ['md'] } : ext === 'png' ? { PNG: ['png'] } : { SVG: ['svg'] };
+    const target = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(paths.join(root ?? '', `strapi-relations.${ext}`)), filters });
+    if (!target) return;
+    await vscode.workspace.fs.writeFile(target, bytes);
+    void vscode.window.showInformationMessage(`Saved ${vscode.workspace.asRelativePath(target)}`);
   };
 
   const open = async (): Promise<void> => {
@@ -164,17 +171,30 @@ export function registerDiagram(context: vscode.ExtensionContext, engine: Strapi
             if (file) await openAt(file, ct?.defOffset ?? comp?.defOffset ?? 0);
             break;
           }
-          case 'export': {
-            const target = await vscode.window.showSaveDialog({
-              defaultUri: vscode.Uri.file(paths.join(root ?? '', 'strapi-relations.svg')),
-              filters: { SVG: ['svg'] },
-            });
-            if (target) {
-              await vscode.workspace.fs.writeFile(target, Buffer.from(m.svg, 'utf8'));
-              void vscode.window.showInformationMessage(`Saved ${vscode.workspace.asRelativePath(target)}`);
+          case 'exportMenu': {
+            const pick = await vscode.window.showQuickPick(
+              [
+                { label: '$(markdown) Markdown (Mermaid)', description: 'an erDiagram: renders on GitHub and in most docs', format: 'md' as const },
+                { label: '$(file-media) PNG', description: 'an image of the drawing, as shown', format: 'png' as const },
+                { label: '$(file-code) SVG', description: 'the drawing as a vector image', format: 'svg' as const },
+              ],
+              { title: 'Export the relations diagram' },
+            );
+            if (!pick) break;
+            if (pick.format === 'md') {
+              const project = engine.allProjects().find((p) => p.root === root);
+              if (!project) break;
+              const { mermaid } = toMermaid(diagramOf(project), m.options);
+              const md = `# ${paths.basename(project.root)} — data model\n\nGenerated by DevKit for Strapi from the schemas (not from a running Strapi).\n\n\`\`\`mermaid\n${mermaid}\n\`\`\`\n`;
+              await save('md', Buffer.from(md, 'utf8'));
+            } else {
+              void panel?.webview.postMessage({ type: 'render', format: pick.format } satisfies ToWebview);
             }
             break;
           }
+          case 'export':
+            await save(m.format, m.format === 'png' ? Buffer.from(m.data, 'base64') : Buffer.from(m.data, 'utf8'));
+            break;
         }
       },
       undefined,

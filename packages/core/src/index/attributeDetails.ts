@@ -11,6 +11,7 @@ export function attributeDetails(def: Record<string, unknown>): Partial<Attribut
   const inversedBy = asString(def.inversedBy);
   if (inversedBy) out.inversedBy = inversedBy;
   if (def.repeatable === true) out.repeatable = true;
+  if (def.multiple === true) out.multiple = true;
   if (def.required === true) out.required = true;
   if (def.unique === true) out.unique = true;
   if (def.private === true) out.private = true;

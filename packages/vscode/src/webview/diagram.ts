@@ -1,11 +1,15 @@
 /**
- * The relations diagram, in a webview: content-types and components as boxes,
- * relations and component uses as arrows. A deterministic force layout (no
- * dependency), pan and zoom, drag a box to pin it, click to light up its neighbours
- * (and reveal it in the Model view), double-click to open its schema, search,
- * filters, export to SVG. Data comes from the extension (`modelOf`), live.
+ * The relations diagram, in a webview. Two views of the same model:
+ * - MCD: each type as an entity listing its fields, links as straight lines with
+ *   their cardinalities (1 / n) at both ends, a bidirectional relation as one line;
+ * - Graph: compact boxes and directed arrows, for the big picture.
+ * A deterministic force layout (no dependency), pan and zoom, drag a box to pin it,
+ * click to light up its neighbours (and reveal it in the Model view), double-click to
+ * open its schema, search, filters (components, plugin types, media, the fields Strapi
+ * adds itself), export to SVG. Data comes from the extension (`modelOf`), live.
  */
 
+import { diagramLinks, diagramRows, diagramView } from 'devkit-for-strapi-core/diagram';
 import type { DiagramData, DiagramEdge, DiagramNode, FromWebview, ToWebview } from './protocol';
 
 declare function acquireVsCodeApi(): { postMessage(m: FromWebview): void; getState(): unknown; setState(s: unknown): void };
@@ -22,13 +26,32 @@ interface Box {
 }
 
 interface Saved {
+  /** Per project and mode (`<root>|<mode>`): the boxes differ in size. */
   positions: Record<string, Record<string, Box>>;
   view: Record<string, { x: number; y: number; k: number }>;
+  mode: 'mcd' | 'graph';
   components: boolean;
   allPlugins: boolean;
+  /** Media fields → the upload plugin's File. */
+  media: boolean;
+  /** What Strapi adds to every content-type: createdAt/updatedAt/publishedAt, createdBy/updatedBy → admin::user. */
+  strapiFields: boolean;
 }
 
-const saved: Saved = { positions: {}, view: {}, components: false, allPlugins: false, ...((vscode.getState() as Partial<Saved> | undefined) ?? {}) };
+const saved: Saved = {
+  positions: {},
+  view: {},
+  mode: 'mcd',
+  components: false,
+  allPlugins: false,
+  media: true,
+  strapiFields: false,
+  ...((vscode.getState() as Partial<Saved> | undefined) ?? {}),
+};
+const ROW = 16;
+const HEAD = 40;
+const MAX_ROWS = 12;
+const key = (): string => `${data?.root}|${saved.mode}`;
 let data: DiagramData | undefined;
 let boxes = new Map<string, Box>();
 let view = { x: 0, y: 0, k: 1 };
@@ -42,8 +65,8 @@ svg.appendChild(layer);
 
 function persist(): void {
   if (!data) return;
-  saved.positions[data.root] = Object.fromEntries(boxes);
-  saved.view[data.root] = view;
+  saved.positions[key()] = Object.fromEntries(boxes);
+  saved.view[key()] = view;
   vscode.setState(saved);
 }
 
@@ -51,20 +74,13 @@ function persist(): void {
 // What is shown
 // ---------------------------------------------------------------------------
 
+/** What is shown: the shared rules (`diagramView`) with this view's options. */
 function visible(): { nodes: DiagramNode[]; edges: DiagramEdge[] } {
-  if (!data) return { nodes: [], edges: [] };
-  const own = data.nodes.filter((n) => n.origin !== 'installed-plugin' && (saved.components || n.kind !== 'component'));
-  const ownIds = new Set(own.map((n) => n.id));
-  // Installed plugins' types: only those the project's types point at, unless asked for all.
-  const linked = new Set<string>();
-  for (const e of data.edges) {
-    if (ownIds.has(e.from)) linked.add(e.to);
-    if (ownIds.has(e.to)) linked.add(e.from);
-  }
-  const plugins = data.nodes.filter((n) => n.origin === 'installed-plugin' && (saved.allPlugins || linked.has(n.id)));
-  const nodes = [...own, ...plugins];
-  const ids = new Set(nodes.map((n) => n.id));
-  return { nodes, edges: data.edges.filter((e) => ids.has(e.from) && ids.has(e.to)) };
+  return data ? diagramView(data, saved) : { nodes: [], edges: [] };
+}
+
+function rowsOf(n: DiagramNode): ReturnType<typeof diagramRows> {
+  return diagramRows(n, data?.version ?? 5, saved.strapiFields);
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +99,12 @@ function rng(seed: number): () => number {
 }
 
 function sizeOf(n: DiagramNode): { w: number; h: number } {
-  return { w: Math.max(n.label.length * 8, n.id.length * 6.2) + 28, h: 42 };
+  const head = Math.max(n.label.length * 8, n.id.length * 6.2) + 28;
+  if (saved.mode === 'graph') return { w: head, h: 42 };
+  const rows = rowsOf(n);
+  const shown = Math.min(rows.length, MAX_ROWS) + (rows.length > MAX_ROWS ? 1 : 0) + (n.origin === 'strapi' ? 1 : 0);
+  const widest = Math.max(0, ...rows.map((r) => (r.name.length + (r.required ? 2 : 0)) * 7 + r.type.length * 6.4 + 46));
+  return { w: Math.max(head, widest, 150), h: HEAD + Math.max(shown, 0) * ROW + 10 };
 }
 
 /** Connected groups of types (union-find over the links). */
@@ -103,7 +124,8 @@ function components(nodes: DiagramNode[], edges: DiagramEdge[]): DiagramNode[][]
 
 /** Forces (Fruchterman–Reingold) within one connected group; pinned boxes stay. */
 function settle(list: Box[], links: Array<[number, number]>, steps: number, rand: () => number): void {
-  const k = 170;
+  // The ideal distance grows with the boxes (MCD entities are tall).
+  const k = 110 + (list.reduce((s, b) => s + Math.max(b.w, b.h), 0) / Math.max(list.length, 1)) * 0.45;
   for (let it = 0; it < steps; it++) {
     const dx = new Float64Array(list.length);
     const dy = new Float64Array(list.length);
@@ -301,6 +323,10 @@ function draw(): void {
     }
   }
   const lit = (id: string): boolean => (hits ? hits.has(id) : selected ? near.has(id) : true);
+  if (saved.mode === 'mcd') {
+    drawMcd(nodes, edges, lit, hits);
+    return;
+  }
 
   // More than two fields from one type to another: one link, "N fields" (listed in its tooltip).
   const byPair = new Map<string, DiagramEdge[]>();
@@ -367,6 +393,86 @@ function draw(): void {
     if (b.pinned) el('circle', { cx: b.w - 9, cy: 9, r: 3, class: 'pin' }, g);
   }
   $('count').textContent = `${nodes.length} types · ${edges.length} links`;
+}
+
+// ---------------------------------------------------------------------------
+// MCD: entities with their fields, straight links with cardinalities
+// ---------------------------------------------------------------------------
+
+function drawMcd(nodes: DiagramNode[], edges: DiagramEdge[], lit: (id: string) => boolean, hits: Set<string> | undefined): void {
+  const links = diagramLinks(edges);
+  const pairTotal = new Map<string, number>();
+  for (const l of links) if (l.from !== l.to) pairTotal.set([l.from, l.to].sort().join('|'), (pairTotal.get([l.from, l.to].sort().join('|')) ?? 0) + 1);
+  const pairSeen = new Map<string, number>();
+  const edgeLayer = el('g', {}, layer);
+  for (const l of links) {
+    const a = boxes.get(l.from);
+    const b = boxes.get(l.to);
+    if (!a || !b) continue;
+    const on = selected ? l.from === selected || l.to === selected : !hits || (hits.has(l.from) && hits.has(l.to));
+    const g = el('g', { class: `edge mcd ${l.kind}${on ? '' : ' faded'}` }, edgeLayer);
+    el('title', {}, g).textContent = l.detail;
+    if (l.from === l.to) {
+      // A self-relation: a square loop on the right side.
+      const x = a.x + a.w / 2;
+      const y1 = a.y - 12;
+      const y2 = a.y + 12;
+      el('path', { d: `M ${x} ${y1} H ${x + 34} V ${y2} H ${x}` }, g);
+      el('text', { x: x + 8, y: y1 - 4, class: 'card' }, g).textContent = l.ends[0];
+      el('text', { x: x + 8, y: y2 + 13, class: 'card' }, g).textContent = l.ends[1];
+      if (view.k >= 0.55 || on) el('text', { x: x + 40, y: a.y + 4, class: 'label start' }, g).textContent = l.label;
+      continue;
+    }
+    const pair = [l.from, l.to].sort().join('|');
+    const total = pairTotal.get(pair) ?? 1;
+    const idx = pairSeen.get(pair) ?? 0;
+    pairSeen.set(pair, idx + 1);
+    // Parallel straight lines for several links between the same two types.
+    const len0 = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const px = -(b.y - a.y) / len0;
+    const py = (b.x - a.x) / len0;
+    const sign = l.from < l.to ? 1 : -1; // the same side whichever way a link is declared
+    const off = (idx - (total - 1) / 2) * 18 * sign;
+    const A = { ...a, x: a.x + px * off, y: a.y + py * off };
+    const B = { ...b, x: b.x + px * off, y: b.y + py * off };
+    const [x1, y1] = border(A, B.x, B.y);
+    const [x2, y2] = border(B, A.x, A.y);
+    el('line', { x1, y1, x2, y2 }, g);
+    const len = Math.hypot(x2 - x1, y2 - y1) || 1;
+    const ux = (x2 - x1) / len;
+    const uy = (y2 - y1) / len;
+    const nx = -uy;
+    const ny = ux;
+    el('text', { x: x1 + ux * 13 + nx * 10, y: y1 + uy * 13 + ny * 10 + 4, class: 'card' }, g).textContent = l.ends[0];
+    el('text', { x: x2 - ux * 13 + nx * 10, y: y2 - uy * 13 + ny * 10 + 4, class: 'card' }, g).textContent = l.ends[1];
+    if (view.k >= 0.55 || on) el('text', { x: (x1 + x2) / 2 - nx * 8, y: (y1 + y2) / 2 - ny * 8 + 3, class: 'label' }, g).textContent = l.label;
+  }
+
+  for (const n of nodes) {
+    const b = boxes.get(n.id);
+    if (!b) continue;
+    const g = el('g', { class: `node mcd ${n.kind} ${n.origin}${lit(n.id) ? '' : ' faded'}${selected === n.id ? ' selected' : ''}`, transform: `translate(${b.x - b.w / 2},${b.y - b.h / 2})`, 'data-id': n.id }, layer);
+    el('title', {}, g).textContent = `${n.label} — ${n.id}\n${n.kind === 'component' ? 'component' : n.kind === 'singleType' ? 'single type' : 'collection type'} · ${n.fields} fields${n.origin === 'installed-plugin' ? ' · installed plugin (read-only)' : n.origin === 'strapi' ? " · Strapi's own type" : ''}${n.partial ? ' · fields partly read' : ''}`;
+    el('rect', { width: b.w, height: b.h, rx: 6 }, g);
+    el('rect', { width: b.w, height: HEAD, rx: 6, class: 'head' }, g);
+    el('line', { x1: 0, y1: HEAD, x2: b.w, y2: HEAD, class: 'sep' }, g);
+    el('text', { x: 12, y: 18, class: 'name' }, g).textContent = n.label;
+    el('text', { x: 12, y: 32, class: 'uid' }, g).textContent = n.id;
+    const rows = rowsOf(n);
+    rows.slice(0, MAX_ROWS).forEach((r, i) => {
+      const y = HEAD + 14 + i * ROW;
+      el('text', { x: 12, y, class: `attr${r.native ? ' native' : ''}${r.required ? ' req' : ''}` }, g).textContent = r.required ? `${r.name} *` : r.name;
+      el('text', { x: b.w - 12, y, class: `atype${r.native ? ' native' : ''}` }, g).textContent = r.type;
+    });
+    let y = HEAD + 14 + Math.min(rows.length, MAX_ROWS) * ROW;
+    if (rows.length > MAX_ROWS) {
+      el('text', { x: 12, y, class: 'attr native' }, g).textContent = `+ ${rows.length - MAX_ROWS} more`;
+      y += ROW;
+    }
+    if (n.origin === 'strapi') el('text', { x: 12, y, class: 'attr native' }, g).textContent = "Strapi's own (not read)";
+    if (b.pinned) el('circle', { cx: b.w - 9, cy: 9, r: 3, class: 'pin' }, g);
+  }
+  $('count').textContent = `${nodes.length} types · ${links.length} links`;
 }
 
 function fit(): void {
@@ -461,11 +567,11 @@ $('search').addEventListener('keydown', (ev) => {
   selected = n.id;
   draw();
 });
-const toggle = (id: string, key: 'components' | 'allPlugins'): void => {
+const toggle = (id: string, option: 'components' | 'allPlugins' | 'media' | 'strapiFields'): void => {
   const box = $<HTMLInputElement>(id);
-  box.checked = saved[key];
+  box.checked = saved[option];
   box.addEventListener('change', () => {
-    saved[key] = box.checked;
+    saved[option] = box.checked;
     const v = visible();
     layout(v.nodes, v.edges, false);
     draw();
@@ -474,13 +580,36 @@ const toggle = (id: string, key: 'components' | 'allPlugins'): void => {
 };
 toggle('components', 'components');
 toggle('allPlugins', 'allPlugins');
+toggle('media', 'media');
+toggle('strapiFields', 'strapiFields');
+const setMode = (mode: Saved['mode']): void => {
+  if (saved.mode === mode) return;
+  persist();
+  saved.mode = mode;
+  $('mode-mcd').classList.toggle('active', mode === 'mcd');
+  $('mode-graph').classList.toggle('active', mode === 'graph');
+  boxes = new Map(Object.entries(saved.positions[key()] ?? {}));
+  const known = saved.view[key()];
+  if (known) view = known;
+  const v = visible();
+  layout(v.nodes, v.edges, false);
+  if (known) draw();
+  else fit();
+  persist();
+};
+$('mode-mcd').classList.toggle('active', saved.mode === 'mcd');
+$('mode-graph').classList.toggle('active', saved.mode === 'graph');
+$('mode-mcd').addEventListener('click', () => setMode('mcd'));
+$('mode-graph').addEventListener('click', () => setMode('graph'));
 $('fit').addEventListener('click', fit);
 $('relayout').addEventListener('click', () => {
   const v = visible();
   layout(v.nodes, v.edges, true);
   fit();
 });
-$('export').addEventListener('click', () => vscode.postMessage({ type: 'export', svg: exportSvg() }));
+$('export').addEventListener('click', () =>
+  vscode.postMessage({ type: 'exportMenu', options: { components: saved.components, allPlugins: saved.allPlugins, media: saved.media, strapiFields: saved.strapiFields } }),
+);
 $<HTMLSelectElement>('project').addEventListener('change', (ev) => vscode.postMessage({ type: 'project', root: (ev.target as HTMLSelectElement).value }));
 window.addEventListener('resize', () => draw());
 
@@ -496,13 +625,42 @@ function exportSvg(): string {
     for (const p of ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'opacity', 'font-size', 'font-family', 'font-weight']) d.setAttribute(p, cs.getPropertyValue(p));
   });
   const g = layer.getBBox();
+  const box = { x: g.x * view.k + view.x - 20, y: g.y * view.k + view.y - 20, w: g.width * view.k + 40, h: g.height * view.k + 40 };
   clone.setAttribute('xmlns', SVG);
-  clone.setAttribute('viewBox', `${g.x * view.k + view.x - 20} ${g.y * view.k + view.y - 20} ${g.width * view.k + 40} ${g.height * view.k + 40}`);
-  clone.setAttribute('style', `background:${getComputedStyle(document.body).backgroundColor}`);
+  clone.setAttribute('viewBox', `${box.x} ${box.y} ${box.w} ${box.h}`);
+  clone.setAttribute('width', String(Math.round(box.w)));
+  clone.setAttribute('height', String(Math.round(box.h)));
+  // The theme's background, painted (an image ignores the page's CSS).
+  const bg = document.createElementNS(SVG, 'rect');
+  for (const [k, v] of Object.entries({ x: box.x, y: box.y, width: box.w, height: box.h, fill: getComputedStyle(document.body).backgroundColor })) bg.setAttribute(k, String(v));
+  clone.insertBefore(bg, clone.firstChild);
   return new XMLSerializer().serializeToString(clone);
 }
 
+/** The drawing as a PNG (base64), at twice its size for sharpness. */
+async function exportPng(): Promise<string> {
+  const text = exportSvg();
+  const img = new Image();
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error('could not render the SVG'));
+    img.src = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(text)))}`;
+  });
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width * 2;
+  canvas.height = img.height * 2;
+  const ctx = canvas.getContext('2d')!;
+  ctx.scale(2, 2);
+  ctx.drawImage(img, 0, 0);
+  return canvas.toDataURL('image/png').split(',')[1]!;
+}
+
 window.addEventListener('message', (ev: MessageEvent<ToWebview>) => {
+  if (ev.data?.type === 'render') {
+    const format = ev.data.format;
+    void (format === 'png' ? exportPng() : Promise.resolve(exportSvg())).then((d) => vscode.postMessage({ type: 'export', format, data: d }));
+    return;
+  }
   if (ev.data?.type !== 'data') return;
   const first = !data || data.root !== ev.data.data.root;
   data = ev.data.data;
@@ -510,12 +668,12 @@ window.addEventListener('message', (ev: MessageEvent<ToWebview>) => {
   select.replaceChildren(...data.projects.map((p) => Object.assign(document.createElement('option'), { value: p.root, textContent: p.name, selected: p.root === data!.root })));
   select.style.display = data.projects.length > 1 ? '' : 'none';
   if (first) {
-    boxes = new Map(Object.entries(saved.positions[data.root] ?? {}));
-    view = saved.view[data.root] ?? view;
+    boxes = new Map(Object.entries(saved.positions[key()] ?? {}));
+    view = saved.view[key()] ?? view;
   }
   const v = visible();
   layout(v.nodes, v.edges, false);
-  if (first && !saved.view[data.root]) fit();
+  if (first && !saved.view[key()]) fit();
   else draw();
   $('empty').classList.toggle('hidden', v.nodes.length > 0);
 });

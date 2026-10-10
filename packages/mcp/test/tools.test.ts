@@ -43,7 +43,7 @@ describe('MCP tools (engine-backed handlers)', () => {
     registerTools(fakeServer, engine, fs, Promise.resolve());
   });
 
-  it('registers all thirty-two tools (server_info + read + graph + move/extract/rename/schema/apply; schema helpers are plan_* + deprecated aliases)', () => {
+  it('registers all thirty-three tools (server_info + read + graph + diagram + move/extract/rename/schema/apply; schema helpers are plan_* + deprecated aliases)', () => {
     expect([...handlers.keys()].sort()).toEqual(
       [
         'add_project',
@@ -57,6 +57,7 @@ describe('MCP tools (engine-backed handlers)', () => {
         'extract_to_plugin',
         'find_references',
         'find_relation_usages',
+        'get_model_diagram',
         'get_schema',
         'list_artifacts',
         'list_broken_refs',
