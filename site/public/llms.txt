@@ -22,7 +22,7 @@ Use Strapi's MCP to work **with** your content. Use DevKit to work **on** your c
 - [Strapi magic strings](https://devkit-for-strapi.paulrichez.fr/concepts/): what DevKit understands, and the "guarantee, don't guess" rule.
 - [In your editor](https://devkit-for-strapi.paulrichez.fr/editor/): autocomplete, diagnostics, go-to-definition, find references & CodeLens, hover, rename.
 - [For your AI agent (MCP)](https://devkit-for-strapi.paulrichez.fr/mcp/): the MCP server and how to set it up.
-- [MCP tool reference](https://devkit-for-strapi.paulrichez.fr/mcp-tools/): all 32 tools with parameters — server_info, add_project, project selection (from/project), the read/analyse tools, and the plan → review → apply refactor contract.
+- [MCP tool reference](https://devkit-for-strapi.paulrichez.fr/mcp-tools/): all 33 tools with parameters — server_info, add_project, project selection (from/project), the read/analyse tools (list_routes with a route's pipeline in Strapi's order), the data-model diagram as Mermaid, and the plan → review → apply refactor contract.
 - [Pro](https://devkit-for-strapi.paulrichez.fr/pro/): the refactoring engine — propagated rename, move / extract-to-plugin, safe apply. €39.99 perpetual licence. Activate it with the editor's "Enter License Key" command (stored in the OS keychain), or by setting the `DEVKIT_LICENSE_KEY` environment variable in a standalone MCP server's `env` block.
 - [FAQ](https://devkit-for-strapi.paulrichez.fr/faq/): privacy, v4/v5, Strapi 6, supported editors, JS/TS.
 

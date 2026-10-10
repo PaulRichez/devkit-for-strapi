@@ -1,6 +1,6 @@
 ---
 title: Pro
-description: The Strapi refactoring engine — propagated rename, move/extract, safe apply.
+description: The Strapi refactoring engine — propagated rename, move/extract, schema edits, the relations diagram, safe apply.
 ---
 
 The free tier makes Strapi magic strings **understandable**. Pro lets DevKit
@@ -12,11 +12,21 @@ through your AI agent.
 - **Propagated rename** — rename an entity or a method and DevKit updates every
   call-site and route handler, renames the file/folder, and repoints relation
   `target`s. No grep-and-pray.
-- **Move / extract-to-plugin** *(via your AI agent)* — relocate an artifact or a
-  whole content-type resource across namespaces; scaffold a new local plugin and
-  extract into it in one reviewable plan.
-- **Schema edits** *(via your AI agent)* — retarget a relation, rename an attribute
-  (and rewrite its `populate`/`filters` usages).
+- **Refactor from the DevKit panel** — right-click a content-type, a component, a
+  field or a controller action: rename it, retarget a relation, move a content-type
+  into a plugin, scaffold a plugin. The caveats come first (the UIDs Strapi also
+  stores in the database, for one), then VS Code's Refactor Preview: nothing is
+  written until you apply it.
+- **Move / extract-to-plugin** *(from the panel or your AI agent)* — relocate an
+  artifact or a whole content-type resource across namespaces; scaffold a new local
+  plugin and extract into it in one reviewable plan.
+- **Schema edits** *(from the panel or your AI agent)* — retarget a relation, rename
+  an attribute (and rewrite its `populate`/`filters` usages).
+- **Relations diagram** — your data model, live: an MCD view (entities with their
+  fields, straight links with 1 / n cardinalities) or a compact graph; components,
+  plugin types, media and Strapi's own fields on demand; export as Markdown
+  (Mermaid `erDiagram`), PNG or SVG. Your agent gets the same Mermaid with the
+  `get_model_diagram` MCP tool.
 - **Safe apply** — every change is a contractual plan, applied by an executor
   that is root-confined (symlink-resolved), refuses silent overwrites, verifies
   content fingerprints before writing (anti-TOCTOU), is best-effort
@@ -25,7 +35,9 @@ through your AI agent.
 ## Pricing & licence
 
 **€39.99 one-time** — a perpetual licence plus one year of updates, per developer.
-One key unlocks both the editor (rename) and the MCP refactor tools.
+One key unlocks both the editor (rename, refactors from the panel, the relations
+diagram) and the MCP Pro tools. The panel's views — Health, Routes, Model, Plugins —
+are free.
 
 ## **[Get Pro → €39.99](https://buy.polar.sh/polar_cl_SHTELpw7g7PN8ztymJ7rL2tErNrsTadIHxNdr47n4yf)**
 
@@ -78,7 +90,7 @@ Keep this file out of Git — the key is a secret.
 ### Without a licence — nothing breaks
 
 Every free tool keeps working. The Pro tools stay **visible** to your agent, but
-calling one (a `plan_*` refactor or `apply_*`) returns a short **“Pro required”**
+calling one (a `plan_*` refactor, `apply_*` or `get_model_diagram`) returns a short **“Pro required”**
 result — the feature, where to buy a licence, and how to activate it — so your agent
 can relay it to you instead of failing silently. Both the refactor *plan* and its
 *apply* are Pro, so an agent can't sidestep the licence by applying a free plan with

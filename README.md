@@ -69,9 +69,20 @@ Inside a Strapi project — zero config, no type generation:
   handler, renames the underlying file/folder, and updates relation `target`s. No grep-and-pray.
 - **Hover** — describes what a string resolves to, with the signature for service methods and usage
   insights (incoming relations, route handlers, data usages).
-- **Strapi Routes view** — every route of the project in the Explorer: your API, then the plugins'
-  routes, with their mounted path and a lock/unlock icon for `auth: false`. Click a route to open its
-  declaration; the inline action jumps to the controller method. Admin-panel routes are behind a toggle.
+- **The DevKit panel** (activity bar), read from your code without starting Strapi:
+  - **Health** — what's wrong in the whole project: broken references, policies and middlewares
+    Strapi won't find at startup, refs DevKit can't check (and why), definitions nothing references.
+  - **Routes** — every route, and under each one what a request goes through in Strapi's order
+    (`config/middlewares`, auth, policies, route middlewares, handler), each step with whether Strapi
+    will find it. A CodeLens above each controller action lists its routes.
+  - **Model** — content-types and components with their fields, the fields pointing at each one, the
+    routes exposing it, its usage, and the types installed plugins bring (read-only).
+  - **Plugins** — what each plugin adds, and whether DevKit checks the refs into it (and why not).
+- **Ctrl+T on Strapi names** — UIDs, services, controllers and their actions, policies, middlewares,
+  routes.
+- **Pro in the panel** — refactors from a right-click, through VS Code's Refactor Preview, and the
+  **relations diagram**: an MCD (entities, straight links, 1 / n cardinalities) or a graph, exported
+  as Markdown (Mermaid), PNG or SVG.
 
 ---
 
@@ -79,7 +90,7 @@ Inside a Strapi project — zero config, no type generation:
 
 The same engine, exposed over the [Model Context Protocol](https://modelcontextprotocol.io) so coding
 agents (Claude Code, Copilot agent mode, Cursor, …) **query your project's real values instead of
-grepping for them**. 31 stdio tools, in three layers.
+grepping for them**. 31 stdio tools (plus 2 deprecated aliases), in three layers.
 
 > **Not Strapi's own MCP server** — they do different jobs. Strapi's
 > [official MCP](https://docs.strapi.io/cms/features/strapi-mcp-server) acts on your **content**
@@ -94,7 +105,9 @@ grepping for them**. 31 stdio tools, in three layers.
 
 **Understand** — health & impact analysis
 `list_unused` (dead code) · `list_broken_refs` · `coverage` · `find_relation_usages` · `list_refs` (glob) ·
-`dependencies` / `dependents` (the dependency graph, for cut analysis)
+`dependencies` / `dependents` (the dependency graph, for cut analysis) · `get_model_diagram` (the data
+model as a Mermaid `erDiagram`, Pro). `list_routes` also explains a route: what a request goes through,
+in Strapi's order.
 
 **Refactor** — plan → review → apply
 `plan_rename_method` / `plan_rename_entity` · `plan_move` / `plan_move_entities` · `plan_change_relation` ·

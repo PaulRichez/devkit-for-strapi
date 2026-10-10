@@ -20,13 +20,13 @@ failing build, in CI, or on Strapi v4.
 
 ## Tools
 
-31 stdio tools in three layers. The **read/analyse** tools are free; the **refactor** tools are Pro (without a licence they return a "Pro required" upsell).
+31 stdio tools (plus 2 deprecated aliases) in three layers. The **read/analyse** tools are free except the data-model diagram; the **refactor** tools are Pro (without a licence they return a "Pro required" upsell).
 
 **Know** — the project's truth *(free)*
-`server_info` (version, licence tier, which tools actually run) · `list_projects` · `project_info` (versions, plugins verified or not and why, counts, health) · `list_content_types` · `list_components` · `list_artifacts` · `get_schema` · `resolve` · `validate_reference` · `find_references` · `list_routes` · `refresh`
+`server_info` (version, licence tier, which tools actually run) · `list_projects` · `project_info` (versions, plugins verified or not and why, counts, health) · `list_content_types` · `list_components` · `list_artifacts` · `get_schema` · `resolve` · `validate_reference` · `find_references` · `list_routes` (filters, and a route's pipeline in Strapi's order: middlewares, auth, policies, handler) · `refresh`
 
 **Understand** — health & impact *(free)*
-`list_unused` (dead code) · `list_broken_refs` · `coverage` · `find_relation_usages` · `list_refs` (glob) · `dependencies` / `dependents` (the dependency graph)
+`list_unused` (dead code) · `list_broken_refs` · `coverage` · `find_relation_usages` · `list_refs` (glob) · `dependencies` / `dependents` (the dependency graph) · `get_model_diagram` (the data model as a Mermaid `erDiagram` — Pro)
 
 **Refactor** — plan → review → apply *(Pro)*
 `plan_rename_method` / `plan_rename_entity` · `plan_move` / `plan_move_entities` · `plan_change_relation` · `plan_rename_attribute` · `create_plugin` · `extract_to_plugin`, then `apply_edits` / `apply_rename`. Every refactor returns a reviewable, fingerprinted plan; applying is root-confined and transactional.

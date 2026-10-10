@@ -33,9 +33,29 @@ instead of grepping your project.
   plugins are read from `node_modules` statically (never executed), so
   `plugin::users-permissions.usr` or `strapi::corss` get a "did you mean". A plugin
   DevKit can't read completely stays silent.
-- **Strapi Routes view** (Explorer) — every route: your API first, then plugin routes,
-  with mounted paths and a lock/unlock icon for `auth: false`. Click to open the
-  declaration, or jump straight to the controller method.
+- **Ctrl+T on Strapi names** — content-type and component UIDs, services, controllers
+  and their actions, policies, middlewares, routes (`GET /api/articles`).
+- **Routes above controller actions** — a CodeLens lists the routes each action
+  handles.
+
+### The DevKit panel — free
+
+The **DevKit for Strapi** icon in the activity bar, read from your code without
+starting Strapi:
+
+- **Health** — what's wrong in the whole project, not only the open files: broken
+  references, policies and middlewares Strapi won't find at startup, refs DevKit
+  can't check (and why), definitions nothing references. A badge counts them.
+- **Routes** — every route, and under each one what a request goes through, in
+  Strapi's order: the `config/middlewares` stack, auth, policies, route middlewares,
+  handler — each step with whether Strapi will find it.
+- **Model** — your content-types and components: their fields, the fields of other
+  types pointing at each one, the routes exposing it, how much code uses it, plus
+  the types installed plugins bring (read-only).
+- **Plugins** — local and installed: what each adds, whether DevKit checks the refs
+  into it (and why not), the disabled ones, the ones your code rewrites.
+
+<!-- screenshot: the DevKit panel (Routes with a pipeline unfolded) -->
 
 ![An invalid Strapi reference underlined, with a "did you mean" quick fix](https://devkit-for-strapi.paulrichez.fr/screenshots/diagnostics.png)
 
@@ -89,12 +109,23 @@ One licence unlocks **safe, propagated refactors** in both surfaces:
   middleware, component **or a method** and propagate it to **every** call-site, route
   handler **and the underlying file/folder** — no grep-and-pray. (Content-types also
   rename their folder + coupled service/controller.)
+- **From the DevKit panel** — right-click to rename a content-type, a component, a
+  field or a controller action, retarget a relation, move a content-type into a
+  plugin, scaffold a plugin: the caveats first (the UIDs Strapi also stores in the
+  database), then VS Code's **Refactor Preview** — nothing is written until you apply.
+- **Relations diagram** — your data model, live: an **MCD** (entities with their
+  fields, straight links with 1 / n cardinalities) or a compact graph; components,
+  plugin types, media and Strapi's own fields on demand; export as **Markdown
+  (Mermaid)**, PNG or SVG.
 - **For your AI agent** — `plan_*` refactors (rename, move / extract-to-plugin, schema
   edits) returned as a **reviewable plan**, plus a verified, root-confined, transactional
-  **apply**. Both the plan *and* its apply are licensed.
+  **apply**. Both the plan *and* its apply are licensed. `get_model_diagram` gives it
+  the data model as Mermaid.
+
+<!-- screenshot: the relations diagram (MCD view) -->
 
 **€39.99 one-time** — a perpetual licence plus one year of updates, per developer.
-One key unlocks both the editor and the MCP refactor tools. Validated **once on
+One key unlocks both the editor and the MCP Pro tools; the panel's views stay free. Validated **once on
 activation**, then works **offline** (no telemetry, no code leaving your machine).
 14-day money-back.
 
@@ -116,6 +147,9 @@ keychain, never `settings.json`); the key is forwarded to the bundled MCP server
 - **DevKit for Strapi: Rescan Workspace** — re-discover projects and rebuild the index
 - **DevKit for Strapi: Enter License Key** — activate Pro
 - **DevKit for Strapi: Clear License Key** — remove the stored key
+- **DevKit for Strapi: Check the Whole Project** — every source file into the Problems panel
+- **DevKit for Strapi: Open Relations Diagram** — Pro
+- **DevKit for Strapi: Reveal in DevKit Panel** — the file in the editor, in the panel
 
 ## Settings
 
@@ -126,6 +160,9 @@ keychain, never `settings.json`); the key is forwarded to the bundled MCP server
 - `strapiDevkit.hover.enable`
 - `strapiDevkit.referencesCodeLens.enable`
 - `strapiDevkit.referencesCodeLens.methods` — also show the per-method lens
+- `strapiDevkit.routesCodeLens.enable` — the routes above controller actions
+- `strapiDevkit.model.showPluginTypes` — installed plugins' types in the Model view
+- `strapiDevkit.views.followActiveEditor` — the open views follow the editor
 - `strapiDevkit.exclude` — glob patterns of paths to skip during project discovery
 
 ## Privacy

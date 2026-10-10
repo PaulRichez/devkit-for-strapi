@@ -25,13 +25,54 @@
   between. A plugin whose files didn't change isn't read again, so editing
   `config/plugins` re-checks a project in a fraction of a second.
 
-**New: Strapi Routes view**
+**New: the DevKit panel**
 
-- An Explorer view with every route of the project: your API, then plugin routes,
-  with mounted paths and a lock/unlock icon for `auth: false`. Click to open the
-  declaration, or jump to the controller method. Admin routes are behind a toggle.
-- The MCP `list_routes` tool returns the same table, with `fullPath`, `public`, the
-  declaration location and plugin routes; admin routes with `admin: true`.
+- A **DevKit for Strapi** container in the activity bar, read from your code without
+  starting Strapi:
+  - **Health**: the whole project — broken references (with the closest real name),
+    policies and middlewares Strapi won't find at startup, refs DevKit can't check
+    and why, definitions no Strapi reference uses, plugins not read completely. A
+    badge counts the problems; **Check the Whole Project** fills the Problems panel
+    for the files that aren't open.
+  - **Routes**: every route (your API, then plugin routes), and under each one what a
+    request goes through, in Strapi's order — the `config/middlewares` stack, auth,
+    the route's policies, its middlewares, the handler — each step with whether
+    Strapi will find it, and a link to its definition. Filters by method, public,
+    guarded, with a problem.
+  - **Model**: content-types and components with their fields, the fields of other
+    types pointing at each one, the routes exposing it, its usage, the components
+    nothing uses, and the types installed plugins bring (read-only).
+  - **Plugins**: local and installed, what each adds, whether its refs are checked
+    and why not, disabled ones, the ones your code rewrites or extends.
+- Above each controller action, the routes it handles.
+- **Ctrl+T** finds Strapi names: UIDs, services, controllers and their actions,
+  policies, middlewares, routes.
+- The status bar shows the Strapi version and the problem count; **Reveal in DevKit
+  Panel** opens the current schema or controller there, and the open views follow
+  the editor.
+- **Pro**: refactor from the panel — rename a content-type, component, field or
+  controller action, retarget a relation, move a content-type into a plugin,
+  scaffold a plugin — with the caveats first, then VS Code's Refactor Preview.
+- **Pro**: the relations diagram — an MCD (entities with their fields, straight links
+  with 1 / n cardinalities) or a graph; components, plugin types, media and the
+  fields Strapi adds to every content-type on demand; export as Markdown (Mermaid),
+  PNG or SVG.
+
+**Routes: what Strapi really does with names**
+
+- Policy and middleware names are checked the way Strapi looks them up (read in
+  Strapi 4.13 and 5.48): a route's policy by its exact name, then in the route's own
+  API or plugin — never in `global::` — and a middleware by its full name only. A
+  short name DevKit used to accept now gets "Strapi won't find … at startup", with a
+  quick fix to the full name.
+- Routes keep their `auth` (public, custom scope or strategies), per
+  `createCoreRouter` action too (`config.find.auth: false` was lost), and policies or
+  middlewares declared as functions.
+- The MCP `list_routes` tool returns the same table, with `fullPath`, `public`,
+  `auth`, the declaration location and plugin routes (admin routes with
+  `admin: true`); `method`, `path` (a concrete URL too) and `handler` filters; and
+  `pipeline: true` to explain a route.
+- New MCP tool `get_model_diagram` (Pro): the data model as a Mermaid `erDiagram`.
 
 **MCP: always answers on the current files**
 
@@ -49,6 +90,11 @@
   unverified plugins) and freshness.
 
 **Fixes**
+
+- Renaming a controller action (Pro) failed when a service shared its ref — the
+  standard layout (`createCoreService` next to `createCoreController`).
+- A short route handler pushed into a plugin from `src/extensions` was reported
+  "malformed".
 
 - Local plugins scaffolded with the Strapi 5 plugin SDK (`server/src`) were invisible,
   so valid refs into them were reported unknown.
