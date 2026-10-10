@@ -223,6 +223,10 @@ export function registerTools(
     return server['registerTool'](name, config, fresh);
   };
 
+  /** What a `ref` may be (shared by every tool taking one). */
+  const REF_HELP =
+    'A Strapi reference: a content-type or component UID (api::article.article, shared.seo), a service / controller / policy / middleware ref (api::article.article, plugin::users-permissions.user, global::is-owner), or a route handler (api::article.article.find). `ref#method` targets one method.';
+
   reg(
     'server_info',
     {
@@ -259,7 +263,7 @@ export function registerTools(
     {
       title: 'List Strapi projects',
       description:
-        'List the Strapi projects discovered in the workspace (name, root, version, counts). Call this first in a multi-project workspace.',
+        'List the Strapi projects discovered in the workspace (name, root, Strapi version, counts, `freshness`). Call this first in a multi-project workspace, then pass `from`/`project` to the other tools; project_info gives one project in full.',
     },
     async () => {
       await ready;
@@ -368,7 +372,7 @@ export function registerTools(
       description:
         'List the real refs of a project\'s services, controllers, policies and middlewares (optionally one kind). Use the exact refs returned.',
       inputSchema: {
-        kind: z.enum(['service', 'controller', 'policy', 'middleware']).optional(),
+        kind: z.enum(['service', 'controller', 'policy', 'middleware']).optional().describe('Only this kind (default: all four).'),
         ...selector,
       },
     },
@@ -408,8 +412,8 @@ export function registerTools(
     {
       title: 'Resolve a reference to its file(s)',
       description:
-        'Resolve a Strapi reference (UID / service / controller / policy / middleware / route handler) to its defining file(s), tagged by kind.',
-      inputSchema: { ref: z.string(), ...selector },
+        'Resolve a Strapi reference (UID / service / controller / policy / middleware / route handler) to its defining file(s), tagged by kind — installed plugins included (their files in node_modules).',
+      inputSchema: { ref: z.string().describe(REF_HELP), ...selector },
     },
     async (args) => {
       await ready;
@@ -423,8 +427,8 @@ export function registerTools(
     {
       title: 'Validate a Strapi reference',
       description:
-        'Check whether a Strapi reference is real in the project. Returns valid | unknown (+ didYouMean) | external (a plugin DevKit could not read completely, e.g. not installed — cannot be verified). Installed plugins are read from node_modules, so their refs are verified. Call this before writing a magic string.',
-      inputSchema: { ref: z.string(), ...selector },
+        'Check whether a Strapi reference is real in the project. Returns valid | unknown (+ didYouMean) | external: a plugin DevKit cannot verify — not installed, not read completely (code that only runs in Strapi), rewritten at boot by the project, or still being read just after startup; project_info says which and why. Installed plugins DevKit reads completely are checked like your own code. Call this before writing a magic string.',
+      inputSchema: { ref: z.string().describe(REF_HELP), ...selector },
     },
     async (args) => {
       await ready;
@@ -438,9 +442,9 @@ export function registerTools(
     {
       title: 'Find references to a Strapi entity',
       description:
-        'List every call-site that references a UID / service / controller / handler (or `ref#method`) across the project. Returns the total first, then a page of references. Compact by default (`path:line:col [via]  snippet`, 1-based) — pass `compact: false` for full objects. Pass `refs` to query several at once.',
+        'List every call-site that references a UID / service / controller / handler (or `ref#method`) in the project\'s own code (src/ and config/; node_modules and build output are not searched). Returns the total first, then a page of references. Compact by default (`path:line:col [via]  snippet`, 1-based) — pass `compact: false` for full objects. Pass `refs` to query several at once. See coverage for the call forms indexed.',
       inputSchema: {
-        ref: z.string().optional(),
+        ref: z.string().optional().describe(REF_HELP),
         refs: z.array(z.string()).optional().describe('Several refs to query in one call (batch).'),
         compact: z.boolean().optional().describe('Compact one-line-per-hit output (default true). false → full objects.'),
         limit: z.number().int().positive().optional().describe('Max references returned per ref (default 50).'),
@@ -600,7 +604,7 @@ export function registerTools(
       description:
         'List the refs that `ref` depends on — relations in its schema, services/controllers it calls, etc. Pass `transitive: true` to follow the chain. Half of the cut-analysis for modularization.',
       inputSchema: {
-        ref: z.string(),
+        ref: z.string().describe(REF_HELP),
         transitive: z.boolean().optional().describe('Follow dependencies recursively (default false).'),
         ...selector,
       },
@@ -622,7 +626,7 @@ export function registerTools(
       description:
         'List the refs that depend on `ref` — what would break if it moved or changed. Pass `transitive: true` to follow the chain. The other half of cut-analysis: which edges become cross-namespace if you extract a set.',
       inputSchema: {
-        ref: z.string(),
+        ref: z.string().describe(REF_HELP),
         transitive: z.boolean().optional().describe('Follow dependents recursively (default false).'),
         ...selector,
       },
@@ -646,7 +650,7 @@ export function registerTools(
       inputSchema: {
         ref: z.string().describe('The owning service/controller ref, e.g. api::page.notifier'),
         method: z.string().describe('The current method name, e.g. notify'),
-        newName: z.string(),
+        newName: z.string().describe('The new method name, e.g. announce'),
         ...selector,
       },
     },
@@ -675,7 +679,7 @@ export function registerTools(
         'Compute the exact edits to rename a content-type / service / controller / policy / middleware / component: every magic-string call-site and route handler, plus the file/folder renames. Dry-run: returns a plan (edits + `planId`), writes nothing. Review, then apply with `apply_edits` (pass the `planId`).',
       inputSchema: {
         ref: z.string().describe('The entity UID/ref, e.g. api::product.product or shared.seo'),
-        newName: z.string(),
+        newName: z.string().describe("The UID's new last segment, e.g. item (api::product.product → api::product.item, shared.seo → shared.item)"),
         ...selector,
       },
     },
@@ -844,7 +848,7 @@ export function registerTools(
     {
       title: 'Apply a reviewed plan to disk (contractual)',
       description:
-        'Apply a plan returned by plan_rename_* (and future move/extract plans). Pass `planId` to apply exactly the reviewed plan, or `plan` (a full plan object) to apply one you hold. The plan is verified against disk first — if any touched file changed since it was computed, nothing is written (the changed paths are returned). ⚠️ Modifies files on disk.',
+        'Apply a plan returned by any plan_* tool, create_plugin or extract_to_plugin. Pass `planId` to apply exactly the reviewed plan, or `plan` (a full plan object) to apply one you hold. The plan is verified against disk first — if any touched file changed since it was computed, nothing is written (the changed paths are returned). ⚠️ Modifies files on disk.',
       inputSchema: {
         planId: z.string().optional().describe('The planId from a plan_* result (preferred).'),
         plan: planObjectSchema.optional().describe('A full, well-formed plan object (planId + fingerprints), if not using planId.'),
@@ -896,8 +900,8 @@ export function registerTools(
       description:
         'Convenience: plan + apply a rename in one call. An entity (omit `method`) or a service/controller method (pass `method`). Rewrites every call-site + route handler and renames the files/folders. ⚠️ Modifies files on disk. Prefer plan_rename_* then apply_edits when you want to review first.',
       inputSchema: {
-        ref: z.string(),
-        newName: z.string(),
+        ref: z.string().describe(REF_HELP),
+        newName: z.string().describe("The new method name (with `method`), else the UID's new last segment (api::product.product + item → api::product.item)."),
         method: z.string().optional().describe('Pass to rename a method; omit to rename the entity.'),
         ...selector,
       },

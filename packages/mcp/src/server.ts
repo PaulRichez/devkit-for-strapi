@@ -26,7 +26,19 @@ export async function runServer(argv: string[]): Promise<void> {
   const fs = new NodeFileSystem();
   // No file watcher here: the engine compares the project files with the disk on each call (throttled).
   const engine = createEngine(fs, { trackDiskChanges: true });
-  const server = new McpServer({ name: 'devkit-for-strapi', version: VERSION });
+  const server = new McpServer(
+    { name: 'devkit-for-strapi', version: VERSION },
+    {
+      instructions: [
+        'DevKit for Strapi knows the real UIDs, services, controllers, policies, middlewares, routes and schemas of the Strapi projects in this workspace, read statically (Strapi is never started).',
+        '1. Orient: list_projects (several projects → pass `from`, a path inside the one you work on, to every tool); project_info for one project in full.',
+        "2. Before writing a magic string (UID, service/controller ref, route handler, policy), call validate_reference: `unknown` comes with didYouMean; `external` means the plugin can't be verified (project_info says why). Never invent a UID.",
+        '3. Read the real shape: get_schema for fields, list_routes for routes, find_references / dependents before changing something.',
+        '4. Refactor in two steps: a plan_* tool (dry-run) → review → apply_edits with its planId; then list_broken_refs should return nothing.',
+        'Answers reflect the files on disk: what changed outside this session is re-indexed before each call. server_info says which tools need a Pro licence.',
+      ].join('\n'),
+    },
+  );
 
   const cliRoots = explicitRoots(argv);
   // The roots actually indexed — surfaced to the tools so a "no project found"
