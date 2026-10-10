@@ -1,6 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
+  CONFIG_SYNC_PACKAGE,
+  configSyncLabel,
+  configSyncStatus,
+  type PipelineStep,
+  routeAccessForRoute,
   callFormCoverage,
   dependencies,
   dependents,
@@ -597,7 +602,13 @@ export function registerTools(
         return json({ error: `${routes.length} routes match: narrow the filter to at most ${PIPELINE_MAX} for the pipeline.`, routes: routes.map((r) => `${r.method} ${r.fullPath ?? r.path}`) });
       }
       const global = await engine.getGlobalMiddlewares(p.project.root);
-      const piped = routes.map((r) => ({ ...r, pipeline: routePipeline(p.project, r, global).steps.filter((s) => s.phase !== 'global-middleware') }));
+      // The users-permissions roles in config/sync: who may call each route once they are imported.
+      const synced = (await configSyncStatus(fs, p.project))?.files ?? [];
+      const withAccess = (r: RouteInfo, s: PipelineStep): PipelineStep & { syncedRoles?: unknown } => {
+        const access = s.phase === 'auth' ? routeAccessForRoute(r, synced) : undefined;
+        return access ? { ...s, syncedRoles: { action: access.action, allowed: access.allowed, denied: access.denied, note: 'According to the config/sync role files: the database may differ until they are imported.' } } : s;
+      };
+      const piped = routes.map((r) => ({ ...r, pipeline: routePipeline(p.project, r, global).steps.filter((s) => s.phase !== 'global-middleware').map((s) => withAccess(r, s)) }));
       const stack = routes[0] ? routePipeline(p.project, routes[0], global).steps.filter((s) => s.phase === 'global-middleware') : [];
       return json({ globalMiddlewares: { status: global.status, file: global.file, envFiles: global.envFiles, steps: stack }, routes: piped });
     },
@@ -659,6 +670,74 @@ export function registerTools(
         locations: b.locations.map(compactRef),
       }));
       return json({ broken });
+    },
+  );
+
+  reg(
+    'config_sync_status',
+    {
+      title: 'config-sync: its options and the files of its sync directory',
+      description:
+        "For a project using strapi-plugin-config-sync, read from the files (Strapi is not started, the database is not read): the plugin's version, its options and where each comes from (a short `excludedConfig` is merged index by index with the plugin's defaults, as Strapi does: the warnings say which defaults are no longer excluded), the sync directory, and its files by status — `ok`, `excluded` by the options, `invalid` (not valid JSON: config-sync can't read it), or of a type not registered here. `files: true` lists them with readable names (\"View — Article\", \"Role Public\"); `key` returns one file's content. What the database holds is not known here.",
+      inputSchema: {
+        key: z.string().max(400).optional().describe('One entry, `<type>.<name>`: user-role.public, core-store.plugin_content_manager_configuration_content_types::api::article.article.'),
+        files: z.boolean().optional().describe('List every file (key, readable label, status). Default: counts by status.'),
+        ...selector,
+      },
+    },
+    async (args) => {
+      await ready;
+      const p = pick(engine, args, roots());
+      if ('result' in p) return p.result;
+      const st = await configSyncStatus(fs, p.project);
+      if (!st) return json({ detected: false, message: `${CONFIG_SYNC_PACKAGE} is neither in package.json nor installed in this project.` });
+      const d = st.detection;
+      const label = (key: string): string => {
+        const dot = key.indexOf('.');
+        return configSyncLabel(p.project, key.slice(0, dot), key.slice(dot + 1)).label;
+      };
+      const partial = st.partial ? { partial: 'The installed plugins are not known (still loading, or not installed): user-role and i18n-locale files are assumed registered.' } : {};
+
+      if (args.key) {
+        const entry = st.files.find((f) => f.key === args.key);
+        if (!entry) {
+          const near = st.files.map((f) => f.key).filter((k) => k.includes(args.key!.split('.').pop()!)).slice(0, 5);
+          return json({ key: args.key, found: false, message: `No file for ${args.key} in ${d.syncDirPath}.`, ...(near.length ? { didYouMean: near } : {}) });
+        }
+        return json({
+          key: entry.key,
+          label: label(entry.key),
+          file: entry.path,
+          status: entry.status,
+          ...(entry.content !== undefined ? { content: entry.content } : {}),
+          ...partial,
+        });
+      }
+
+      const byStatus: Record<string, number> = {};
+      for (const f of st.files) byStatus[f.status] = (byStatus[f.status] ?? 0) + 1;
+      const invalid = st.files.filter((f) => f.status === 'invalid').map((f) => f.key);
+      const { sources, ...options } = d.options;
+      return json({
+        detected: true,
+        plugin: {
+          package: CONFIG_SYNC_PACKAGE,
+          ...(d.declaredRange ? { declared: d.declaredRange } : {}),
+          ...(d.installedVersion ? { installed: d.installedVersion } : {}),
+          ...(d.targetsStrapi ? { forStrapi: d.targetsStrapi } : {}),
+          ...(d.versionMismatch ? { versionMismatch: true } : {}),
+          ...(d.disabled ? { disabled: true } : {}),
+          ...(d.configFile ? { configFile: d.configFile } : {}),
+        },
+        options,
+        optionSources: sources,
+        ...(d.envOverrides.length ? { envOverrides: d.envOverrides } : {}),
+        syncDir: { path: d.syncDirPath, exists: d.syncDirExists },
+        files: { total: st.files.length, byStatus, ...(args.files ? { list: st.files.map((f) => ({ key: f.key, label: label(f.key), status: f.status })) } : {}) },
+        ...(invalid.length ? { invalid } : {}),
+        ...(d.warnings.length ? { warnings: d.warnings } : {}),
+        ...partial,
+      });
     },
   );
 

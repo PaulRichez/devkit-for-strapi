@@ -33,6 +33,8 @@ export interface AttributeInfo {
   unique?: boolean;
   /** Not returned by the API. */
   private?: boolean;
+  /** `visible: false`: left out of the admin (the content-manager has no field for it). */
+  hidden?: boolean;
   /** An enumeration's values. */
   enum?: string[];
 }
@@ -54,6 +56,8 @@ export interface ContentType {
   collectionName?: string;
   /** `options.draftAndPublish === true`. */
   draftAndPublish?: boolean;
+  /** `pluginOptions['content-manager'].visible === false`: not shown (nor permissioned) in the content-manager. */
+  contentManagerHidden?: boolean;
   attributes: Record<string, AttributeInfo>;
   /** Char offset to anchor UI (e.g. a CodeLens) on, near the definition. */
   defOffset?: number;

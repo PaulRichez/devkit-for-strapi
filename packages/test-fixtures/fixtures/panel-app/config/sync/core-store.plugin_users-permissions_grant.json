@@ -1,0 +1,10 @@
+{
+  "key": "plugin_users-permissions_grant",
+  "type": "object",
+  "value": {
+    "email": {
+      "enabled": true,
+      "icon": "envelope"
+    }
+  }
+}

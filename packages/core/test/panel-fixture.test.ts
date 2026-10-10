@@ -5,12 +5,15 @@ import { createEngine, type StrapiEngine } from '../src/engine';
 import { MemoryFileSystem } from '../src/fs/MemoryFileSystem';
 import { modelOf } from '../src/query/model';
 import { routePipeline } from '../src/query/routePipeline';
+import { configSyncStatus } from '../src/configSync/status';
 
 describe('panel-app fixture', () => {
   let engine: StrapiEngine;
+  let fs: MemoryFileSystem;
   beforeAll(async () => {
     const fx = loadFixture('panel-app');
-    engine = createEngine(new MemoryFileSystem(fx.files));
+    fs = new MemoryFileSystem(fx.files);
+    engine = createEngine(fs);
     await engine.init([fx.root]);
     await engine.whenReferencesReady();
   });
@@ -40,5 +43,17 @@ describe('panel-app fixture', () => {
     const m = modelOf(engine.allProjects()[0]!);
     expect(m.contentTypes.find((c) => c.uid === 'api::author.author')!.incoming.length).toBe(3);
     expect(m.components.find((c) => c.uid === 'shared.orphan')!.usedBy).toEqual([]);
+  });
+
+  it('has config-sync files: the ones the panel lists, one excluded, one unreadable', async () => {
+    const st = (await configSyncStatus(fs, engine.allProjects()[0]!))!;
+    expect(st.files.map((f) => `${f.key} ${f.status}`).sort()).toEqual([
+      'core-store.plugin_content_manager_configuration_content_types::api::article.article ok',
+      'core-store.plugin_upload_settings ok',
+      'core-store.plugin_upload_view_configuration invalid',
+      'core-store.plugin_users-permissions_grant excluded',
+      'user-role.authenticated ok',
+      'user-role.public ok',
+    ]);
   });
 });

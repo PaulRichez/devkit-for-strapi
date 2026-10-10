@@ -1,4 +1,7 @@
 import {
+  CM_COMPONENT_PREFIX,
+  CM_CT_PREFIX,
+  type ConfigSyncStaticStatus,
   type ModelComponent,
   type ModelContentType,
   type ModelField,
@@ -8,9 +11,11 @@ import {
   qualifiedHandler,
   type RouteInfo,
   type StrapiEngine,
+  type SyncFileEntry,
 } from 'devkit-for-strapi-core';
 import * as vscode from 'vscode';
 import { toReferenceLocations } from '../conv';
+import type { ConfigSyncCache } from './configSync';
 import type { RoutesView } from './routes';
 import {
   CachedTree,
@@ -49,6 +54,7 @@ type Node = TreeNode &
     | { kind: 'incoming'; root: string; incoming: ModelIncoming }
     | { kind: 'route'; root: string; route: RouteInfo }
     | { kind: 'usage'; root: string; ct: ModelContentType }
+    | { kind: 'cmView'; root: string; uid: string; file: SyncFileEntry }
   );
 
 const FIELD_ICON: Record<string, string> = {
@@ -100,16 +106,21 @@ function fieldSummary(f: ModelField, model: ProjectModel | undefined): string {
 export class ModelProvider extends CachedTree<Node> {
   private models = new Map<string, ProjectModel>();
   private routes = new Map<string, RouteInfo[]>();
+  private synced = new Map<string, ConfigSyncStaticStatus>();
   private loading: Promise<void> | undefined;
   view: vscode.TreeView<Node> | undefined;
 
-  constructor(private readonly engine: StrapiEngine) {
+  constructor(
+    private readonly engine: StrapiEngine,
+    private readonly configSync?: ConfigSyncCache,
+  ) {
     super();
   }
 
   protected override reset(): void {
     this.models.clear();
     this.routes.clear();
+    this.synced.clear();
     this.loading = undefined;
   }
 
@@ -125,9 +136,20 @@ export class ModelProvider extends CachedTree<Node> {
       } catch {
         /* routes are a bonus: the model stands without them */
       }
+      for (const { root, status } of (await this.configSync?.all()) ?? []) this.synced.set(root, status);
       if (this.view) this.view.message = pluginsLoading(this.engine) ? LOADING_MESSAGE : undefined;
     })();
     return this.loading;
+  }
+
+  /** The content-manager view of a type, when its file is in config/sync. */
+  private cmViewOf(root: string, t: TypeRef): { uid: string; file: SyncFileEntry } | undefined {
+    const st = this.synced.get(root);
+    if (!st) return undefined;
+    const uid = uidOf(t);
+    const key = `core-store.${t.kind === 'ct' ? CM_CT_PREFIX : CM_COMPONENT_PREFIX}${uid}`;
+    const file = st.files.find((f) => f.key === key);
+    return file ? { uid, file } : undefined;
   }
 
   model(root: string): ProjectModel | undefined {
@@ -191,6 +213,8 @@ export class ModelProvider extends CachedTree<Node> {
         } else {
           out.push({ kind: 'group', id: `${base}|usedBy`, root: element.root, type: t, group: 'usedBy' });
         }
+        const view = this.cmViewOf(element.root, t);
+        if (view) out.push({ kind: 'cmView', id: `${base}|cmView`, root: element.root, ...view });
         return out;
       }
       case 'group': {
@@ -354,6 +378,18 @@ export class ModelProvider extends CachedTree<Node> {
         if (u.total) item.command = { command: 'strapiDevkit.model.references', title: 'Peek references', arguments: [n.root, n.ct.uid] };
         return item;
       }
+      case 'cmView': {
+        const item = new vscode.TreeItem('Content-manager view', vscode.TreeItemCollapsibleState.None);
+        item.id = n.id;
+        item.description = n.file.status === 'ok' ? 'in config/sync' : `in config/sync · ${n.file.status}`;
+        item.iconPath = new vscode.ThemeIcon(n.file.status === 'invalid' ? 'error' : 'layout');
+        const md = markdown();
+        md.appendMarkdown('The layout, labels and columns of this type in the admin, as config-sync stores them.\n\n');
+        md.appendMarkdown(`$(file) ${code(relPath(n.file.path))}`);
+        item.tooltip = md;
+        item.command = { command: 'strapiDevkit.open', title: 'Open the sync file', arguments: [n.file.path, 0] };
+        return item;
+      }
     }
   }
 
@@ -427,8 +463,8 @@ export interface ModelView {
   visible(): boolean;
 }
 
-export function registerModelView(context: vscode.ExtensionContext, engine: StrapiEngine, routes: RoutesView): ModelView {
-  const provider = new ModelProvider(engine);
+export function registerModelView(context: vscode.ExtensionContext, engine: StrapiEngine, routes: RoutesView, configSync?: ConfigSyncCache): ModelView {
+  const provider = new ModelProvider(engine, configSync);
   const view = vscode.window.createTreeView('strapiDevkit.model', { treeDataProvider: provider, showCollapseAll: true });
   provider.view = view;
 

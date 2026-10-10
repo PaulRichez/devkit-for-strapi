@@ -76,6 +76,7 @@ export function parseSchemaFile(raw: string, ctx: SchemaContext): ContentType | 
   const collectionName = asString(json.collectionName);
   if (collectionName) result.collectionName = collectionName;
   if (asRecord(json.options)?.draftAndPublish === true) result.draftAndPublish = true;
+  if (asRecord(asRecord(json.pluginOptions)?.['content-manager'])?.visible === false) result.contentManagerHidden = true;
   const i18n = asRecord(asRecord(json.pluginOptions)?.i18n);
   if (i18n?.localized === true) result.i18nLocalized = true;
   return result;

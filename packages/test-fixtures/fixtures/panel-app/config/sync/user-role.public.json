@@ -1,0 +1,13 @@
+{
+  "name": "Public",
+  "description": "Default role given to unauthenticated user.",
+  "type": "public",
+  "permissions": [
+    {
+      "action": "api::article.article.find"
+    },
+    {
+      "action": "api::article.article.findOne"
+    }
+  ]
+}

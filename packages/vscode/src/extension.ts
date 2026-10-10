@@ -13,6 +13,8 @@ import { registerWorkspaceSymbols } from './providers/workspaceSymbols';
 import { registerDiagram } from './views/diagram';
 import { registerFollow } from './views/follow';
 import { RefreshBus, setContext } from './views/panel';
+import { registerConfigSyncDiagnostics } from './providers/configSyncDiagnostics';
+import { ConfigSyncCache, type ConfigSyncProvider, registerConfigSyncView } from './views/configSync';
 import { type HealthProvider, registerHealthView } from './views/health';
 import { type ModelProvider, registerModelView } from './views/model';
 import { type PluginsProvider, registerPluginsView } from './views/plugins';
@@ -23,7 +25,7 @@ import { createLicenseManager, type LicenseManager } from './license';
 
 /** What `activate` returns: read access to the panel's trees (integration tests). */
 export interface DevkitExports {
-  views: { routes: RoutesProvider; model: ModelProvider; health: HealthProvider; plugins: PluginsProvider };
+  views: { routes: RoutesProvider; model: ModelProvider; health: HealthProvider; plugins: PluginsProvider; configSync: ConfigSyncProvider };
 }
 
 function workspaceFolderPaths(): string[] {
@@ -100,9 +102,13 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
   registerRenameProvider(context, engine, fs, license.isLicensed);
   const codeLenses = registerCodeLensProvider(context, engine);
   const routeLenses = registerRoutesCodeLens(context, engine);
-  const routesView = registerRoutesView(context, engine);
-  const modelView = registerModelView(context, engine, routesView);
-  const healthView = registerHealthView(context, engine, fs);
+  // config-sync's files, read once per index generation for every surface showing them.
+  const configSync = new ConfigSyncCache(engine, fs);
+  const routesView = registerRoutesView(context, engine, configSync);
+  const modelView = registerModelView(context, engine, routesView, configSync);
+  const healthView = registerHealthView(context, engine, fs, configSync);
+  const configSyncView = registerConfigSyncView(context, engine, configSync);
+  const configSyncDiagnostics = registerConfigSyncDiagnostics(context, configSync);
   const pluginsView = registerPluginsView(context, engine, fs, routesView);
   registerRefactorCommands(context, engine, fs, license.isLicensed);
   registerFollow(context, engine, modelView, routesView);
@@ -114,12 +120,17 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
 
   // Every surface showing index data refreshes on one debounced signal.
   bus.event(() => {
+    configSync.clear(); // before the views read it again
     codeLenses.refresh();
     routeLenses.refresh();
     routesView.refresh();
     modelView.refresh();
     healthView.refresh();
     pluginsView.refresh();
+    configSyncView.refresh();
+    void configSyncDiagnostics.refresh();
+    // The view is hidden until a project uses config-sync: the key can't wait for it to load.
+    void configSync.all().then((all) => setContext('strapiDevkit.configSync', all.length > 0));
     diagram.refresh();
     diagnostics.revalidateAll(); // the index changed → refresh open files
     updateStatus(engine, status, healthView.provider.count); // counts include installed plugins once they land
@@ -194,7 +205,7 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
     vscode.commands.registerCommand('strapiDevkit.enterLicenseKey', () => license.enterKey()),
     vscode.commands.registerCommand('strapiDevkit.clearLicenseKey', () => license.clearKey()),
   );
-  return { views: { routes: routesView.provider, model: modelView.provider, health: healthView.provider, plugins: pluginsView.provider } };
+  return { views: { routes: routesView.provider, model: modelView.provider, health: healthView.provider, plugins: pluginsView.provider, configSync: configSyncView.provider } };
 }
 
 export function deactivate(): void {

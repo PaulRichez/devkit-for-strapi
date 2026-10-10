@@ -35,6 +35,7 @@ export async function runServer(argv: string[]): Promise<void> {
         "2. Before writing a magic string (UID, service/controller ref, route handler, policy), call validate_reference: `unknown` comes with didYouMean; `external` means the plugin can't be verified (project_info says why). Never invent a UID.",
         '3. Read the real shape: get_schema for fields, list_routes for routes, find_references / dependents before changing something.',
         '4. Refactor in two steps: a plan_* tool (dry-run) → review → apply_edits with its planId; then list_broken_refs should return nothing.',
+        "5. When a project uses config-sync (project_info.configSync): config_sync_status lists its files. Prefer an export (the admin Config Sync page, `npx config-sync export`) to editing config/sync/*.json by hand: config-sync compares each file as written with the database.",
         "Answers reflect the files on disk: what changed outside this session is re-indexed before each call (unless a project's freshness.diskTracking is 'off' — then call refresh). server_info says which tools need a Pro licence.",
       ].join('\n'),
     },

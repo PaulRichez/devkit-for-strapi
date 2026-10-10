@@ -219,6 +219,12 @@
         "title": "Open Relations Diagram",
         "category": "DevKit for Strapi",
         "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "strapiDevkit.configSync.refresh",
+        "title": "Refresh Config Sync",
+        "category": "DevKit for Strapi",
+        "icon": "$(refresh)"
       }
     ],
     "configuration": {
@@ -315,6 +321,13 @@
           "icon": "assets/activity.svg"
         },
         {
+          "id": "strapiDevkit.configSync",
+          "name": "Config Sync",
+          "contextualTitle": "DevKit for Strapi",
+          "icon": "assets/activity.svg",
+          "when": "strapiDevkit.configSync"
+        },
+        {
           "id": "strapiDevkit.plugins",
           "name": "Plugins",
           "contextualTitle": "DevKit for Strapi",
@@ -386,6 +399,11 @@
         {
           "command": "strapiDevkit.model.diagram",
           "when": "view == strapiDevkit.model",
+          "group": "navigation@1"
+        },
+        {
+          "command": "strapiDevkit.configSync.refresh",
+          "when": "view == strapiDevkit.configSync",
           "group": "navigation@1"
         }
       ],
@@ -482,6 +500,10 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "strapiDevkit.configSync.refresh",
+          "when": "strapiDevkit.configSync"
+        },
         {
           "command": "strapiDevkit.routes.goToHandler",
           "when": "false"

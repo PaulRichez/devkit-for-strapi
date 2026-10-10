@@ -43,13 +43,14 @@ describe('MCP tools (engine-backed handlers)', () => {
     registerTools(fakeServer, engine, fs, Promise.resolve());
   });
 
-  it('registers all thirty-three tools (server_info + read + graph + diagram + move/extract/rename/schema/apply; schema helpers are plan_* + deprecated aliases)', () => {
+  it('registers all thirty-four tools (server_info + read + graph + diagram + config-sync + move/extract/rename/schema/apply; schema helpers are plan_* + deprecated aliases)', () => {
     expect([...handlers.keys()].sort()).toEqual(
       [
         'add_project',
         'apply_edits',
         'apply_rename',
         'change_relation', // deprecated alias
+        'config_sync_status',
         'coverage',
         'create_plugin',
         'dependencies',

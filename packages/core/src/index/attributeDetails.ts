@@ -15,6 +15,7 @@ export function attributeDetails(def: Record<string, unknown>): Partial<Attribut
   if (def.required === true) out.required = true;
   if (def.unique === true) out.unique = true;
   if (def.private === true) out.private = true;
+  if (def.visible === false) out.hidden = true;
   const values = asStringArray(def.enum);
   if (values) out.enum = values;
   return out;

@@ -13,6 +13,7 @@ import { isFrameworkRef, parseRef } from '../model/uid';
 import { StaticEvaluator } from '../plugins/evaluate';
 import { readApiPrefix } from '../plugins/installed';
 import { isVerifiablePlugin } from '../plugins/merge';
+import { configSyncStatus, type ConfigSyncStaticStatus } from '../configSync/status';
 import { listBrokenRefs, validateRef } from './refQuery';
 
 export interface PluginInfo {
@@ -57,6 +58,8 @@ export interface ProjectInfo {
     unverifiedPluginRefs: number;
     unverifiedByPlugin?: Record<string, number>;
   };
+  /** strapi-plugin-config-sync is used: its version, its sync directory, its files (config_sync_status lists them). */
+  configSync?: { version?: string; syncDir: string; files: number; invalid: number };
   /** Plain-language caveats an agent should know before trusting a `valid`/`unknown`. */
   notes: string[];
   freshness: ProjectSummary['freshness'];
@@ -72,7 +75,13 @@ const LOCKFILES: Array<[string, NonNullable<ProjectInfo['packageManager']>]> = [
 ];
 
 /** `routes`: the project's route table (non-admin) when the caller has it cached — else it is read. */
-export async function projectInfo(fs: FileSystem, project: StrapiProject, summary: ProjectSummary, cached?: { routes?: readonly RouteInfo[] }): Promise<ProjectInfo> {
+export async function projectInfo(
+  fs: FileSystem,
+  project: StrapiProject,
+  summary: ProjectSummary,
+  /** What the caller already has: the routes, the config-sync status (`null`: config-sync isn't used). */
+  cached?: { routes?: readonly RouteInfo[]; configSync?: ConfigSyncStaticStatus | null },
+): Promise<ProjectInfo> {
   const idx = project.index;
   const root = project.root;
   const rel = (p: string): string => (p.startsWith(`${root}/`) ? p.slice(root.length + 1) : p);
@@ -186,6 +195,13 @@ export async function projectInfo(fs: FileSystem, project: StrapiProject, summar
   if (!nodeModules) notes.push('@strapi/strapi is not installed (no node_modules): refs into installed plugins (users-permissions, upload, i18n…) come back `external`, never checked. Install the dependencies to verify them.');
   if (loading) notes.push('Installed plugins are still being read: plugin refs come back `external` for a few more seconds.');
   if (unverifiedPluginRefs) notes.push(`${unverifiedPluginRefs} distinct ref(s) into unverified plugins come back \`external\`: neither confirmed nor reported (see plugins[].why).`);
+  let configSync: ProjectInfo['configSync'];
+  const cs = cached?.configSync !== undefined ? (cached.configSync ?? undefined) : await configSyncStatus(fs, project).catch(() => undefined);
+  if (cs && !cs.detection.disabled) {
+    const v = cs.detection.installedVersion;
+    configSync = { ...(v ? { version: v } : {}), syncDir: rel(cs.detection.syncDirPath), files: cs.files.length, invalid: cs.files.filter((f) => f.status === 'invalid').length };
+    notes.push('config-sync is used: config_sync_status lists its files. Prefer an export (the admin Config Sync page, `npx config-sync export`) to editing config/sync/*.json by hand: config-sync compares each file as written with the database.');
+  }
   if (summary.freshness.diskTracking === 'off') notes.push('Too many files to compare with the disk on each call: call refresh after editing files outside this session.');
 
   return {
@@ -208,6 +224,7 @@ export async function projectInfo(fs: FileSystem, project: StrapiProject, summar
     },
     plugins,
     health: { brokenRefs, unverifiedPluginRefs, ...(unverifiedPluginRefs ? { unverifiedByPlugin } : {}) },
+    ...(configSync ? { configSync } : {}),
     notes,
     freshness: summary.freshness,
   };

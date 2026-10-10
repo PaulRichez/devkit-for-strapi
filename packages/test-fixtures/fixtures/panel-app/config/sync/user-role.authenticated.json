@@ -1,0 +1,19 @@
+{
+  "description": "Default role given to authenticated user.",
+  "name": "Authenticated",
+  "permissions": [
+    {
+      "action": "api::article.article.archive",
+      "documentId": "auth-archive"
+    },
+    {
+      "action": "api::article.article.find",
+      "documentId": "auth-find"
+    },
+    {
+      "action": "api::article.article.publish",
+      "documentId": "auth-publish"
+    }
+  ],
+  "type": "authenticated"
+}

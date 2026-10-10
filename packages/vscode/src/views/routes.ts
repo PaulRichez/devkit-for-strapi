@@ -6,11 +6,14 @@ import {
   resolveRef,
   type RouteInfo,
   type RoutePipeline,
+  routeAccessForRoute,
   routePipeline,
   type StrapiEngine,
+  type SyncFileEntry,
 } from 'devkit-for-strapi-core';
 import * as vscode from 'vscode';
 import { toReferenceLocations } from '../conv';
+import type { ConfigSyncCache } from './configSync';
 import { setContext } from './panel';
 import {
   CachedTree,
@@ -102,6 +105,8 @@ export class RoutesProvider extends CachedTree<Node> {
   private loading: Promise<void> | undefined;
   private pipelines = new Map<RouteInfo, RoutePipeline>();
   private globals = new Map<string, GlobalMiddlewares>();
+  /** The config-sync files of each project (the users-permissions roles in them). */
+  private synced = new Map<string, SyncFileEntry[]>();
   showAdmin: boolean;
   filter: RouteFilter;
   /** Set by the view once created (message / description). */
@@ -110,6 +115,7 @@ export class RoutesProvider extends CachedTree<Node> {
   constructor(
     private readonly engine: StrapiEngine,
     private readonly state: vscode.Memento,
+    private readonly configSync?: ConfigSyncCache,
   ) {
     super();
     this.showAdmin = state.get<boolean>(ADMIN_STATE_KEY, false);
@@ -121,6 +127,7 @@ export class RoutesProvider extends CachedTree<Node> {
     this.loading = undefined;
     this.pipelines.clear();
     this.globals.clear();
+    this.synced.clear();
   }
 
   async setShowAdmin(v: boolean): Promise<void> {
@@ -173,7 +180,11 @@ export class RoutesProvider extends CachedTree<Node> {
     this.loading ??= (async () => {
       try {
         const data = await this.engine.getRoutes({ admin: this.showAdmin });
-        for (const p of data) this.globals.set(p.root, await this.engine.getGlobalMiddlewares(p.root));
+        for (const p of data) {
+          this.globals.set(p.root, await this.engine.getGlobalMiddlewares(p.root));
+          const files = (await this.configSync?.get(p.root))?.files;
+          if (files?.length) this.synced.set(p.root, files);
+        }
         this.data = data;
       } catch {
         this.data = [];
@@ -271,7 +282,7 @@ export class RoutesProvider extends CachedTree<Node> {
       case 'global':
         return this.globalItem(n);
       case 'step':
-        return this.stepItem(n.id, n.step);
+        return this.stepItem(n.id, n.step, n.root, n.route);
     }
   }
 
@@ -324,7 +335,7 @@ export class RoutesProvider extends CachedTree<Node> {
     return item;
   }
 
-  private stepItem(id: string, s: PipelineStep): vscode.TreeItem {
+  private stepItem(id: string, s: PipelineStep, root: string, route: RouteInfo): vscode.TreeItem {
     const label = s.phase === 'auth' ? `Auth: ${s.name}` : s.name;
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
     item.id = id;
@@ -335,6 +346,12 @@ export class RoutesProvider extends CachedTree<Node> {
     md.appendMarkdown(`**${PHASE_LABEL[s.phase]}** ${s.phase === 'auth' ? s.name : code(s.name)}\n\n`);
     if (s.phase !== 'auth') md.appendMarkdown(`${STATUS_TEXT[s.status]}\n\n`);
     if (s.note) md.appendMarkdown(`${s.note}\n\n`);
+    const access = s.phase === 'auth' ? routeAccessForRoute(route, this.synced.get(root) ?? []) : undefined;
+    if (access) {
+      const roles = (r: string[]): string => r.map((x) => code(x)).join(', ');
+      item.description = access.allowed.length ? `synced: ${access.allowed.join(', ')}` : 'synced: no role';
+      md.appendMarkdown(`$(sync) **config/sync**: ${access.allowed.length ? `allowed for ${roles(access.allowed)}` : 'no role allows it'}${access.denied.length ? `; not for ${roles(access.denied)}` : ''} (${code(access.action)}). The database may differ until these files are imported.\n\n`);
+    }
     if (s.target) md.appendMarkdown(`$(go-to-file) Defined in ${code(relPath(s.target.filePath))}\n\n`);
     if (s.declaredAt && s.phase !== 'auth') md.appendMarkdown(`$(file) Declared in ${code(relPath(s.declaredAt.filePath))}`);
     item.tooltip = md;
@@ -393,8 +410,8 @@ async function pickFilter(current: RouteFilter): Promise<RouteFilter | undefined
   };
 }
 
-export function registerRoutesView(context: vscode.ExtensionContext, engine: StrapiEngine): RoutesView {
-  const provider = new RoutesProvider(engine, context.workspaceState);
+export function registerRoutesView(context: vscode.ExtensionContext, engine: StrapiEngine, configSync?: ConfigSyncCache): RoutesView {
+  const provider = new RoutesProvider(engine, context.workspaceState, configSync);
   const view = vscode.window.createTreeView('strapiDevkit.routes', { treeDataProvider: provider, showCollapseAll: true });
   provider.view = view;
   provider.describeFilter();

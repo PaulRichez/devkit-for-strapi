@@ -10,11 +10,13 @@ import {
   type ReferenceLocation,
   routePipeline,
   type StrapiEngine,
+  type SyncFileEntry,
   type UnusedItem,
   validateRef,
 } from 'devkit-for-strapi-core';
 import * as vscode from 'vscode';
 import { toDiagnostic } from '../conv';
+import { type ConfigSyncCache, STATUS_TEXT } from './configSync';
 import { CachedTree, code, LOADING_MESSAGE, markdown, orderedRoots, pluginsLoading, projectLabel, relPath, type TreeNode } from './tree';
 
 /**
@@ -37,13 +39,16 @@ interface Report {
   broken: Array<BrokenRef & { didYouMean?: string }>;
   startup: StartupName[];
   unused: UnusedItem[];
+  /** Errors and warnings in the config-sync files (infos stay in the Config Sync view). */
+  configSync: SyncFileEntry[];
 }
 
 type Node = TreeNode &
   (
     | { kind: 'project'; root: string }
     | { kind: 'summary'; root: string; info: ProjectInfo }
-    | { kind: 'group'; root: string; group: 'broken' | 'startup' | 'unverified' | 'unused' | 'plugins' }
+    | { kind: 'group'; root: string; group: 'broken' | 'startup' | 'configSync' | 'unverified' | 'unused' | 'plugins' }
+    | { kind: 'syncFile'; root: string; file: SyncFileEntry }
     | { kind: 'broken'; root: string; ref: BrokenRef & { didYouMean?: string } }
     | { kind: 'location'; root: string; loc: ReferenceLocation; replace?: { from: string; to: string } }
     | { kind: 'startup'; root: string; name: StartupName }
@@ -82,6 +87,7 @@ export class HealthProvider extends CachedTree<Node> {
   constructor(
     private readonly engine: StrapiEngine,
     private readonly fs: FileSystem,
+    private readonly configSync?: ConfigSyncCache,
   ) {
     super();
   }
@@ -146,9 +152,10 @@ export class HealthProvider extends CachedTree<Node> {
       for (const project of this.engine.allProjects()) {
         const summary = summaries.find((s) => s.root === project.root);
         const routes = (await this.engine.getRoutes({ admin: true, root: project.root }))[0]?.routes ?? [];
-        const report: Report = { root: project.root, broken: [], startup: [], unused: [] };
+        const report: Report = { root: project.root, broken: [], startup: [], unused: [], configSync: [] };
         try {
-          if (summary) report.info = await projectInfo(this.fs, project, summary, { routes: routes.filter((r) => r.type !== 'admin') });
+          const configSync = this.configSync ? ((await this.configSync.get(project.root)) ?? null) : undefined;
+          if (summary) report.info = await projectInfo(this.fs, project, summary, { routes: routes.filter((r) => r.type !== 'admin'), configSync });
         } catch {
           /* the summary line is a bonus */
         }
@@ -158,6 +165,7 @@ export class HealthProvider extends CachedTree<Node> {
         });
         report.unused = listUnused(project);
         report.startup = await this.startupNames(project);
+        report.configSync = ((await this.configSync?.get(project.root))?.files ?? []).filter((f) => f.status === 'invalid');
         this.reports.set(project.root, report);
       }
       this.setBadge(this.problemCount());
@@ -194,6 +202,8 @@ export class HealthProvider extends CachedTree<Node> {
           }
           case 'plugins':
             return (r.info?.plugins ?? []).filter((p) => !p.verified).map((plugin) => ({ kind: 'plugin', id: `${element.id}|${plugin.name}`, root: r.root, plugin }));
+          case 'configSync':
+            return r.configSync.map((file) => ({ kind: 'syncFile', id: `${element.id}|${file.key}`, root: r.root, file }));
         }
         return [];
       case 'broken':
@@ -219,6 +229,7 @@ export class HealthProvider extends CachedTree<Node> {
     if (r.broken.length) out.push({ kind: 'group', id: `health|${root}|broken`, root, group: 'broken' });
     if (r.startup.length) out.push({ kind: 'group', id: `health|${root}|startup`, root, group: 'startup' });
     if (!r.broken.length && !r.startup.length) out.push({ kind: 'ok', id: `health|${root}|ok`, root });
+    if (r.configSync.length) out.push({ kind: 'group', id: `health|${root}|configSync`, root, group: 'configSync' });
     if (r.info?.health.unverifiedPluginRefs) out.push({ kind: 'group', id: `health|${root}|unverified`, root, group: 'unverified' });
     if (r.unused.length) out.push({ kind: 'group', id: `health|${root}|unused`, root, group: 'unused' });
     if (r.info?.plugins.some((p) => !p.verified)) out.push({ kind: 'group', id: `health|${root}|plugins`, root, group: 'plugins' });
@@ -287,6 +298,15 @@ export class HealthProvider extends CachedTree<Node> {
         item.command = { command: 'strapiDevkit.open', title: 'Open', arguments: [n.name.at.filePath, n.name.at.offset] };
         return item;
       }
+      case 'syncFile': {
+        const item = new vscode.TreeItem(paths.basename(n.file.path), vscode.TreeItemCollapsibleState.None);
+        item.id = n.id;
+        item.description = 'not valid JSON';
+        item.iconPath = new vscode.ThemeIcon('error', new vscode.ThemeColor('problemsErrorIcon.foreground'));
+        item.tooltip = STATUS_TEXT.invalid;
+        item.command = { command: 'strapiDevkit.open', title: 'Open', arguments: [n.file.path, 0] };
+        return item;
+      }
       case 'unverifiedPlugin': {
         const item = new vscode.TreeItem(n.plugin, vscode.TreeItemCollapsibleState.None);
         item.id = n.id;
@@ -332,6 +352,8 @@ export class HealthProvider extends CachedTree<Node> {
         return ['Broken references', r?.broken.length ?? 0, 'error', 'problemsErrorIcon.foreground', 'Strapi references that resolve to nothing (UIDs, services, controllers, policies, …), across the whole project.'];
       case 'startup':
         return ["Names Strapi won't find at startup", r?.startup.length ?? 0, 'warning', 'problemsErrorIcon.foreground', 'Policies and middlewares that exist, but not under the name Strapi looks up: Strapi throws at startup.'];
+      case 'configSync':
+        return ['Unreadable config-sync files', r?.configSync.length ?? 0, 'sync', 'problemsErrorIcon.foreground', "Not valid JSON (or empty): config-sync can't read them. See the Config Sync view."];
       case 'unverified':
         return ['Refs DevKit cannot check', r?.info?.health.unverifiedPluginRefs ?? 0, 'question', 'descriptionForeground', 'Refs into plugins DevKit could not read completely: never reported as broken, never checked either.'];
       case 'unused':
@@ -442,8 +464,8 @@ function positionAt(text: string, offset: number): vscode.Position {
   return new vscode.Position(line, offset - last);
 }
 
-export function registerHealthView(context: vscode.ExtensionContext, engine: StrapiEngine, fs: FileSystem): HealthView {
-  const provider = new HealthProvider(engine, fs);
+export function registerHealthView(context: vscode.ExtensionContext, engine: StrapiEngine, fs: FileSystem, configSync?: ConfigSyncCache): HealthView {
+  const provider = new HealthProvider(engine, fs, configSync);
   const view = vscode.window.createTreeView('strapiDevkit.health', { treeDataProvider: provider, showCollapseAll: true });
   provider.view = view;
   // The badge shows on the panel even before the view is opened.

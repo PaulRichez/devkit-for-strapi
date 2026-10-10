@@ -189,4 +189,53 @@ suite('DevKit panel', () => {
     assert.ok(titles.some((t) => t.includes('GET /api/articles') && !t.includes(':id')), titles.join(' | '));
     assert.ok(titles.some((t) => t.includes('POST /api/articles/:id/publish')), titles.join(' | '));
   });
+
+  test('config sync: the plugin, its options, and its files with readable names', async () => {
+    const c = views.configSync as AnyProvider;
+    const roots = await until(
+      () => { views.configSync.refresh(); return children(c); },
+      (nodes) => nodes.length > 0,
+    );
+    // The fixture has no node_modules: the plugin is declared, not installed — and said so.
+    assert.deepStrictEqual(roots.map((n) => labelOf(c, n)), [
+      'config-sync ^3.2.0',
+      'strapi-plugin-config-sync is declared but not installed.',
+      'Unreadable files',
+      'Files',
+    ]);
+    assert.strictEqual(descOf(c, roots[0]), 'config/sync');
+    assert.deepStrictEqual((await children(c, roots[2])).map((n) => labelOf(c, n)), ['Media library view']);
+    assert.strictEqual(descOf(c, roots[3]), '6 · ok 4 · invalid 1 · excluded 1');
+    const roles = await child(c, roots[3], 'Roles (Users & Permissions)');
+    assert.deepStrictEqual((await children(c, roles)).map((n) => labelOf(c, n)), ['Role Authenticated', 'Role Public']);
+    const settings = await child(c, roots[3], 'Settings');
+    assert.strictEqual(descOf(c, await child(c, settings, 'Users & Permissions — providers')), 'excluded');
+  });
+
+  test('config sync: a file config-sync cannot read is an error in the file', async () => {
+    const file = vscode.Uri.file(path.join(ws, 'config/sync/core-store.plugin_upload_view_configuration.json'));
+    const diags = await until(
+      () => Promise.resolve(vscode.languages.getDiagnostics(file)),
+      (d) => d.some((x) => x.source === 'DevKit config-sync'),
+    );
+    const mine = diags.filter((d) => d.source === 'DevKit config-sync');
+    assert.deepStrictEqual(mine.map((d) => [String(d.code), d.severity]), [['invalid-json', vscode.DiagnosticSeverity.Error]]);
+    const ok = vscode.Uri.file(path.join(ws, 'config/sync/user-role.public.json'));
+    assert.deepStrictEqual(vscode.languages.getDiagnostics(ok).filter((d) => d.source === 'DevKit config-sync'), []);
+  });
+
+  test('config sync in Model and Routes: the view in config/sync, the roles that allow a route', async () => {
+    const m = views.model as AnyProvider;
+    views.model.refresh();
+    const article = await child(m, await child(m, undefined, 'Content-types'), 'Article');
+    assert.strictEqual(descOf(m, await child(m, article, 'Content-manager view')), 'in config/sync');
+    const r = views.routes as AnyProvider;
+    views.routes.refresh();
+    const articleRoutes = await child(r, await child(r, undefined, 'API'), 'article');
+    const auth = async (route: string): Promise<unknown> => (await children(r, await child(r, articleRoutes, route))).find((s) => labelOf(r, s).startsWith('Auth:'));
+    assert.strictEqual(descOf(r, await auth('POST /api/articles/:id/publish')), 'synced: authenticated');
+    assert.strictEqual(descOf(r, await auth('GET /api/articles/:id')), 'synced: public');
+    // `auth: false`: the roles don't decide, nothing is said.
+    assert.strictEqual(descOf(r, await auth('GET /api/articles')), '');
+  });
 });

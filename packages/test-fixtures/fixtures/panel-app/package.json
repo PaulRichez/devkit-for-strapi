@@ -2,6 +2,7 @@
   "name": "panel-app",
   "private": true,
   "dependencies": {
-    "@strapi/strapi": "^5.0.0"
+    "@strapi/strapi": "^5.0.0",
+    "strapi-plugin-config-sync": "^3.2.0"
   }
 }

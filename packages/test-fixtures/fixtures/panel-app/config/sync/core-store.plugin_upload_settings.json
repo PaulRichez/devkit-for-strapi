@@ -1,0 +1,11 @@
+{
+  "key": "plugin_upload_settings",
+  "value": {
+    "autoOrientation": false,
+    "responsiveDimensions": true,
+    "sizeOptimization": true
+  },
+  "type": "object",
+  "environment": null,
+  "tag": null
+}
