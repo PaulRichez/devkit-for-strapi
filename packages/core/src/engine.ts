@@ -43,8 +43,15 @@ import { discoverProjectRoots, findStrapiRootUp } from './workspace/discovery';
 import { detectVersion } from './workspace/version';
 
 export interface StrapiEngine {
-  /** Discover projects in the given workspace folders and build their indexes. */
-  init(workspaceFolders: string[]): Promise<void>;
+  /**
+   * Discover projects in the given workspace folders and build their indexes.
+   * Installed plugins (node_modules) are read in the background; by default this
+   * waits for them too — `waitForInstalled: false` returns as soon as the
+   * project code is indexed (refs into plugins stay silent until they land).
+   */
+  init(workspaceFolders: string[], options?: { waitForInstalled?: boolean }): Promise<void>;
+  /** Resolves once the installed plugins of every project have been read (see {@link init}). */
+  whenInstalledReady(): Promise<void>;
   /** Re-discover and re-index everything. */
   rescan(): Promise<void>;
   /**
@@ -140,6 +147,11 @@ class Engine implements StrapiEngine {
   private lastInstalledCheck = 0;
   private lastFullCheck = Date.now();
   private installedCheck: Promise<void> | undefined;
+  /** The background read of installed plugins started by the last rescan. */
+  private installedLoad: Promise<void> = Promise.resolve();
+  private loadingInstalled = false;
+  /** Paths changed while installed plugins were loading, replayed once they land. */
+  private dirtyDuringLoad = { changed: new Set<string>(), deleted: new Set<string>() };
 
   constructor(private readonly fs: FileSystem) {}
 
@@ -160,9 +172,14 @@ class Engine implements StrapiEngine {
     return next;
   }
 
-  async init(folders: string[]): Promise<void> {
+  async init(folders: string[], options?: { waitForInstalled?: boolean }): Promise<void> {
     this.folders = folders.map(normalize);
     await this.rescan();
+    if (options?.waitForInstalled !== false) await this.installedLoad;
+  }
+
+  whenInstalledReady(): Promise<void> {
+    return this.installedLoad;
   }
 
   rescan(): Promise<void> {
@@ -208,8 +225,39 @@ class Engine implements StrapiEngine {
     // Longest root first so projectForFile() finds the deepest owner.
     projects.sort((a, b) => b.root.length - a.root.length);
     this.projects = projects;
-    // Build the reference index off the critical path (does not block "ready").
+    // Installed plugins and the reference index are read off the critical path (do not block "ready").
+    this.installedLoad = this.loadInstalledInBackground(token);
     this.refsBuild = this.buildReferencesInBackground(token);
+  }
+
+  /**
+   * Read every project's installed plugins (and the project code that rewrites
+   * plugins), swapping each into its index as it lands. Until then the project's
+   * plugin refs are unverifiable (silent), never wrongly reported.
+   */
+  private async loadInstalledInBackground(token: number): Promise<void> {
+    this.loadingInstalled = true;
+    this.dirtyDuringLoad = { changed: new Set(), deleted: new Set() };
+    try {
+      for (const project of this.projects) {
+        if (token !== this.rescanToken) return;
+        try {
+          await this.reloadInstalled(project);
+        } catch {
+          /* stays unverifiable */
+        }
+        if (token !== this.rescanToken) return;
+        this.referencesListener?.();
+      }
+    } finally {
+      if (token === this.rescanToken) {
+        this.loadingInstalled = false;
+        const { changed, deleted } = this.dirtyDuringLoad;
+        this.dirtyDuringLoad = { changed: new Set(), deleted: new Set() };
+        // Edits made while loading: re-apply them on the loaded state.
+        if (changed.size || deleted.size) await this.onFilesChanged([...changed], [...deleted]);
+      }
+    }
   }
 
   private async buildReferencesInBackground(token: number): Promise<void> {
@@ -254,20 +302,9 @@ class Engine implements StrapiEngine {
     const { version, signals } = detectVersion(pkg);
     const srcDir = join(root, 'src');
     const index = await buildIndex(this.fs, srcDir);
-    // Installed plugins (node_modules), read statically — best-effort: without
-    // node_modules they simply stay unverifiable, as before.
-    const rewrites = await scanRewrites(this.fs, root);
-    const installed = await withTimeout(readInstalledPlugins(this.fs, root, unionRewrites(rewrites)), INSTALLED_READ_TIMEOUT_MS, undefined);
-    mergeInstalled(index, installed);
-    applyRewrites(index, installed, unionRewrites(rewrites));
-    let stamp: string | undefined;
-    let fullStamp: string | undefined;
-    try {
-      stamp = await installedStamp(this.fs, root, installed?.strapiDir, installed);
-      fullStamp = await installedStamp(this.fs, root, installed?.strapiDir, installed, true);
-    } catch {
-      stamp = undefined;
-    }
+    // Installed plugins and plugin rewrites are read in the background (loadInstalledInBackground):
+    // until then, no plugin is verifiable.
+    index.rewrittenPlugins = new Set(['*']);
     // Exact installed version (package.json only declares a range) — best-effort.
     let strapiVersion: string | undefined;
     try {
@@ -286,10 +323,6 @@ class Engine implements StrapiEngine {
       ...(strapiVersion ? { strapiVersion } : {}),
       index,
       references: new Map(),
-      ...(installed ? { installed } : {}),
-      ...(stamp !== undefined ? { installedStamp: stamp } : {}),
-      ...(fullStamp !== undefined ? { installedFullStamp: fullStamp } : {}),
-      rewrites,
     };
   }
 
@@ -333,6 +366,7 @@ class Engine implements StrapiEngine {
   }
 
   refreshInstalledIfStale(): Promise<void> {
+    if (this.loadingInstalled) return this.installedLoad;
     if (this.installedCheck) return this.installedCheck;
     const now = Date.now();
     if (now - this.lastInstalledCheck < INSTALLED_CHECK_MS) return Promise.resolve();
@@ -424,11 +458,15 @@ class Engine implements StrapiEngine {
     // update may have dropped (e.g. a deleted `src/extensions` schema).
     const touched = new Set<StrapiProject>();
     const reload = new Set<StrapiProject>();
+    if (this.loadingInstalled) {
+      for (const p of changedN) this.dirtyDuringLoad.changed.add(p);
+      for (const p of deletedN) this.dirtyDuringLoad.deleted.add(p);
+    }
     for (const p of [...changedN, ...deletedN]) {
       const project = this.projectForFile(p);
       if (!project) continue;
       touched.add(project);
-      if (affectsInstalledPlugins(p)) reload.add(project);
+      if (affectsInstalledPlugins(p) && !this.loadingInstalled) reload.add(project);
     }
     // Project code rewriting plugins (src/**, local plugins): re-scan the edited files only.
     const deletedSet = new Set(deletedN);
@@ -449,7 +487,9 @@ class Engine implements StrapiEngine {
     for (const project of touched) {
       if (reload.has(project)) continue;
       mergeInstalled(project.index, project.installed);
-      applyRewrites(project.index, project.installed, unionRewrites(project.rewrites));
+      // Not loaded yet: every plugin stays unverifiable.
+      if (project.rewrites) applyRewrites(project.index, project.installed, unionRewrites(project.rewrites));
+      else project.index.rewrittenPlugins = new Set(['*']);
     }
     // Local plugins declaring content-types in code: re-read on any edit under their content-types dir.
     for (const p of [...changedN, ...deletedN]) {

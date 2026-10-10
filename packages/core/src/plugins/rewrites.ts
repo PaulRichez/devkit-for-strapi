@@ -51,7 +51,10 @@ const MEMBER_CALLS = new Set(['values', 'entries', 'toPairs', 'filter', 'find', 
 const ITERATORS = new Set(['forEach', 'map', 'filter', 'find', 'findLast', 'some', 'every', 'flatMap', 'each', 'forOwn', 'forIn', 'mapValues', 'sortBy', 'groupBy', 'keyBy']);
 
 /** Cheap text pre-filter: can this file touch a plugin at all? */
-export const MAY_REWRITE_PLUGINS = /\bplugins?\b|\b(controller|service|policy|middleware|contentType)\b|['"`](content-types|controllers|services|policies|middlewares)['"`]/;
+// Only syntax that can yield a plugin handle: `.plugin(` / `['plugin']`, a bare or destructured
+// `plugin`, `plugins`, a getter call (`service(`…), a registry `.get('controllers')`.
+export const MAY_REWRITE_PLUGINS =
+  /\.plugins?\b|\[\s*['"`]plugins?['"`]\s*\]|\bplugin\s*[(:,}]|[{,]\s*plugin\b|\bplugins\b|\b(controller|service|policy|middleware|contentType)\s*\(|\.get\(\s*['"`](content-types|controllers|services|policies|middlewares)['"`]/;
 
 /** Files above this size aren't parsed — they count as rewriting anything. */
 const MAX_FILE_BYTES = 2_000_000;
@@ -111,7 +114,43 @@ function nameOfFunction(fn: ts.Node): string | undefined {
 }
 
 function isFunctionLike(n: ts.Node): n is ts.FunctionLikeDeclaration {
-  return ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n) || ts.isMethodDeclaration(n) || ts.isGetAccessorDeclaration(n);
+  switch (n.kind) {
+    case ts.SyntaxKind.FunctionDeclaration:
+    case ts.SyntaxKind.FunctionExpression:
+    case ts.SyntaxKind.ArrowFunction:
+    case ts.SyntaxKind.MethodDeclaration:
+    case ts.SyntaxKind.GetAccessor:
+    case ts.SyntaxKind.SetAccessor:
+    case ts.SyntaxKind.Constructor:
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** A node that can declare names: a function, a block, a file, a loop's / catch's own binding. */
+function isScopeNode(n: ts.Node): boolean {
+  switch (n.kind) {
+    case ts.SyntaxKind.FunctionDeclaration:
+    case ts.SyntaxKind.FunctionExpression:
+    case ts.SyntaxKind.ArrowFunction:
+    case ts.SyntaxKind.MethodDeclaration:
+    case ts.SyntaxKind.GetAccessor:
+    case ts.SyntaxKind.SetAccessor:
+    case ts.SyntaxKind.Constructor:
+    case ts.SyntaxKind.Block:
+    case ts.SyntaxKind.SourceFile:
+    case ts.SyntaxKind.ModuleBlock:
+    case ts.SyntaxKind.CaseClause:
+    case ts.SyntaxKind.DefaultClause:
+    case ts.SyntaxKind.ForStatement:
+    case ts.SyntaxKind.ForOfStatement:
+    case ts.SyntaxKind.ForInStatement:
+    case ts.SyntaxKind.CatchClause:
+      return true;
+    default:
+      return false;
+  }
 }
 
 function calleeText(e0: ts.Expression): string | undefined {
@@ -172,18 +211,34 @@ export function pluginWriteTargets(sf: ts.SourceFile, trace?: (what: string, at:
     return m;
   };
   const declCache = new Map<ts.Identifier, ts.Node | null>();
+  const scopeResolution = new Map<ts.Node, Map<string, ts.Node | null>>();
+  /** `name` as seen from scope node `n` (inclusive) outward — memoized per scope. */
+  const resolveIn = (n: ts.Node, name: string): ts.Node | undefined => {
+    let m = scopeResolution.get(n);
+    if (!m) scopeResolution.set(n, (m = new Map()));
+    const hit = m.get(name);
+    if (hit !== undefined) return hit ?? undefined;
+    let found: ts.Node | undefined;
+    if (isFunctionLike(n)) {
+      for (const p of n.parameters) if (bindsName(p.name, name)) found = p;
+      if (!found && (ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n)) && n.name?.text === name) found = n;
+    }
+    if (!found) found = declsOf(n).get(name);
+    if (!found) {
+      let p = n.parent;
+      while (p && !isScopeNode(p)) p = p.parent;
+      if (p) found = resolveIn(p, name);
+    }
+    m.set(name, found ?? null);
+    return found;
+  };
   /** The declaration an identifier refers to (innermost scope first); undefined for a global. */
   const declarationOf = (id: ts.Identifier): ts.Node | undefined => {
     const hit = declCache.get(id);
     if (hit !== undefined) return hit ?? undefined;
-    let found: ts.Node | undefined;
-    for (let n: ts.Node | undefined = id.parent; n && !found; n = n.parent) {
-      if (isFunctionLike(n)) {
-        for (const p of n.parameters) if (bindsName(p.name, id.text)) found = p;
-        if (!found && (ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n)) && n.name?.text === id.text) found = n;
-      }
-      if (!found) found = declsOf(n).get(id.text);
-    }
+    let n: ts.Node | undefined = id.parent;
+    while (n && !isScopeNode(n)) n = n.parent;
+    const found = n ? resolveIn(n, id.text) : undefined;
     declCache.set(id, found ?? null);
     return found;
   };
@@ -191,8 +246,13 @@ export function pluginWriteTargets(sf: ts.SourceFile, trace?: (what: string, at:
 
   /** Variables holding a handle (by declaration, then name). */
   const aliasMap = new Map<ts.Node, Map<string, Handle>>();
-  const getAlias = (id: ts.Identifier): Handle | undefined => aliasMap.get(scopeKey(id))?.get(id.text);
+  /** Names that hold something somewhere in the file: any other identifier is resolved without a scope lookup. */
+  const aliasNames = new Set<string>();
+  const boundNames = new Set<string>();
+  const strapiNames = new Set<string>();
+  const getAlias = (id: ts.Identifier): Handle | undefined => (aliasNames.has(id.text) ? aliasMap.get(scopeKey(id))?.get(id.text) : undefined);
   const setAlias = (id: ts.Identifier, h: Handle): void => {
+    aliasNames.add(id.text);
     const k = scopeKey(id);
     let m = aliasMap.get(k);
     if (!m) aliasMap.set(k, (m = new Map()));
@@ -203,8 +263,9 @@ export function pluginWriteTargets(sf: ts.SourceFile, trace?: (what: string, at:
   };
   /** Variables bound to a getter function: `const { service } = strapi`, `const p = strapi.plugin.bind(strapi)`. */
   const boundGetters = new Map<ts.Node, Map<string, { getter: string; plugin?: string }>>();
-  const getBound = (id: ts.Identifier): { getter: string; plugin?: string } | undefined => boundGetters.get(scopeKey(id))?.get(id.text);
+  const getBound = (id: ts.Identifier): { getter: string; plugin?: string } | undefined => (boundNames.has(id.text) ? boundGetters.get(scopeKey(id))?.get(id.text) : undefined);
   const setGetter = (id: ts.Identifier, getter: string, plugin?: string): void => {
+    boundNames.add(id.text);
     const k = scopeKey(id);
     let m = boundGetters.get(k);
     if (!m) boundGetters.set(k, (m = new Map()));
@@ -216,6 +277,7 @@ export function pluginWriteTargets(sf: ts.SourceFile, trace?: (what: string, at:
   /** Variables holding the `strapi` runtime object under another name. */
   const strapiAliases = new Map<ts.Node, Set<string>>();
   const markStrapi = (id: ts.Identifier): void => {
+    strapiNames.add(id.text);
     const k = scopeKey(id);
     let m = strapiAliases.get(k);
     if (!m) strapiAliases.set(k, (m = new Set()));
@@ -227,7 +289,7 @@ export function pluginWriteTargets(sf: ts.SourceFile, trace?: (what: string, at:
   /** Is this the `strapi` runtime object (`strapi`, an alias of it, `this.strapi`, `ctx.strapi`…)? */
   const isStrapi = (e0: ts.Expression): boolean => {
     const e = strip(e0);
-    if (ts.isIdentifier(e)) return e.text === 'strapi' || (strapiAliases.get(scopeKey(e))?.has(e.text) ?? false);
+    if (ts.isIdentifier(e)) return e.text === 'strapi' || (strapiNames.has(e.text) && (strapiAliases.get(scopeKey(e))?.has(e.text) ?? false));
     return keyOf(e) === 'strapi';
   };
   /** Functions returning a handle, by name. */
@@ -389,9 +451,16 @@ export function pluginWriteTargets(sf: ts.SourceFile, trace?: (what: string, at:
     if (owner?.kind === 'plugin' && k !== 'plugin') return { getter: k, plugin: owner.plugin };
     return isStrapi(base) ? { getter: k } : undefined;
   };
+  const returnsMemo = new Map<ts.Node, ts.Expression[]>();
   const returnsOf = (fn: ts.FunctionLikeDeclaration): ts.Expression[] => {
-    if (ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) return [fn.body];
+    const hit = returnsMemo.get(fn);
+    if (hit) return hit;
+    if (ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) {
+      returnsMemo.set(fn, [fn.body]);
+      return [fn.body];
+    }
     const res: ts.Expression[] = [];
+    returnsMemo.set(fn, res);
     const walk = (n: ts.Node): void => {
       if (n !== fn && isFunctionLike(n)) return;
       if (ts.isReturnStatement(n) && n.expression) res.push(n.expression);
@@ -408,7 +477,8 @@ export function pluginWriteTargets(sf: ts.SourceFile, trace?: (what: string, at:
     if (lodashStyle) return { receiver: call.arguments[0]!, cb: call.arguments[1]! };
     return call.arguments[0] ? { receiver: c.expression, cb: call.arguments[0] } : undefined;
   };
-  const collect = (n: ts.Node): void => {
+  /** One alias-learning step on a node (see the fixpoint below). */
+  const learn = (n: ts.Node): void => {
     if (ts.isVariableDeclaration(n) && n.initializer) {
       const fromStrapi = isStrapi(n.initializer);
       if (fromStrapi && ts.isIdentifier(n.name)) markStrapi(n.name);
@@ -474,11 +544,29 @@ export function pluginWriteTargets(sf: ts.SourceFile, trace?: (what: string, at:
         }
       }
     }
-    ts.forEachChild(n, collect);
   };
+  // The nodes a learning step can use, gathered once (in source order); the fixpoint re-runs on them only.
+  const learners: ts.Node[] = [];
+  const gather = (n: ts.Node): void => {
+    switch (n.kind) {
+      case ts.SyntaxKind.VariableDeclaration:
+      case ts.SyntaxKind.Parameter:
+      case ts.SyntaxKind.BindingElement:
+      case ts.SyntaxKind.BinaryExpression:
+      case ts.SyntaxKind.ForOfStatement:
+      case ts.SyntaxKind.ForInStatement:
+      case ts.SyntaxKind.CallExpression:
+        learners.push(n);
+        break;
+      default:
+        if (isFunctionLike(n)) learners.push(n);
+    }
+    ts.forEachChild(n, gather);
+  };
+  gather(sf);
   for (let round = 0; changed && round < 8; round++) {
     changed = false;
-    collect(sf);
+    for (const n of learners) learn(n);
   }
 
   // --- writes and escapes ---------------------------------------------------
@@ -773,8 +861,22 @@ function isAdminDir(dir: string, roots: string[]): boolean {
   return false;
 }
 
+/** Per file system, per file: the last scan and the mtime it was made at. */
+const fileScans = new WeakMap<FileSystem, Map<string, { mtime: number; rewrites: PluginRewrites | undefined }>>();
+
 /** What one file rewrites (undefined: nothing). Unreadable files count as nothing (they don't run either). */
 export async function rewritesOfFile(fs: FileSystem, file: string): Promise<PluginRewrites | undefined> {
+  let cache = fileScans.get(fs);
+  if (!cache) fileScans.set(fs, (cache = new Map()));
+  const mtime = (await fs.stat(file))?.mtime;
+  const hit = mtime !== undefined ? cache.get(file) : undefined;
+  if (hit && hit.mtime === mtime) return hit.rewrites;
+  const rewrites = await scanFile(fs, file);
+  if (mtime !== undefined) cache.set(file, { mtime, rewrites });
+  return rewrites;
+}
+
+async function scanFile(fs: FileSystem, file: string): Promise<PluginRewrites | undefined> {
   let text: string;
   try {
     text = await fs.readFile(file);

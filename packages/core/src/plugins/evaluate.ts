@@ -98,6 +98,22 @@ export const UNKNOWN = (why: string): Value => ({ k: 'unknown', why });
 const NIL: Value = { k: 'nil' };
 
 const RESOLVE_EXT = ['', '.js', '.cjs', '.mjs', '.ts', '.cts', '.mts', '.json'];
+/** Parallel file reads during a crawl. */
+const IO_CONCURRENCY = 16;
+
+/** `Promise.all(items.map(fn))` with at most `limit` in flight; results in input order. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let i = 0;
+  const worker = async (): Promise<void> => {
+    while (i < items.length) {
+      const k = i++;
+      out[k] = await fn(items[k]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
 const INDEX_FILES = ['index.js', 'index.cjs', 'index.mjs', 'index.ts', 'index.json'];
 
 /** Resolve `.` / `..` segments (the core's `normalize` keeps them) — one canonical key per file. */
@@ -149,15 +165,18 @@ export function isCallable(v: Value): v is FnValue | NativeValue {
 type FunctionLike = ts.FunctionLikeDeclaration;
 
 function isFunctionLike(n: ts.Node): n is FunctionLike {
-  return (
-    ts.isFunctionDeclaration(n) ||
-    ts.isFunctionExpression(n) ||
-    ts.isArrowFunction(n) ||
-    ts.isMethodDeclaration(n) ||
-    ts.isGetAccessorDeclaration(n) ||
-    ts.isSetAccessorDeclaration(n) ||
-    ts.isConstructorDeclaration(n)
-  );
+  switch (n.kind) {
+    case ts.SyntaxKind.FunctionDeclaration:
+    case ts.SyntaxKind.FunctionExpression:
+    case ts.SyntaxKind.ArrowFunction:
+    case ts.SyntaxKind.MethodDeclaration:
+    case ts.SyntaxKind.GetAccessor:
+    case ts.SyntaxKind.SetAccessor:
+    case ts.SyntaxKind.Constructor:
+      return true;
+    default:
+      return false;
+  }
 }
 
 function propName(name: ts.PropertyName): string | undefined {
@@ -168,6 +187,24 @@ function propName(name: ts.PropertyName): string | undefined {
     if (ts.isStringLiteralLike(e) || ts.isNumericLiteral(e)) return e.text;
   }
   return undefined;
+}
+
+/** A node that can declare names: a function, a block, a file, a loop's / catch's own binding. */
+function isScopeNode(n: ts.Node): boolean {
+  switch (n.kind) {
+    case ts.SyntaxKind.Block:
+    case ts.SyntaxKind.SourceFile:
+    case ts.SyntaxKind.ModuleBlock:
+    case ts.SyntaxKind.CaseClause:
+    case ts.SyntaxKind.DefaultClause:
+    case ts.SyntaxKind.ForStatement:
+    case ts.SyntaxKind.ForOfStatement:
+    case ts.SyntaxKind.ForInStatement:
+    case ts.SyntaxKind.CatchClause:
+      return true;
+    default:
+      return isFunctionLike(n);
+  }
 }
 
 function skipParens(e: ts.Expression): ts.Expression {
@@ -486,9 +523,9 @@ export class StaticEvaluator {
   private readonly blockDecls = new Map<ts.Node, Map<string, ts.VariableDeclaration[] | Declaration>>();
   private readonly varHoist = new Map<ts.Node, Map<string, ts.VariableDeclaration[]>>();
   private readonly declMemo = new Map<ts.Node, Declaration | null>();
-  private readonly writeIndex = new Map<ts.Node, Map<string, WriteSite[]>>();
+  private readonly writeIndex = new Map<ts.SourceFile, Map<string, WriteSite[]>>();
   private readonly moduleVarCache = new Map<ts.VariableDeclaration, Promise<Value>>();
-  private readonly refIndex = new Map<ts.Node, Map<string, ts.Identifier[]>>();
+  private readonly refIndex = new Map<ts.SourceFile, Map<string, ts.Identifier[]>>();
   private readonly escapeCache = new Map<ts.Node, string | null>();
   private readonly callRootedCache = new Map<ts.SourceFile, boolean>();
   private readonly usesThisCache = new Map<ts.Node, boolean>();
@@ -561,21 +598,31 @@ export class StaticEvaluator {
   // Files & modules
   // -------------------------------------------------------------------------
 
-  private async source(file: string): Promise<ts.SourceFile | null> {
-    if (this.sources.has(file)) return this.sources.get(file)!;
-    if (this.sources.size >= this.limits.maxFiles) return null;
-    let sf: ts.SourceFile | null = null;
-    try {
-      const text = await this.fs.readFile(file);
-      if (text.length <= MAX_PARSE_CHARS && this.bytes + text.length <= this.limits.maxBytes) {
-        this.bytes += text.length;
-        sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKindFor(file));
+  private readonly loading = new Map<string, Promise<ts.SourceFile | null>>();
+
+  private source(file: string): Promise<ts.SourceFile | null> {
+    const inFlight = this.loading.get(file);
+    if (inFlight) return inFlight;
+    if (this.sources.has(file)) return Promise.resolve(this.sources.get(file)!);
+    if (this.sources.size >= this.limits.maxFiles) return Promise.resolve(null);
+    this.sources.set(file, null); // reserves its place: the crawl order stays deterministic
+    const p = (async (): Promise<ts.SourceFile | null> => {
+      let sf: ts.SourceFile | null = null;
+      try {
+        const text = await this.fs.readFile(file);
+        if (text.length <= MAX_PARSE_CHARS && this.bytes + text.length <= this.limits.maxBytes) {
+          this.bytes += text.length;
+          sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKindFor(file));
+        }
+      } catch {
+        sf = null;
       }
-    } catch {
-      sf = null;
-    }
-    this.sources.set(file, sf);
-    return sf;
+      this.sources.set(file, sf);
+      this.loading.delete(file);
+      return sf;
+    })();
+    this.loading.set(file, p);
+    return p;
   }
 
   private inRoots(p: string): boolean {
@@ -603,16 +650,55 @@ export class StaticEvaluator {
   async resolveRelative(fromFile: string, spec: string): Promise<string | undefined> {
     const base = resolveDots(join(dirname(fromFile), spec));
     if (!this.inRoots(base)) return undefined;
-    for (const ext of RESOLVE_EXT) {
-      const p = base + ext;
-      const st = await this.fs.stat(p);
-      if (st?.type === FileType.File) return (await this.inRealRoots(p)) ? p : undefined;
+    let pending = this.resolveCache.get(base);
+    if (!pending) {
+      pending = this.resolveBase(base);
+      this.resolveCache.set(base, pending);
     }
-    const st = await this.fs.stat(base);
-    if (st?.type === FileType.Directory) {
+    return pending;
+  }
+
+  private readonly resolveCache = new Map<string, Promise<string | undefined>>();
+  private readonly dirCache = new Map<string, Promise<Map<string, FileType> | undefined>>();
+
+  /** A folder's entries (one listing per folder per read). */
+  private listing(dir: string): Promise<Map<string, FileType> | undefined> {
+    let pending = this.dirCache.get(dir);
+    if (!pending) {
+      pending = this.fs.readDirectory(dir).then(
+        (entries) => new Map(entries.map((e) => [e.name, e.type])),
+        () => undefined,
+      );
+      this.dirCache.set(dir, pending);
+    }
+    return pending;
+  }
+
+  /** Is `dir/name` of this type? From the folder's listing; a case-only mismatch is left to `stat` (the FS decides). */
+  private async isEntry(dir: string, name: string, type: FileType): Promise<boolean> {
+    const entries = await this.listing(dir);
+    if (!entries) return (await this.fs.stat(join(dir, name)))?.type === type;
+    const t = entries.get(name);
+    if (t !== undefined) return t === type || (t === FileType.SymbolicLink && (await this.fs.stat(join(dir, name)))?.type === type);
+    const lower = name.toLowerCase();
+    for (const k of entries.keys()) if (k.toLowerCase() === lower) return (await this.fs.stat(join(dir, name)))?.type === type;
+    return false;
+  }
+
+  /** Node's resolution of a relative path: the file, `base` + an extension, or the folder's index. */
+  private async resolveBase(base: string): Promise<string | undefined> {
+    const dir = dirname(base);
+    const name = base.slice(dir.length + 1);
+    for (const ext of RESOLVE_EXT) {
+      if (name + ext === '') continue;
+      if (await this.isEntry(dir, name + ext, FileType.File)) return (await this.inRealRoots(base + ext)) ? base + ext : undefined;
+    }
+    if (await this.isEntry(dir, name, FileType.Directory)) {
       for (const idx of INDEX_FILES) {
-        const p = join(base, idx);
-        if ((await this.fs.stat(p))?.type === FileType.File) return (await this.inRealRoots(p)) ? p : undefined;
+        if (await this.isEntry(base, idx, FileType.File)) {
+          const p = join(base, idx);
+          return (await this.inRealRoots(p)) ? p : undefined;
+        }
       }
     }
     return undefined;
@@ -624,25 +710,38 @@ export class StaticEvaluator {
    * (writes into other modules, plugin rewrites) also see code that was loaded
    * but never followed. `crawlTruncated` is set when a limit cut it short.
    */
+  /** Read and parse `file` and everything it reaches, in parallel, ahead of evaluating it. */
+  async preload(file: string): Promise<void> {
+    await this.source(file);
+    await this.parseReachable();
+  }
+
   async parseReachable(): Promise<void> {
-    const queue = [...this.sources.keys()];
-    const seen = new Set(queue);
-    while (queue.length) {
-      const f = queue.shift()!;
-      const sf = this.sources.get(f);
-      if (!sf || f.endsWith('.json')) continue;
-      for (const spec of relativeSpecifiers(sf)) {
-        const target = await this.resolveRelative(f, spec);
-        if (!target || seen.has(target)) continue;
-        seen.add(target);
-        if (this.sources.size >= this.limits.maxFiles) {
-          this.crawlCut = true;
-          return;
+    // Breadth-first, one level at a time: a level's files are resolved, then read and parsed, in parallel.
+    let frontier = [...this.sources.keys()];
+    const seen = new Set(frontier);
+    while (frontier.length) {
+      const resolved = await mapLimit(frontier, IO_CONCURRENCY, async (f) => {
+        const sf = this.sources.get(f);
+        if (!sf || f.endsWith('.json')) return [];
+        return Promise.all(relativeSpecifiers(sf).map((spec) => this.resolveRelative(f, spec)));
+      });
+      const next: string[] = [];
+      for (const targets of resolved) {
+        for (const t of targets) {
+          if (!t || seen.has(t)) continue;
+          seen.add(t);
+          next.push(t);
         }
-        const parsed = await this.source(target);
-        if (!parsed) this.crawlCut = true;
-        queue.push(target);
       }
+      if (this.sources.size + next.length > this.limits.maxFiles) {
+        this.crawlCut = true;
+        return;
+      }
+      for (const t of next) void this.source(t); // reserve in order
+      const parsed = await mapLimit(next, IO_CONCURRENCY, (t) => this.source(t));
+      if (parsed.some((x) => !x)) this.crawlCut = true;
+      frontier = next;
     }
   }
 
@@ -1377,16 +1476,41 @@ export class StaticEvaluator {
 
   private findDeclarationUncached(name: string, at: ts.Node): Declaration | undefined {
     let n: ts.Node | undefined = at.parent;
-    let child: ts.Node = at;
-    while (n) {
-      this.steps++;
+    // A function declaration's own name is resolved from outside the function.
+    if (n && ts.isFunctionDeclaration(n) && n.name === at) n = n.parent;
+    while (n && !isScopeNode(n)) n = n.parent;
+    return n ? this.resolveIn(n, name) : undefined;
+  }
+
+  private readonly scopeResolution = new Map<ts.Node, Map<string, Declaration | null>>();
+
+  /** `name` as seen from scope node `n` (inclusive) outward — memoized per scope. */
+  private resolveIn(n: ts.Node, name: string): Declaration | undefined {
+    let m = this.scopeResolution.get(n);
+    if (!m) this.scopeResolution.set(n, (m = new Map()));
+    const hit = m.get(name);
+    if (hit !== undefined) return hit ?? undefined;
+    this.steps++;
+    let found = this.declaredAt(n, name);
+    if (!found) {
+      let p = n.parent;
+      while (p && !isScopeNode(p)) p = p.parent;
+      if (p) found = this.resolveIn(p, name);
+    }
+    m.set(name, found ?? null);
+    return found;
+  }
+
+  /** What scope node `n` itself declares as `name`. */
+  private declaredAt(n: ts.Node, name: string): Declaration | undefined {
+    {
       if (isFunctionLike(n)) {
         const idx = n.parameters.findIndex((p) => bindingNames(p.name).includes(name));
         if (idx >= 0) {
           const p = n.parameters[idx]!;
           return { kind: 'param', fn: n, index: idx, destructured: !ts.isIdentifier(p.name) };
         }
-        if (ts.isFunctionDeclaration(n) && n.name?.text === name && child !== n.name) return { kind: 'fn', decl: n };
+        if (ts.isFunctionDeclaration(n) && n.name?.text === name) return { kind: 'fn', decl: n };
         if (n.body) {
           const vars = this.hoisted(n.body).get(name);
           if (vars?.length) return declarationFromVar(vars[0]!, name, n.body, vars.length > 1);
@@ -1416,8 +1540,6 @@ export class StaticEvaluator {
       if (ts.isCatchClause(n) && n.variableDeclaration && bindingNames(n.variableDeclaration.name).includes(name)) {
         return { kind: 'opaque', why: 'catch variable' };
       }
-      child = n;
-      n = n.parent;
     }
     return undefined;
   }
@@ -1464,13 +1586,51 @@ export class StaticEvaluator {
   }
 
   /** The (once-built) write index of a scope. */
-  private writesIn(scopeNode: ts.Node): Map<string, WriteSite[]> {
-    let idx = this.writeIndex.get(scopeNode);
-    if (!idx) {
-      idx = collectWrites(scopeNode, this.count);
-      this.writeIndex.set(scopeNode, idx);
+  /**
+   * The write sites inside a scope. Built once per FILE (a per-scope build re-walks
+   * every nested function: quadratic on bundles), then sliced to the scope's range.
+   */
+  private writesIn(scopeNode: ts.Node): ScopedIndex<WriteSite> {
+    const sf = scopeNode.getSourceFile();
+    let all = this.writeIndex.get(sf);
+    if (!all) {
+      all = collectWrites(sf, this.count);
+      for (const list of all.values()) list.sort((a, b) => a.root.pos - b.root.pos);
+      this.writeIndex.set(sf, all);
     }
-    return idx;
+    return this.scoped(all, scopeNode, (w) => w.root.pos);
+  }
+
+  private readonly slices = new Map<ts.Node, Map<unknown, Map<string, unknown[]>>>();
+
+  /** `all` (a file's index, sorted by position) restricted to `container`'s range — memoized per container and name. */
+  private scoped<T>(all: Map<string, T[]>, container: ts.Node, pos: (x: T) => number): ScopedIndex<T> {
+    if (ts.isSourceFile(container)) return all;
+    let byIndex = this.slices.get(container);
+    if (!byIndex) this.slices.set(container, (byIndex = new Map()));
+    let cache = byIndex.get(all) as Map<string, T[]> | undefined;
+    if (!cache) byIndex.set(all, (cache = new Map()));
+    const memo = cache;
+    return {
+      get: (name: string): T[] | undefined => {
+        const hit = memo.get(name);
+        if (hit) return hit;
+        const list = all.get(name);
+        if (!list) return undefined;
+        let lo = 0;
+        let hi = list.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (pos(list[mid]!) < container.pos) lo = mid + 1;
+          else hi = mid;
+        }
+        let end = lo;
+        while (end < list.length && pos(list[end]!) < container.end) end++;
+        const out = list.slice(lo, end);
+        memo.set(name, out);
+        return out;
+      },
+    };
   }
 
   /** Writes to the variable `decl`, from the (once-built) write index of its scope. */
@@ -1482,25 +1642,27 @@ export class StaticEvaluator {
     });
   }
 
-  /** Every reference to `name` inside a scope (built once per scope). */
-  private refsIn(container: ts.Node): Map<string, ts.Identifier[]> {
-    let m = this.refIndex.get(container);
-    if (m) return m;
-    m = new Map();
-    const map = m;
-    const walk = (n: ts.Node): void => {
-      this.steps++;
-      if (ts.isTypeNode(n)) return;
-      if (ts.isIdentifier(n) && isReferenceIdentifier(n)) {
-        const arr = map.get(n.text);
-        if (arr) arr.push(n);
-        else map.set(n.text, [n]);
-      }
-      ts.forEachChild(n, walk);
-    };
-    ts.forEachChild(container, walk);
-    this.refIndex.set(container, m);
-    return m;
+  /** Every reference to a name inside a scope (indexed once per file, sliced to the scope's range). */
+  private refsIn(container: ts.Node): ScopedIndex<ts.Identifier> {
+    const sf = container.getSourceFile();
+    let all = this.refIndex.get(sf);
+    if (!all) {
+      const map = new Map<string, ts.Identifier[]>();
+      const walk = (n: ts.Node): void => {
+        this.steps++;
+        if (ts.isTypeNode(n)) return;
+        if (ts.isIdentifier(n) && isReferenceIdentifier(n)) {
+          const arr = map.get(n.text);
+          if (arr) arr.push(n);
+          else map.set(n.text, [n]);
+        }
+        ts.forEachChild(n, walk);
+      };
+      ts.forEachChild(sf, walk);
+      all = map;
+      this.refIndex.set(sf, all);
+    }
+    return this.scoped(all, container, (id) => id.pos);
   }
 
   /** Does the file write into the RESULT of a call (`get().x = …`)? A value returned by a function may then be mutated. */
@@ -2736,6 +2898,11 @@ export class StaticEvaluator {
     }
     return undefined;
   }
+}
+
+/** A name → items index (a file's, or a scope's slice of it). */
+interface ScopedIndex<T> {
+  get(name: string): T[] | undefined;
 }
 
 /** What one result-site walk has already visited. */

@@ -596,6 +596,110 @@ function enabledState(decl: PluginDeclaration | undefined, config: PluginsConfig
  * Returns `undefined` when Strapi isn't installed (no `node_modules`) — callers
  * then keep today's behaviour (installed plugins stay unverifiable).
  */
+/** What reading one plugin's server code yields (independent of the project, except the API prefix). */
+interface ServerRead {
+  complete: boolean;
+  gaps: string[];
+  contentTypes: ContentType[];
+  artifacts: CodeArtifact[];
+  routes: PluginRoute[];
+  files: string[];
+  /** What this plugin's own code rewrites in plugins. */
+  rewrites: PluginRewrites;
+  /** Cut by the time budget. */
+  timedOut?: boolean;
+}
+
+/**
+ * Reads of a plugin's server, by package dir — reused while none of the files
+ * (nor the folders) it was read from changed: re-reading after a config edit, a
+ * lockfile touch or in a second project of the workspace costs a few stats.
+ */
+const serverReadsByFs = new WeakMap<FileSystem, Map<string, { key: string; stamp: string; read: ServerRead }>>();
+const SERVER_READS_MAX = 400;
+
+async function readServerCached(fs: FileSystem, name: string, dir: string, entry: string, apiPrefix: string | undefined, major: number): Promise<ServerRead> {
+  let reads = serverReadsByFs.get(fs);
+  if (!reads) serverReadsByFs.set(fs, (reads = new Map()));
+  const key = [name, entry, apiPrefix ?? '', major].join('\n');
+  const hit = reads.get(dir);
+  if (hit && hit.key === key && (await filesStamp(fs, hit.read.files)) === hit.stamp) {
+    reads.delete(dir); // most recently used last
+    reads.set(dir, hit);
+    return hit.read;
+  }
+  const read = await readServer(fs, name, dir, entry, apiPrefix);
+  reads.delete(dir);
+  if (read.timedOut) return read; // cut by the time budget: depends on the load, never reused
+  reads.set(dir, { key, stamp: await filesStamp(fs, read.files), read });
+  while (reads.size > SERVER_READS_MAX) reads.delete(reads.keys().next().value!);
+  return read;
+}
+
+async function readServer(fs: FileSystem, name: string, dir: string, entry: string, apiPrefix: string | undefined): Promise<ServerRead> {
+  const scratch: InstalledPlugin = {
+    name,
+    packageName: name,
+    dir,
+    origin: 'dependency',
+    enabled: 'yes',
+    hasServer: true,
+    complete: true,
+    gaps: [],
+    contentTypes: [],
+    artifacts: [],
+    routes: [],
+  };
+  // One evaluator per plugin: confined to the package, with its own time budget.
+  const pev = new StaticEvaluator(fs, { roots: [dir], timeBudgetMs: PLUGIN_BUDGET_MS }, strapiExternals);
+  await pev.preload(entry);
+  await new PluginReader(pev, scratch, apiPrefix).read(entry);
+  const crossWrite = await pev.writesIntoModules();
+  if (crossWrite) {
+    scratch.complete = false;
+    scratch.gaps.push(`a module writes into another module's exports (${crossWrite})`);
+  }
+  // after the cross-module check too: it stops silently when the budget runs out
+  if (pev.exhausted) {
+    scratch.complete = false;
+    scratch.gaps.push('read budget exceeded');
+  }
+  if (pev.crawlTruncated) {
+    scratch.complete = false;
+    scratch.gaps.push('not every file of the plugin could be read');
+  }
+  const rewrites: PluginRewrites = { plugins: new Set(), artifacts: new Set() };
+  for (const sf of pev.parsedFiles()) {
+    if (!MAY_REWRITE_PLUGINS.test(sf.text)) continue;
+    const r = pluginWriteTargets(sf);
+    for (const x of r.plugins) rewrites.plugins.add(x);
+    for (const x of r.artifacts) rewrites.artifacts.add(x);
+  }
+  const files = pev.parsedFiles().map((sf) => sf.fileName);
+  return {
+    complete: scratch.complete,
+    gaps: scratch.gaps,
+    contentTypes: scratch.contentTypes,
+    artifacts: scratch.artifacts,
+    routes: scratch.routes,
+    files,
+    rewrites,
+    ...(pev.exhausted ? { timedOut: true } : {}),
+  };
+}
+
+/** The mtime of every file read and of the folders holding them (a new file in a folder can change resolution). */
+async function filesStamp(fs: FileSystem, files: string[]): Promise<string> {
+  const paths = [...new Set([...files, ...files.map((f) => dirname(f))])].sort();
+  const parts = await Promise.all(
+    paths.map(async (path) => {
+      const st = await fs.stat(path);
+      return st ? `${st.type}:${st.mtime ?? 'x'}` : '-';
+    }),
+  );
+  return parts.join('|');
+}
+
 /**
  * `projectRewrites`: what the project's own code rewrites (see `scanProjectRewrites`);
  * scanned here when not given. The result's `rewritten` / `extended` list only what
@@ -650,8 +754,11 @@ export async function readInstalledPlugins(fs: FileSystem, root: string, project
     const state = c.origin === 'internal' ? 'yes' : enabledState(decl, config);
     if (state === 'no') continue;
 
+    const exported = major >= 5 ? strapiServerExport(c.pkg) : undefined;
+    const entry = resolveDots(join(c.dir, exported ?? './strapi-server.js'));
     const plugin: InstalledPlugin = {
       name,
+      entry,
       packageName: asString(c.pkg.name) ?? c.spec,
       ...(asString(c.pkg.version) ? { version: asString(c.pkg.version)! } : {}),
       dir: c.dir,
@@ -668,35 +775,20 @@ export async function readInstalledPlugins(fs: FileSystem, root: string, project
       plugin.complete = false;
       plugin.gaps.push('enabled state not literal');
     }
-
-    const exported = major >= 5 ? strapiServerExport(c.pkg) : undefined;
-    const entry = resolveDots(join(c.dir, exported ?? './strapi-server.js'));
-    plugin.entry = entry;
     if ((await fs.stat(entry))?.type === FileType.File) {
       plugin.hasServer = true;
-      if (Date.now() - startedAt > TOTAL_BUDGET_MS) {
+      const server = Date.now() - startedAt > TOTAL_BUDGET_MS ? undefined : await readServerCached(fs, name, c.dir, entry, apiPrefix, major);
+      if (!server) {
         plugin.complete = false;
         plugin.gaps.push('not read (overall time budget)');
       } else {
-        // One evaluator per plugin: confined to the package, with its own time budget.
-        const pev = new StaticEvaluator(fs, { roots: [c.dir], timeBudgetMs: PLUGIN_BUDGET_MS }, strapiExternals);
-        await new PluginReader(pev, plugin, apiPrefix).read(entry);
-        const crossWrite = await pev.writesIntoModules();
-        if (crossWrite) {
-          plugin.complete = false;
-          plugin.gaps.push(`a module writes into another module's exports (${crossWrite})`);
-        }
-        // after the cross-module check too: it stops silently when the budget runs out
-        if (pev.exhausted) {
-          plugin.complete = false;
-          plugin.gaps.push('read budget exceeded');
-        }
-        if (pev.crawlTruncated) {
-          plugin.complete = false;
-          plugin.gaps.push('not every file of the plugin could be read');
-        }
-        for (const sf of pev.parsedFiles()) if (MAY_REWRITE_PLUGINS.test(sf.text)) addRewrites(pluginWriteTargets(sf));
-        plugin.files = pev.parsedFiles().map((sf) => sf.fileName);
+        if (!server.complete) plugin.complete = false;
+        plugin.gaps.push(...server.gaps);
+        plugin.contentTypes = server.contentTypes;
+        plugin.artifacts = server.artifacts;
+        plugin.routes = server.routes;
+        plugin.files = server.files;
+        addRewrites(server.rewrites);
       }
     }
     // `src/extensions/<plugin>/strapi-server.*` can rewrite the plugin at boot.
@@ -717,9 +809,10 @@ export async function readInstalledPlugins(fs: FileSystem, root: string, project
       p.complete = false;
       p.gaps.push('rewritten at runtime by other code (strapi.plugin(...) write)');
     }
-    // Extended in place: the entry exists, its method / attribute list may grow.
-    for (const a of p.artifacts) if (isExtended(a.ref, p.name)) a.hasSpread = true;
-    for (const ct of p.contentTypes) if (isExtended(ct.uid, p.name, 'ct:')) ct.partialAttributes = true;
+    // Extended in place: the entry exists, its method / attribute list may grow. (Copies: a read's
+    // results are cached and shared between projects.)
+    p.artifacts = p.artifacts.map((a) => (isExtended(a.ref, p.name) && !a.hasSpread ? { ...a, hasSpread: true } : a));
+    p.contentTypes = p.contentTypes.map((ct) => (isExtended(ct.uid, p.name, 'ct:') && !ct.partialAttributes ? { ...ct, partialAttributes: true } : ct));
   }
   const frameworkMiddlewares = await readFrameworkMiddlewares(fs, strapiDir, major);
   return { strapiDir, strapiVersion, major, plugins, config, apiPrefix, rewritten: [...rewritten], extended: [...extended], ...(frameworkMiddlewares ? { frameworkMiddlewares } : {}) };

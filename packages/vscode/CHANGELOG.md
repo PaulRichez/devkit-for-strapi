@@ -20,6 +20,10 @@
   review-workflows) stay unverified.
 - Installing a plugin is picked up without a reload, through the files npm, yarn and
   pnpm rewrite on install.
+- Plugins are read in the background: the editor is ready in well under a second,
+  and refs into plugins are checked a few seconds later, never wrongly reported in
+  between. A plugin whose files didn't change isn't read again, so editing
+  `config/plugins` re-checks a project in a fraction of a second.
 
 **New: Strapi Routes view**
 

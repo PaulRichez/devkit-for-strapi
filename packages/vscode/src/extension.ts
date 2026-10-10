@@ -87,6 +87,7 @@ function activateImpl(context: vscode.ExtensionContext): void {
     codeLenses.refresh();
     routesView.refresh();
     diagnostics.revalidateAll(); // also fired when installed plugins were re-read
+    updateStatus(engine, status); // counts include installed plugins once they land
   });
   const diagnostics = registerDiagnostics(context, engine);
   registerCompletionProvider(context, engine);
@@ -111,7 +112,9 @@ function activateImpl(context: vscode.ExtensionContext): void {
 
     try {
       engine.setExcludes(vscode.workspace.getConfiguration('strapiDevkit').get<string[]>('exclude', []));
-      await engine.init(folders);
+      // Installed plugins (node_modules) are read in the background: refs into them stay
+      // silent until they land, then onReferencesChanged revalidates.
+      await engine.init(folders, { waitForInstalled: false });
       logProjects(engine, output);
       updateStatus(engine, status);
       diagnostics.revalidateAll(); // open files were indexed-empty during init
