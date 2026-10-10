@@ -24,4 +24,7 @@ export class NodeFileSystem implements FileSystem {
   async exists(path: string): Promise<boolean> {
     return (await this.stat(path)) !== null;
   }
+  async realpath(path: string): Promise<string> {
+    return (await fsp.realpath(path)).replace(/\\/g, '/');
+  }
 }

@@ -238,26 +238,94 @@ function forEachInScope(node: ts.Node, visit: (n: ts.Node) => void): void {
  */
 function touchesExports(n: ts.Node, ignore?: ReadonlySet<ts.Node>): boolean {
   let hit = false;
-  const shadows = (fn: FunctionLike): boolean =>
-    fn.parameters.some((p) => bindingNames(p.name).some((x) => x === 'exports' || x === 'module'));
-  const walk = (x: ts.Node): void => {
+  const shadowed = (fn: FunctionLike, name: string): boolean => fn.parameters.some((p) => bindingNames(p.name).includes(name));
+  const walk = (x: ts.Node, shE: boolean, shM: boolean, inFn: boolean): void => {
     if (hit || ignore?.has(x)) return;
-    if (isFunctionLike(x) && shadows(x)) return;
+    let e = shE;
+    let m = shM;
+    let f = inFn;
+    if (isFunctionLike(x)) {
+      e = e || shadowed(x, 'exports');
+      m = m || shadowed(x, 'module');
+      if (!ts.isArrowFunction(x)) f = true;
+    }
     if (ts.isIdentifier(x) && (x.text === 'exports' || x.text === 'module')) {
       const parent = x.parent;
-      // `foo.exports` / `foo.module` (a property name) is someone else's.
-      const isPropName = parent && ts.isPropertyAccessExpression(parent) && parent.name === x;
-      const isKey = parent && (ts.isPropertyAssignment(parent) || ts.isMethodDeclaration(parent)) && parent.name === x;
-      if (!isPropName && !isKey && (x.text === 'exports' || (parent && (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent))))) {
+      const isPropName = parent && ((ts.isPropertyAccessExpression(parent) && parent.name === x) || (ts.isQualifiedName(parent) && parent.right === x));
+      const isKey =
+        parent &&
+        (ts.isPropertyAssignment(parent) || ts.isMethodDeclaration(parent) || ts.isPropertyDeclaration(parent) || ts.isGetAccessorDeclaration(parent) || ts.isSetAccessorDeclaration(parent)) &&
+        parent.name === x;
+      if (!isPropName && !isKey && ((x.text === 'exports' && !e) || (x.text === 'module' && !m))) {
         hit = true;
         return;
       }
     }
-    ts.forEachChild(x, walk);
+    // A write through the module's top-level `this` (=== module.exports).
+    if (!f && ts.isBinaryExpression(x) && x.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && x.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+      if (accessRoot(x.left).root.kind === ts.SyntaxKind.ThisKeyword) {
+        hit = true;
+        return;
+      }
+    }
+    ts.forEachChild(x, (c) => walk(c, e, m, f));
   };
-  walk(n);
+  walk(n, false, false, false);
   return hit;
 }
+
+/** Is this identifier a reference to a binding (not a property name, a declaration name, a label…)? */
+function isReferenceIdentifier(id: ts.Identifier): boolean {
+  const p = id.parent;
+  if (!p) return false;
+  if ((ts.isPropertyAccessExpression(p) && p.name === id) || (ts.isQualifiedName(p) && p.right === id)) return false;
+  if ((ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p) || ts.isPropertyDeclaration(p) || ts.isGetAccessorDeclaration(p) || ts.isSetAccessorDeclaration(p) || ts.isPropertySignature(p) || ts.isEnumMember(p)) && p.name === id) return false;
+  if ((ts.isVariableDeclaration(p) || ts.isParameter(p) || ts.isFunctionDeclaration(p) || ts.isFunctionExpression(p) || ts.isClassDeclaration(p) || ts.isClassExpression(p) || ts.isEnumDeclaration(p)) && p.name === id) return false;
+  if (ts.isBindingElement(p) && (p.name === id || p.propertyName === id)) return false;
+  if (ts.isImportSpecifier(p) || ts.isExportSpecifier(p) || ts.isImportClause(p) || ts.isNamespaceImport(p) || ts.isNamespaceExport(p)) return false;
+  if (ts.isLabeledStatement(p) || ts.isBreakOrContinueStatement(p)) return false;
+  return true;
+}
+
+/** Relative module specifiers a file requires/imports (for crawling the graph without evaluating). */
+function relativeSpecifiers(sf: ts.SourceFile): string[] {
+  const out: string[] = [];
+  const walk = (n: ts.Node): void => {
+    if (ts.isCallExpression(n)) {
+      const a0 = n.arguments[0];
+      const isReq = ts.isIdentifier(n.expression) && n.expression.text === 'require';
+      const isDyn = n.expression.kind === ts.SyntaxKind.ImportKeyword;
+      if ((isReq || isDyn) && a0 && ts.isStringLiteralLike(a0) && a0.text.startsWith('.')) out.push(a0.text);
+    } else if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier && ts.isStringLiteralLike(n.moduleSpecifier) && n.moduleSpecifier.text.startsWith('.')) {
+      out.push(n.moduleSpecifier.text);
+    }
+    ts.forEachChild(n, walk);
+  };
+  walk(sf);
+  return out;
+}
+
+const PURE_METHODS = new Set([
+  'hasOwnProperty',
+  'toString',
+  'valueOf',
+  'includes',
+  'indexOf',
+  'lastIndexOf',
+  'join',
+  'slice',
+  'concat',
+  'at',
+  'startsWith',
+  'endsWith',
+  'trim',
+  'toLowerCase',
+  'toUpperCase',
+  'split',
+  'charAt',
+  'test',
+  '__require',
+]);
 
 // ---------------------------------------------------------------------------
 // Declarations & writes (built once per scope container)
@@ -415,6 +483,11 @@ export class StaticEvaluator {
   private readonly declMemo = new Map<ts.Node, Declaration | null>();
   private readonly writeIndex = new Map<ts.Node, Map<string, WriteSite[]>>();
   private readonly moduleVarCache = new Map<ts.VariableDeclaration, Promise<Value>>();
+  private readonly refIndex = new Map<ts.Node, Map<string, ts.Identifier[]>>();
+  private readonly escapeCache = new Map<ts.Node, string | null>();
+  private readonly callRootedCache = new Map<ts.SourceFile, boolean>();
+  private realRoots: string[] | undefined;
+  private crawlCut = false;
   private steps = 0;
   private lastTimeCheck = 0;
   private depth = 0;
@@ -498,6 +571,18 @@ export class StaticEvaluator {
     return !this.roots || this.roots.some((r) => r === p || isPathInside(r, p));
   }
 
+  /** Real-path confinement (a symlink inside a package must not lead outside it), when the FS can tell. */
+  private async inRealRoots(p: string): Promise<boolean> {
+    if (!this.roots || !this.fs.realpath) return true;
+    try {
+      this.realRoots ??= await Promise.all(this.roots.map(async (r) => resolveDots(await this.fs.realpath!(r))));
+      const rp = resolveDots(await this.fs.realpath(p));
+      return this.realRoots.some((r) => r === rp || isPathInside(r, rp));
+    } catch {
+      return false;
+    }
+  }
+
   /** Resolve a relative module specifier from `fromFile` to an existing file (inside the roots). */
   async resolveRelative(fromFile: string, spec: string): Promise<string | undefined> {
     const base = resolveDots(join(dirname(fromFile), spec));
@@ -505,16 +590,49 @@ export class StaticEvaluator {
     for (const ext of RESOLVE_EXT) {
       const p = base + ext;
       const st = await this.fs.stat(p);
-      if (st?.type === FileType.File) return p;
+      if (st?.type === FileType.File) return (await this.inRealRoots(p)) ? p : undefined;
     }
     const st = await this.fs.stat(base);
     if (st?.type === FileType.Directory) {
       for (const idx of INDEX_FILES) {
         const p = join(base, idx);
-        if ((await this.fs.stat(p))?.type === FileType.File) return p;
+        if ((await this.fs.stat(p))?.type === FileType.File) return (await this.inRealRoots(p)) ? p : undefined;
       }
     }
     return undefined;
+  }
+
+  /**
+   * Parse (without evaluating) every file reachable through relative
+   * `require`/`import` from what was parsed so far — so post-read checks
+   * (writes into other modules, plugin rewrites) also see code that was loaded
+   * but never followed. `crawlTruncated` is set when a limit cut it short.
+   */
+  async parseReachable(): Promise<void> {
+    const queue = [...this.sources.keys()];
+    const seen = new Set(queue);
+    while (queue.length) {
+      const f = queue.shift()!;
+      const sf = this.sources.get(f);
+      if (!sf || f.endsWith('.json')) continue;
+      for (const spec of relativeSpecifiers(sf)) {
+        const target = await this.resolveRelative(f, spec);
+        if (!target || seen.has(target)) continue;
+        seen.add(target);
+        if (this.sources.size >= this.limits.maxFiles) {
+          this.crawlCut = true;
+          return;
+        }
+        const parsed = await this.source(target);
+        if (!parsed) this.crawlCut = true;
+        queue.push(target);
+      }
+    }
+  }
+
+  /** True when {@link parseReachable} could not parse every reachable file. */
+  get crawlTruncated(): boolean {
+    return this.crawlCut;
   }
 
   private async requireModule(fromFile: string, spec: string): Promise<Value> {
@@ -819,6 +937,7 @@ export class StaticEvaluator {
     if (base.k === 'obj') {
       const t = base.props.get(key);
       if (t) return t();
+      if (key === '__esModule' && base.esModule) return { k: 'bool', v: true };
       return base.open ? UNKNOWN(`open object (no '${key}')`) : NIL;
     }
     if (base.k === 'unknown') return base;
@@ -937,7 +1056,7 @@ export class StaticEvaluator {
     if (ts.isObjectLiteralExpression(node)) return this.evObject(node, file, scope);
     if (ts.isArrayLiteralExpression(node)) return this.evArray(node, file, scope);
     if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
-      return this.fnValue(node, file, scope, ts.isFunctionExpression(node) ? node.name?.text : bindingNameOf(node));
+      return this.fnValue(node, file, scope, (ts.isFunctionExpression(node) ? node.name?.text : undefined) ?? bindingNameOf(node));
     }
     if (ts.isIdentifier(node)) {
       if (node.text === 'undefined') return NIL;
@@ -1295,6 +1414,8 @@ export class StaticEvaluator {
         return UNKNOWN(d.why);
       case 'param': {
         if (d.destructured) return UNKNOWN('destructured param');
+        const unsafe = this.paramUnsafe(d, name);
+        if (unsafe) return UNKNOWN(`param '${name}' ${unsafe}`);
         for (let s = scope; s; s = s.parent) if (s.fn === d.fn) return s.bindings.get(name) ?? NIL;
         return UNKNOWN(`unbound param '${name}'`);
       }
@@ -1326,18 +1447,296 @@ export class StaticEvaluator {
     }
   }
 
+  /** The (once-built) write index of a scope. */
+  private writesIn(scopeNode: ts.Node): Map<string, WriteSite[]> {
+    let idx = this.writeIndex.get(scopeNode);
+    if (!idx) {
+      idx = collectWrites(scopeNode, this.count);
+      this.writeIndex.set(scopeNode, idx);
+    }
+    return idx;
+  }
+
   /** Writes to the variable `decl`, from the (once-built) write index of its scope. */
   private writesOf(d: Extract<Declaration, { kind: 'var' }>): WriteSite[] {
-    let idx = this.writeIndex.get(d.scopeNode);
-    if (!idx) {
-      idx = collectWrites(d.scopeNode, this.count);
-      this.writeIndex.set(d.scopeNode, idx);
-    }
     const name = (d.decl.name as ts.Identifier).text;
-    return (idx.get(name) ?? []).filter((site) => {
+    return (this.writesIn(d.scopeNode).get(name) ?? []).filter((site) => {
       const r = this.findDeclaration(name, site.root);
       return r?.kind === 'var' && r.decl === d.decl;
     });
+  }
+
+  /** Every reference to `name` inside a scope (built once per scope). */
+  private refsIn(container: ts.Node): Map<string, ts.Identifier[]> {
+    let m = this.refIndex.get(container);
+    if (m) return m;
+    m = new Map();
+    const map = m;
+    const walk = (n: ts.Node): void => {
+      this.steps++;
+      if (ts.isTypeNode(n)) return;
+      if (ts.isIdentifier(n) && isReferenceIdentifier(n)) {
+        const arr = map.get(n.text);
+        if (arr) arr.push(n);
+        else map.set(n.text, [n]);
+      }
+      ts.forEachChild(n, walk);
+    };
+    ts.forEachChild(container, walk);
+    this.refIndex.set(container, m);
+    return m;
+  }
+
+  /** Does the file write into the RESULT of a call (`get().x = …`)? A value returned by a function may then be mutated. */
+  private hasCallRootedWrites(sf: ts.SourceFile): boolean {
+    const cached = this.callRootedCache.get(sf);
+    if (cached !== undefined) return cached;
+    let hit = false;
+    const callRoot = (t: ts.Expression): boolean => {
+      const r = skipParens(accessRoot(t).root);
+      return ts.isCallExpression(r) && !(ts.isIdentifier(r.expression) && r.expression.text === 'require');
+    };
+    const walk = (n: ts.Node): void => {
+      if (hit) return;
+      this.steps++;
+      if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+        const t = skipParens(n.left);
+        if ((ts.isPropertyAccessExpression(t) || ts.isElementAccessExpression(t)) && callRoot(t)) hit = true;
+      } else if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && SELF_MUTATORS.has(n.expression.name.text) && callRoot(n.expression.expression)) {
+        hit = true;
+      }
+      ts.forEachChild(n, walk);
+    };
+    walk(sf);
+    this.callRootedCache.set(sf, hit);
+    return hit;
+  }
+
+  private readonly callRootedTo = new Map<string, boolean>();
+
+  /** Does `sf` write into the result of a call to a function named `name` (`name().x = …`, `o.name().x = …`)? */
+  private callRootedWritesTo(sf: ts.SourceFile, name: string): boolean {
+    const key = `${sf.fileName}\0${name}`;
+    const cached = this.callRootedTo.get(key);
+    if (cached !== undefined) return cached;
+    let hit = false;
+    const callsIt = (t: ts.Expression): boolean => {
+      const r = skipParens(accessRoot(t).root);
+      if (!ts.isCallExpression(r)) return false;
+      const c = r.expression;
+      return (ts.isIdentifier(c) && c.text === name) || (ts.isPropertyAccessExpression(c) && c.name.text === name);
+    };
+    const walk = (n: ts.Node): void => {
+      if (hit) return;
+      this.steps++;
+      if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+        const t = skipParens(n.left);
+        if ((ts.isPropertyAccessExpression(t) || ts.isElementAccessExpression(t)) && callsIt(t)) hit = true;
+      } else if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && SELF_MUTATORS.has(n.expression.name.text) && callsIt(n.expression.expression)) {
+        hit = true;
+      } else if (ts.isCallExpression(n) && !this.isPureCall(n) && n.arguments.some((a) => callsIt(a) && ts.isCallExpression(skipParens(a)))) {
+        hit = true; // helper(name()) — the result handed to code that may mutate it
+      }
+      ts.forEachChild(n, walk);
+    };
+    walk(sf);
+    this.callRootedTo.set(key, hit);
+    return hit;
+  }
+
+  /**
+   * Is a variable bound to a module object (`require(…)`, an interop of it,
+   * `require(…).x`, an import)? `relativeOnly`: only the plugin's own modules
+   * (what we read); otherwise any module, external libraries included.
+   */
+  private isModuleBinding(d: Declaration | undefined, relativeOnly = true): boolean {
+    if (!d) return false;
+    if (d.kind === 'import') return !relativeOnly || (ts.isStringLiteralLike(d.decl.moduleSpecifier) && d.decl.moduleSpecifier.text.startsWith('.'));
+    if (d.kind !== 'var' && d.kind !== 'destructured') return false;
+    const init = d.decl.initializer ? skipParens(d.decl.initializer) : undefined;
+    if (!init) return false;
+    const isRequire = (e: ts.Expression): boolean => {
+      const r = skipParens(accessRoot(e).root);
+      if (!ts.isCallExpression(r) || !ts.isIdentifier(r.expression) || r.expression.text !== 'require') return false;
+      const spec = r.arguments[0];
+      return !!spec && ts.isStringLiteralLike(spec) && (!relativeOnly || spec.text.startsWith('.'));
+    };
+    if (isRequire(init)) return true;
+    if (ts.isCallExpression(init) && init.arguments[0] && isRequire(init.arguments[0]) && INTEROP_NAME.test(calleeText(init.expression) ?? '')) return true;
+    return false;
+  }
+
+  /**
+   * Why the value held by a binding can't be read as-is (it may be mutated
+   * through another path), if so. Follows aliases a few levels deep.
+   */
+  private escapeOf(name: string, scopeNode: ts.Node, same: (d: Declaration | undefined) => boolean, isModule: boolean, depth: number, seen: Set<ts.Node>): string | undefined {
+    for (const r of this.refsIn(scopeNode).get(name) ?? []) {
+      if (!same(this.findDeclaration(name, r))) continue;
+      const why = this.escapeAt(r, isModule, depth, seen);
+      if (why) return why;
+    }
+    return undefined;
+  }
+
+  /** Is an alias binding (declared by `vd` as `name`) used in a way that could mutate what it holds? */
+  private aliasUnsafe(vd: ts.VariableDeclaration, name: string, depth: number, seen: Set<ts.Node>): string | undefined {
+    if (depth > 6) return 'aliased too deeply';
+    if (seen.has(vd)) return undefined;
+    seen.add(vd);
+    const scopeNode = this.varScopeOf(vd);
+    const same = (d: Declaration | undefined): boolean => (d?.kind === 'var' || d?.kind === 'destructured') && d.decl === vd;
+    for (const w of this.writesIn(scopeNode).get(name) ?? []) {
+      if (!same(this.findDeclaration(name, w.root))) continue;
+      if (w.kind === 'assign') continue; // rebinding the alias doesn't touch the value
+      if (w.kind === 'arg' && this.isPureCall(w.call!)) continue;
+      return `mutated through alias '${name}'`;
+    }
+    return this.escapeOf(name, scopeNode, same, false, depth + 1, seen);
+  }
+
+  private escapeAt(r: ts.Identifier, isModule: boolean, depth: number, seen: Set<ts.Node>): string | undefined {
+    let e: ts.Expression = r;
+    let viaAccess = false;
+    for (;;) {
+      const p = e.parent;
+      if (!p) return undefined;
+      if ((ts.isPropertyAccessExpression(p) || ts.isElementAccessExpression(p)) && p.expression === e) {
+        e = p;
+        viaAccess = true;
+        continue;
+      }
+      if (ts.isParenthesizedExpression(p) || ts.isAsExpression(p) || ts.isNonNullExpression(p) || ts.isSatisfiesExpression(p) || ts.isTypeAssertionExpression(p) || ts.isAwaitExpression(p)) {
+        e = p;
+        continue;
+      }
+      if (ts.isConditionalExpression(p) && p.condition !== e) {
+        e = p;
+        continue;
+      }
+      if (ts.isBinaryExpression(p)) {
+        const op = p.operatorToken.kind;
+        if (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.AmpersandAmpersandToken || op === ts.SyntaxKind.QuestionQuestionToken || (op === ts.SyntaxKind.CommaToken && p.right === e)) {
+          e = p;
+          continue;
+        }
+      }
+      break;
+    }
+    return this.escapeContext(e, viaAccess, isModule, depth, seen);
+  }
+
+  /** The context an expression holding the binding (or something reached from it) flows into. */
+  private escapeContext(e: ts.Expression, viaAccess: boolean, isModule: boolean, depth: number, seen: Set<ts.Node>): string | undefined {
+    const p = e.parent;
+    if (!p) return undefined;
+    if (ts.isCallExpression(p) && p.expression === e) {
+      if (!viaAccess || isModule) return undefined; // calling the function itself / a module's function
+      const m = ts.isPropertyAccessExpression(e) ? e.name.text : undefined;
+      return m && PURE_METHODS.has(m) ? undefined : `method '${m ?? '[computed]'}' called on it`;
+    }
+    if (ts.isNewExpression(p) && p.arguments?.includes(e)) return 'passed to new';
+    if (ts.isCallExpression(p) && p.arguments.includes(e)) return this.isPureCall(p) ? undefined : 'passed to a function';
+    // Inside an object/array literal: what matters is where the whole literal goes.
+    if (
+      (ts.isPropertyAssignment(p) && p.initializer === e) ||
+      ts.isShorthandPropertyAssignment(p) ||
+      ts.isSpreadAssignment(p) ||
+      ts.isArrayLiteralExpression(p) ||
+      ts.isSpreadElement(p)
+    ) {
+      if (ts.isSpreadElement(p) && (ts.isCallExpression(p.parent) || ts.isNewExpression(p.parent))) {
+        return ts.isCallExpression(p.parent) && this.isPureCall(p.parent) ? undefined : 'spread into a call';
+      }
+      let lit: ts.Node = ts.isArrayLiteralExpression(p) ? p : p.parent;
+      for (;;) {
+        const q = lit.parent;
+        if (q && ((ts.isPropertyAssignment(q) && q.initializer === lit) || ts.isSpreadAssignment(q) || ts.isSpreadElement(q))) {
+          lit = q.parent;
+          continue;
+        }
+        if (q && ts.isArrayLiteralExpression(q)) {
+          lit = q;
+          continue;
+        }
+        if (q && (ts.isParenthesizedExpression(q) || ts.isAsExpression(q) || ts.isSatisfiesExpression(q))) {
+          lit = q;
+          continue;
+        }
+        break;
+      }
+      if (!ts.isObjectLiteralExpression(lit) && !ts.isArrayLiteralExpression(lit) && !ts.isParenthesizedExpression(lit) && !ts.isAsExpression(lit) && !ts.isSatisfiesExpression(lit)) {
+        return undefined;
+      }
+      // The literal itself is now the value carrier: a method call on it counts too (`[x].forEach(…)`).
+      const q = lit.parent;
+      if (q && ts.isPropertyAccessExpression(q) && q.expression === lit && ts.isCallExpression(q.parent) && q.parent.expression === q) {
+        return PURE_METHODS.has(q.name.text) ? undefined : `literal holding it has '${q.name.text}' called on it`;
+      }
+      return this.escapeContext(lit as ts.Expression, false, false, depth, seen);
+    }
+    if (ts.isVariableDeclaration(p) && p.initializer === e) {
+      for (const n of bindingNames(p.name)) {
+        const why = this.aliasUnsafe(p, n, depth, seen);
+        if (why) return why;
+      }
+      return undefined;
+    }
+    if (ts.isBinaryExpression(p) && p.right === e && p.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && p.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+      const left = skipParens(p.left);
+      if (isModuleExports(left) || exportsMember(left)) return undefined;
+      if (ts.isIdentifier(left)) {
+        const d = this.findDeclaration(left.text, left);
+        if (d?.kind === 'var') return this.aliasUnsafe(d.decl, left.text, depth, seen);
+        return 'assigned to a binding it cannot follow';
+      }
+      return 'stored into another object';
+    }
+    if (ts.isReturnStatement(p) || (ts.isArrowFunction(p) && p.body === e)) {
+      // Returned: only a write into the RESULT of a call to that function can reach it.
+      let fn: ts.Node | undefined = ts.isArrowFunction(p) ? p : p.parent;
+      while (fn && !isFunctionLike(fn)) fn = fn.parent;
+      const fname = fn ? functionName(fn) : undefined;
+      const sf = e.getSourceFile();
+      if (!fname) return this.hasCallRootedWrites(sf) ? 'returned from a function whose result is written' : undefined;
+      return this.callRootedWritesTo(sf, fname) ? `returned from '${fname}', whose result is written` : undefined;
+    }
+    if ((ts.isForOfStatement(p) || ts.isForInStatement(p)) && p.expression === e) return 'iterated';
+    return undefined;
+  }
+
+  /** Why a variable's value can't be trusted (escapes into code that may mutate it), cached per declaration. */
+  private varEscape(d: Extract<Declaration, { kind: 'var' }>): string | undefined {
+    const hit = this.escapeCache.get(d.decl);
+    if (hit !== undefined) return hit ?? undefined;
+    const name = (d.decl.name as ts.Identifier).text;
+    const same = (x: Declaration | undefined): boolean => x?.kind === 'var' && x.decl === d.decl;
+    // Calling a module's functions (`utils.factory(…)`, `mod.__require()`) is how modules are used.
+    const why = this.escapeOf(name, d.scopeNode, same, this.isModuleBinding(d, false), 0, new Set([d.decl]));
+    this.escapeCache.set(d.decl, why ?? null);
+    return why;
+  }
+
+  /** A parameter that is written, or escapes, inside its function can't be read as its argument. */
+  private paramUnsafe(d: Extract<Declaration, { kind: 'param' }>, name: string): string | undefined {
+    const body = d.fn.body;
+    if (!body) return undefined;
+    const key = d.fn.parameters[d.index]!;
+    const hit = this.escapeCache.get(key);
+    if (hit !== undefined) return hit ?? undefined;
+    const why = this.paramUnsafeUncached(d, name, body);
+    this.escapeCache.set(key, why ?? null);
+    return why;
+  }
+
+  private paramUnsafeUncached(d: Extract<Declaration, { kind: 'param' }>, name: string, body: ts.Node): string | undefined {
+    const same = (x: Declaration | undefined): boolean => sameDeclaration(x, d);
+    for (const w of this.writesIn(body).get(name) ?? []) {
+      if (!same(this.findDeclaration(name, w.root))) continue;
+      if (w.kind === 'arg' && this.isPureCall(w.call!)) continue;
+      return 'written';
+    }
+    return this.escapeOf(name, body, same, false, 0, new Set());
   }
 
   /**
@@ -1366,6 +1765,11 @@ export class StaticEvaluator {
           else if (t.key === undefined) values.push(n.right);
           else props.push({ key: t.key, rhs: n.right });
         }
+      } else if (ts.isCallExpression(n)) {
+        // `v.__module.exports.push(…)`, `Object.assign(v.__module.exports, …)`: not modelled.
+        const c = n.expression;
+        if (ts.isPropertyAccessExpression(c) && virtualModuleTarget(c.expression, this)?.decl === target.decl) unmodelled = true;
+        for (const a of n.arguments) if (virtualModuleTarget(a, this)?.decl === target.decl && !this.isPureCall(n)) unmodelled = true;
       }
       ts.forEachChild(n, walk);
     };
@@ -1384,15 +1788,23 @@ export class StaticEvaluator {
   private isPureCall(call: ts.CallExpression): boolean {
     const c = call.expression;
     const text = calleeText(c);
-    if (text === 'require' || (text && PURE_GLOBAL_CALLS.has(text)) || (text && /^console\./.test(text))) return true;
+    const rootName = ts.isIdentifier(c) ? c.text : ts.isPropertyAccessExpression(c) && ts.isIdentifier(c.expression) ? c.expression.text : undefined;
+    const rootNode = ts.isIdentifier(c) ? c : ts.isPropertyAccessExpression(c) ? c.expression : undefined;
+    const isGlobal = rootName !== undefined && rootNode !== undefined && this.findDeclaration(rootName, rootNode) === undefined;
+    if (isGlobal && (text === 'require' || (text && PURE_GLOBAL_CALLS.has(text)) || (text && /^console\./.test(text)))) return true;
     if (ts.isIdentifier(c)) {
       const d = this.findDeclaration(c.text, c);
       if (d?.kind === 'fn' && INTEROP_NAME.test(c.text) && d.decl.body?.getText().includes('__esModule')) return true;
       if (d?.kind === 'var' && INTEROP_NAME.test(c.text) && d.decl.initializer?.getText().includes('__esModule')) return true;
       return false;
     }
-    // `helpers.getDefaultExportFromCjs(x)` — a bundler helper module
-    if (ts.isPropertyAccessExpression(c) && INTEROP_NAME.test(c.name.text)) return true;
+    // `helpers.getDefaultExportFromCjs(x)` — only from rollup's own helper module.
+    if (ts.isPropertyAccessExpression(c) && INTEROP_NAME.test(c.name.text) && ts.isIdentifier(c.expression)) {
+      const d = this.findDeclaration(c.expression.text, c.expression);
+      const init = d?.kind === 'var' && d.decl.initializer ? skipParens(d.decl.initializer) : undefined;
+      const spec = init && ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === 'require' ? init.arguments[0] : undefined;
+      return !!spec && ts.isStringLiteralLike(spec) && /_commonjsHelpers|_interop/.test(spec.text);
+    }
     return false;
   }
 
@@ -1419,6 +1831,8 @@ export class StaticEvaluator {
     const decl = d.decl;
     const name = (decl.name as ts.Identifier).text;
     if (d.redeclared) return UNKNOWN(`'${name}' redeclared`);
+    const escape = this.varEscape(d);
+    if (escape) return UNKNOWN(`'${name}' ${escape}`);
     this.inProgress.add(decl);
     try {
       const writes = this.writesOf(d);
@@ -1445,6 +1859,12 @@ export class StaticEvaluator {
       }
       if (!props.length) return v;
       if (v.k !== 'obj') return UNKNOWN(`'${name}' property written on a ${v.k}`);
+      // Adding a key is modelled; overriding one (or writing it twice) depends on control flow.
+      const written = new Set<string>();
+      for (const w of props) {
+        if (v.props.has(w.key!) || written.has(w.key!)) return UNKNOWN(`'${name}.${w.key}' overridden`);
+        written.add(w.key!);
+      }
       const out: ObjValue = { ...v, props: new Map(v.props), keyLocs: new Map(v.keyLocs) };
       const sf = decl.getSourceFile();
       for (const w of props) {
@@ -1464,40 +1884,74 @@ export class StaticEvaluator {
    * or at `require(...)` itself)? Such a patch can add entries we never see when
    * reading that module — callers then treat what they read as incomplete.
    */
-  writesIntoModules(): string | undefined {
-    for (const sf of this.parsedFiles()) {
-      if (sf.fileName.endsWith('.json')) continue;
+  async writesIntoModules(): Promise<string | undefined> {
+    await this.parseReachable();
+    const files = this.parsedFiles().filter((sf) => !sf.fileName.endsWith('.json'));
+    // A rollup virtual module is private to the ONE file that requires it.
+    const virtualOwners = new Map<string, number>();
+    for (const sf of files) {
+      for (const spec of relativeSpecifiers(sf)) {
+        if (!/(^|\/)_virtual\//.test(spec)) continue;
+        const key = resolveDots(join(dirname(sf.fileName), spec));
+        virtualOwners.set(key, (virtualOwners.get(key) ?? 0) + 1);
+      }
+    }
+    const privateVirtual = (t: ts.Expression): boolean => {
+      const target = virtualModuleTarget(t, this);
+      if (!target) return false;
+      const init = target.decl.initializer && skipParens(target.decl.initializer);
+      const spec = init && ts.isCallExpression(init) ? init.arguments[0] : undefined;
+      if (!spec || !ts.isStringLiteralLike(spec)) return false;
+      const key = resolveDots(join(dirname(target.decl.getSourceFile().fileName), spec.text));
+      return (virtualOwners.get(key) ?? 0) === 1;
+    };
+    for (const sf of files) {
       let hit: string | undefined;
       const isModuleRoot = (root: ts.Expression): boolean => {
         const r = skipParens(root);
-        if (ts.isCallExpression(r) && ts.isIdentifier(r.expression) && r.expression.text === 'require') return true;
-        if (!ts.isIdentifier(r)) return false;
-        const d = this.findDeclaration(r.text, r);
-        if (d?.kind === 'import') return true;
-        if (d?.kind === 'var' && d.decl.initializer) {
-          const init = skipParens(d.decl.initializer);
-          const call = ts.isCallExpression(init) ? init : undefined;
-          if (call && ts.isIdentifier(call.expression) && call.expression.text === 'require') return true;
-          if (call && call.arguments[0]) {
-            const a0 = skipParens(call.arguments[0]);
-            if (ts.isCallExpression(a0) && ts.isIdentifier(a0.expression) && a0.expression.text === 'require' && INTEROP_NAME.test(calleeText(call.expression) ?? '')) return true;
-          }
+        if (ts.isCallExpression(r) && ts.isIdentifier(r.expression) && r.expression.text === 'require') {
+          const spec = r.arguments[0];
+          return !!spec && ts.isStringLiteralLike(spec) && spec.text.startsWith('.');
         }
-        return false;
+        // `mod.__require().x = …` / `mod.fn().x = …` — a write into what another module's function returns
+        if (ts.isCallExpression(r)) return isModuleRoot(accessRoot(r.expression).root);
+        if (!ts.isIdentifier(r)) return false;
+        return this.isModuleBinding(this.findDeclaration(r.text, r));
+      };
+      const report = (n: ts.Node): void => {
+        const line = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+        hit = `${sf.fileName}:${line}`;
       };
       const walk = (n: ts.Node): void => {
         if (hit) return;
         this.steps++;
-        let target: ts.Expression | undefined;
-        if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment) target = n.left;
-        else if (ts.isDeleteExpression(n)) target = n.expression;
-        else if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && SELF_MUTATORS.has(n.expression.name.text)) target = n.expression.expression;
-        if (target) {
-          const t = skipParens(target);
-          if ((ts.isPropertyAccessExpression(t) || ts.isElementAccessExpression(t)) && !virtualModuleTarget(t, this)) {
-            if (isModuleRoot(accessRoot(t).root)) {
-              const line = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
-              hit = `${sf.fileName}:${line}`;
+        if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+          const t = skipParens(n.left);
+          const isPlainVirtual = n.operatorToken.kind === ts.SyntaxKind.EqualsToken && privateVirtual(t);
+          if ((ts.isPropertyAccessExpression(t) || ts.isElementAccessExpression(t)) && !isPlainVirtual && isModuleRoot(accessRoot(t).root)) {
+            report(n);
+            return;
+          }
+        } else if (ts.isDeleteExpression(n)) {
+          const t = skipParens(n.expression);
+          if ((ts.isPropertyAccessExpression(t) || ts.isElementAccessExpression(t)) && isModuleRoot(accessRoot(t).root)) {
+            report(n);
+            return;
+          }
+        } else if (ts.isCallExpression(n)) {
+          const c = n.expression;
+          // x.push(…) on something rooted at a module
+          if (ts.isPropertyAccessExpression(c) && SELF_MUTATORS.has(c.name.text) && isModuleRoot(accessRoot(c.expression).root) && (ts.isPropertyAccessExpression(skipParens(c.expression)) || ts.isElementAccessExpression(skipParens(c.expression)))) {
+            report(n);
+            return;
+          }
+          // Object.assign(moduleThing, …), _.set(moduleThing, …): the FIRST argument is written.
+          const callee = calleeText(c);
+          const a0 = n.arguments[0];
+          if (a0 && callee && /^(Object\.(assign|defineProperty|defineProperties|setPrototypeOf)|_\.(merge|mergeWith|set|setWith|assign|defaults|defaultsDeep|extend|unset))$/.test(callee)) {
+            const arg = skipParens(ts.isSpreadElement(a0) ? a0.expression : a0);
+            if (isModuleRoot(accessRoot(arg).root)) {
+              report(n);
               return;
             }
           }
@@ -1543,6 +1997,17 @@ function virtualModuleTarget(
 /** `….__module.exports` itself (not a property of it). */
 function isExportsAccess(x: ts.Expression): boolean {
   return ts.isPropertyAccessExpression(x) && x.name.text === 'exports' && ts.isPropertyAccessExpression(skipParens(x.expression)) && (skipParens(x.expression) as ts.PropertyAccessExpression).name.text === '__module';
+}
+
+/** The name a function is known by (declaration, bound variable, method/property key). */
+function functionName(fn: ts.Node): string | undefined {
+  if ((ts.isFunctionDeclaration(fn) || ts.isFunctionExpression(fn)) && fn.name) return fn.name.text;
+  if (ts.isMethodDeclaration(fn) || ts.isGetAccessorDeclaration(fn)) return propName(fn.name);
+  const bound = bindingNameOf(fn);
+  if (bound) return bound;
+  const p = fn.parent;
+  if (p && ts.isPropertyAssignment(p) && p.initializer === fn) return propName(p.name);
+  return undefined;
 }
 
 /** Do two lookups designate the same binding? (lookups build fresh objects, compare their nodes) */
@@ -1593,7 +2058,7 @@ function truthy(v: Value): boolean | undefined {
 }
 
 /** Memoize a thunk (computed at most once); re-entry while it runs is a cycle → unknown. */
-function memo(thunk: Lazy): Lazy {
+export function memo(thunk: Lazy): Lazy {
   let p: Promise<Value> | undefined;
   let running = false;
   return () => {

@@ -35,6 +35,7 @@ import { resolveDefinition, resolveMember } from './resolve/resolver';
 import { readInstalledPlugins } from './plugins/installed';
 import { clearInstalled, installedStamp, mergeInstalled } from './plugins/merge';
 import { matchesAnyGlob } from './util/glob';
+import { withTimeout } from './util/timeout';
 import { asRecord, asString, safeParse } from './util/json';
 import { validateDocument } from './validate/validator';
 import { discoverProjectRoots, findStrapiRootUp } from './workspace/discovery';
@@ -96,8 +97,11 @@ export interface StrapiEngine {
   getRoutes(opts?: ListRoutesOptions): Promise<Array<{ root: string; routes: RouteInfo[] }>>;
 }
 
-/** Minimum delay between two installed-plugin freshness checks. */
+/** Minimum delay between two installed-plugin freshness checks (fast / full fingerprint). */
 const INSTALLED_CHECK_MS = 3_000;
+const INSTALLED_FULL_CHECK_MS = 60_000;
+/** Hard ceiling on one project's installed-plugin read (the reader's own budgets are lower). */
+const INSTALLED_READ_TIMEOUT_MS = 30_000;
 
 /** Paths whose change can alter the installed-plugin picture of their project. */
 function affectsInstalledPlugins(p: string): boolean {
@@ -126,6 +130,7 @@ class Engine implements StrapiEngine {
   /** Resolves when the in-flight background reference build finishes. */
   private refsBuild: Promise<void> = Promise.resolve();
   private lastInstalledCheck = 0;
+  private lastFullCheck = Date.now();
   private installedCheck: Promise<void> | undefined;
 
   constructor(private readonly fs: FileSystem) {}
@@ -243,16 +248,13 @@ class Engine implements StrapiEngine {
     const index = await buildIndex(this.fs, srcDir);
     // Installed plugins (node_modules), read statically — best-effort: without
     // node_modules they simply stay unverifiable, as before.
-    let installed: Awaited<ReturnType<typeof readInstalledPlugins>>;
-    try {
-      installed = await readInstalledPlugins(this.fs, root);
-    } catch {
-      installed = undefined;
-    }
+    const installed = await withTimeout(readInstalledPlugins(this.fs, root), INSTALLED_READ_TIMEOUT_MS, undefined);
     mergeInstalled(index, installed);
     let stamp: string | undefined;
+    let fullStamp: string | undefined;
     try {
       stamp = await installedStamp(this.fs, root, installed?.strapiDir, installed);
+      fullStamp = await installedStamp(this.fs, root, installed?.strapiDir, installed, true);
     } catch {
       stamp = undefined;
     }
@@ -276,6 +278,7 @@ class Engine implements StrapiEngine {
       references: new Map(),
       ...(installed ? { installed } : {}),
       ...(stamp !== undefined ? { installedStamp: stamp } : {}),
+      ...(fullStamp !== undefined ? { installedFullStamp: fullStamp } : {}),
     };
   }
 
@@ -331,14 +334,21 @@ class Engine implements StrapiEngine {
 
   private async checkInstalled(): Promise<void> {
     let changed = false;
+    // The full fingerprint (every file each plugin was read from) is costlier: once a minute.
+    const full = Date.now() - this.lastFullCheck >= INSTALLED_FULL_CHECK_MS;
+    if (full) this.lastFullCheck = Date.now();
     for (const project of [...this.projects]) {
       let stamp: string | undefined;
+      let fullStamp: string | undefined;
       try {
         stamp = await installedStamp(this.fs, project.root, project.installed?.strapiDir, project.installed);
+        if (full) fullStamp = await installedStamp(this.fs, project.root, project.installed?.strapiDir, project.installed, true);
       } catch {
         continue;
       }
-      if (stamp === project.installedStamp) continue;
+      const fullChanged = full && project.installedFullStamp !== undefined && fullStamp !== project.installedFullStamp;
+      if (full && fullStamp !== undefined && project.installedFullStamp === undefined) project.installedFullStamp = fullStamp;
+      if (stamp === project.installedStamp && !fullChanged) continue;
       await this.reloadInstalled(project, stamp);
       changed = true;
     }
@@ -347,12 +357,7 @@ class Engine implements StrapiEngine {
 
   /** Re-read one project's installed plugins and swap them into its index (synchronous swap). */
   private async reloadInstalled(project: StrapiProject, stamp?: string): Promise<void> {
-    let installed: Awaited<ReturnType<typeof readInstalledPlugins>>;
-    try {
-      installed = await readInstalledPlugins(this.fs, project.root);
-    } catch {
-      installed = undefined;
-    }
+    const installed = await withTimeout(readInstalledPlugins(this.fs, project.root), INSTALLED_READ_TIMEOUT_MS, undefined);
     let next = stamp;
     if (next === undefined) {
       try {
@@ -367,6 +372,11 @@ class Engine implements StrapiEngine {
     else delete project.installed;
     if (next !== undefined) project.installedStamp = next;
     else delete project.installedStamp;
+    try {
+      project.installedFullStamp = await installedStamp(this.fs, project.root, installed?.strapiDir, installed, true);
+    } catch {
+      delete project.installedFullStamp;
+    }
   }
 
   onFilesChanged(changed: string[], deleted: string[]): Promise<void> {

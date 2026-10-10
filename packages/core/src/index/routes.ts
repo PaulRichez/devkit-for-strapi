@@ -18,6 +18,7 @@ import type { RouteInfo, StrapiProject } from '../model/types';
 import { StaticEvaluator } from '../plugins/evaluate';
 import { type PluginRoute, readApiPrefix, readPluginRoutes } from '../plugins/installed';
 import { pluginLayoutOf } from './indexer';
+import { withTimeout } from '../util/timeout';
 
 interface CoreRouter {
   uid: string;
@@ -360,7 +361,7 @@ export async function listRoutes(fs: FileSystem, project: StrapiProject, opts: L
       const entry = await localPluginEntry(fs, project.srcDir, name);
       if (!entry) continue;
       try {
-        const { routes } = await readPluginRoutes(fs, name, entry, prefix, join(project.srcDir, 'plugins', name));
+        const { routes } = await withTimeout(readPluginRoutes(fs, name, entry, prefix, join(project.srcDir, 'plugins', name)), 10_000, { routes: [], complete: false });
         out.push(...routes.map((r) => fromPluginRoute(r, 'local-plugin')));
       } catch {
         /* unreadable plugin — skip */

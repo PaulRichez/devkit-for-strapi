@@ -1,5 +1,5 @@
 import type { Dirent, Stats } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { type DirEntry, FileType, type FileSystem } from 'devkit-for-strapi-core';
 
 function statType(s: Stats): FileType {
@@ -50,5 +50,9 @@ export class NodeFileSystem implements FileSystem {
 
   async exists(path: string): Promise<boolean> {
     return (await this.stat(path)) !== null;
+  }
+
+  async realpath(path: string): Promise<string> {
+    return (await realpath(path)).replace(/\\/g, '/');
   }
 }

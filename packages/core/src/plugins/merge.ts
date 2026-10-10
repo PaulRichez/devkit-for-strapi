@@ -16,6 +16,8 @@ import type { InstalledPluginsResult } from './installed';
 
 /** Can refs into plugin `name` be verified (a local plugin, or an installed one read exhaustively)? */
 export function isVerifiablePlugin(index: StrapiIndex, name: string): boolean {
+  const rw = index.rewrittenPlugins;
+  if (rw && (rw.has(name) || rw.has('*'))) return false; // rewritten at runtime by some code
   return index.pluginNames.has(name) || (index.verifiedPlugins?.has(name) ?? false);
 }
 
@@ -41,6 +43,17 @@ export function mergeInstalled(index: StrapiIndex, result: InstalledPluginsResul
   if (!result) return;
   index.verifiedPlugins ??= new Set();
   index.installedPlugins ??= new Map();
+  index.rewrittenPlugins = new Set(result.rewritten);
+  // Local/API artifacts extended in place at runtime: their method lists are partial.
+  const ext = new Set(result.extended);
+  if (ext.size) {
+    for (const map of [index.services, index.controllers]) {
+      for (const a of map.values()) {
+        const plugin = a.ref.startsWith('plugin::') ? a.ref.slice(8).split('.')[0] : undefined;
+        if (ext.has(a.ref) || ext.has('*') || (plugin && ext.has(`plugin::${plugin}.*`))) a.hasSpread = true;
+      }
+    }
+  }
   if (result.frameworkMiddlewares?.complete && !index.frameworkMiddlewares) {
     index.frameworkMiddlewares = new Map(
       result.frameworkMiddlewares.entries.map((e) => [`strapi::${e.name}`, { filePath: e.filePath, offset: e.offset }]),
@@ -75,6 +88,7 @@ export function clearInstalled(index: StrapiIndex): void {
   index.verifiedPlugins?.clear();
   index.installedPlugins?.clear();
   delete index.frameworkMiddlewares;
+  delete index.rewrittenPlugins;
 }
 
 const LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb', 'bun.lock', 'npm-shrinkwrap.json'];
@@ -93,6 +107,8 @@ export async function installedStamp(
   root: string,
   strapiDir: string | undefined,
   installed?: InstalledPluginsResult,
+  /** Also every file each plugin read was parsed from (slow; checked less often). */
+  full = false,
 ): Promise<string> {
   const paths = [join(root, 'package.json'), ...LOCKFILES.map((l) => join(root, l))];
   paths.push(...CONFIG_FILES.map((f) => join(root, 'config', f)), join(root, 'config', 'env'), join(root, 'src', 'extensions'));
@@ -101,6 +117,7 @@ export async function installedStamp(
   for (const p of installed?.plugins ?? []) {
     // A rebuilt workspace-linked plugin rewrites its entry; an extension entry point can appear in an existing folder.
     if (p.entry) paths.push(p.entry);
+    if (full) paths.push(...(p.files ?? []));
     for (const ext of ['js', 'ts', 'mjs', 'cjs']) paths.push(join(root, 'src', 'extensions', p.name, `strapi-server.${ext}`));
   }
   if (strapiDir) {

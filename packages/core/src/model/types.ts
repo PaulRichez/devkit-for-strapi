@@ -139,6 +139,8 @@ export interface StrapiIndex {
    * `config/middlewares` are verified instead of skipped.
    */
   frameworkMiddlewares?: Map<string, { filePath: string; offset: number }>;
+  /** Plugins (or `'*'`) some code rewrites at runtime: never verified, local ones included. */
+  rewrittenPlugins?: Set<string>;
   /**
    * Reverse map: normalized filePath → the definition entries it contributes.
    * Lets {@link updateIndexForFile} remove a file's old definitions without
@@ -168,6 +170,8 @@ export interface StrapiProject {
   installed?: import('../plugins/installed').InstalledPluginsResult;
   /** Freshness fingerprint of {@link installed} (see `plugins/merge.ts#installedStamp`). */
   installedStamp?: string;
+  /** The full (every parsed plugin file) fingerprint, checked less often. */
+  installedFullStamp?: string;
 }
 
 export function emptyIndex(): StrapiIndex {

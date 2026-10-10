@@ -6,7 +6,7 @@
  * `unknown` — the plugin is then reported incomplete, never guessed.
  */
 
-import { isCallable, type ObjValue, type StaticEvaluator, UNKNOWN, type Value } from './evaluate';
+import { isCallable, memo, type ObjValue, type StaticEvaluator, UNKNOWN, type Value } from './evaluate';
 
 function obj(entries: Record<string, () => Promise<Value>>): ObjValue {
   const props = new Map<string, () => Promise<Value>>();
@@ -26,8 +26,8 @@ function utilsModule(ev: StaticEvaluator): ObjValue {
       name: 'createContentApiRoutesFactory',
       impl: async ([build]) => {
         if (!build || !isCallable(build)) return UNKNOWN('createContentApiRoutesFactory: non-function');
-        let shared: Promise<Value> | undefined;
-        const routes = (): Promise<Value> => (shared ??= ev.call(build, []));
+        // Built once and shared, like Strapi's; a factory reading its own routes is a cycle → unknown.
+        const routes = memo(() => ev.call(build, []));
         return {
           k: 'native',
           name: 'createContentApiRoutes',

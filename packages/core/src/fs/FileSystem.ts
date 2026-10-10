@@ -33,4 +33,9 @@ export interface FileSystem {
    */
   stat(path: string): Promise<{ type: FileType; mtime?: number } | null>;
   exists(path: string): Promise<boolean>;
+  /**
+   * Resolve symlinks (optional). When provided, module resolution of installed
+   * plugins is confined by REAL path, so a symlink can't lead outside a package.
+   */
+  realpath?(path: string): Promise<string>;
 }

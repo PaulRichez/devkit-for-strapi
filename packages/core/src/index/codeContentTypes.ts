@@ -15,6 +15,7 @@ import type { ContentType, StrapiIndex } from '../model/types';
 import { isCallable, StaticEvaluator, UNKNOWN } from '../plugins/evaluate';
 import { contentTypeFromDefinition } from '../plugins/installed';
 import { strapiExternals } from '../plugins/shims';
+import { withTimeout } from '../util/timeout';
 
 const AGGREGATOR = ['index.ts', 'index.js', 'index.mjs', 'index.cjs', 'index.mts', 'index.cts'];
 
@@ -42,6 +43,11 @@ export function hasPartialContentTypes(index: StrapiIndex, pluginName: string): 
  * `content-types` dir. Entries already indexed from a `schema.json` folder win.
  */
 export async function indexCodeContentTypes(fs: FileSystem, ctDir: string, pluginName: string, index: StrapiIndex): Promise<void> {
+  const done = await withTimeout(indexCodeContentTypesInner(fs, ctDir, pluginName, index).then(() => true), 10_000, false);
+  if (!done) (index.partialContentTypePlugins ??= new Set()).add(pluginName);
+}
+
+async function indexCodeContentTypesInner(fs: FileSystem, ctDir: string, pluginName: string, index: StrapiIndex): Promise<void> {
   const prefix = `plugin::${pluginName}.`;
   for (const uid of [...(index.codeContentTypes?.keys() ?? [])]) if (uid.startsWith(prefix)) index.codeContentTypes!.delete(uid);
   index.partialContentTypePlugins?.delete(pluginName);
@@ -70,7 +76,8 @@ export async function indexCodeContentTypes(fs: FileSystem, ctDir: string, plugi
     return;
   }
   if (v.open) markPartial();
-  if (ev.writesIntoModules()) markPartial();
+  if (await ev.writesIntoModules()) markPartial();
+  if (ev.crawlTruncated) markPartial();
   for (const [ctName, thunk] of v.props) {
     const uid = `${prefix}${ctName}`;
     if (index.contentTypes.has(uid)) continue; // a `<ct>/schema.json` folder — already indexed

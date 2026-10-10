@@ -54,6 +54,8 @@ export interface InstalledPlugin {
   name: string;
   /** The server entry file read (its mtime is part of the freshness fingerprint). */
   entry?: string;
+  /** Every file parsed for this plugin (the slow, full freshness fingerprint). */
+  files?: string[];
   packageName: string;
   version?: string;
   dir: string;
@@ -78,6 +80,10 @@ export interface FrameworkMiddlewares {
 }
 
 export interface InstalledPluginsResult {
+  /** Plugins (or `'*'`: any) some code rewrites at runtime — their refs can't be verified, local ones included. */
+  rewritten: string[];
+  /** Artifact refs / content-type UIDs (or `plugin::x.*`, `'*'`) extended in place — partial method/attribute lists. */
+  extended: string[];
   /** `node_modules/@strapi/strapi` directory the plugins were resolved from. */
   strapiDir: string;
   strapiVersion: string;
@@ -183,59 +189,107 @@ const COLLECTION_KEYS = new Set(['controllers', 'services', 'routes', 'policies'
 const REGISTRIES = new Set(['content-types', 'controllers', 'services', 'policies', 'middlewares']);
 const WRITE_METHODS = new Set(['push', 'unshift', 'splice', 'set', 'add', 'extend', 'assign', 'merge', 'defineProperty']);
 
+/** What a source file rewrites at runtime in plugins. */
+export interface PluginRewrites {
+  /** Plugins whose collections gain/lose entries (`'*'`: not literal) — no longer exhaustive. */
+  plugins: Set<string>;
+  /** Artifacts/content-types extended in place (`'*'`: not literal) — their method/attribute lists are partial. */
+  artifacts: Set<string>;
+}
+
 /**
- * Plugins a source file rewrites at runtime — `strapi.plugin('x').<collection>…`
- * written to, or `strapi.get('<registry>').add('plugin::x…', …)` — so their static
- * reading can't be exhaustive. `'*'` when the target plugin isn't literal.
+ * What a source file rewrites at runtime in plugins: `strapi.plugin('x').<collection>…`
+ * written to (also through one level of alias or destructuring), an artifact
+ * obtained with `strapi.controller('plugin::x.y')` written to, or a registry call
+ * `strapi.get('<registry>').add|set|extend('plugin::x…', …)`.
  */
-export function pluginWriteTargets(sf: ts.SourceFile): Set<string> {
-  const out = new Set<string>();
-  /** The plugin name a target chain writes into, if it goes through `.plugin('x').<collection>`. */
-  const targetOf = (e: ts.Expression): string | undefined => {
-    let cur: ts.Expression = e;
-    let afterCollection = false;
-    for (let i = 0; i < 32; i++) {
-      while (ts.isParenthesizedExpression(cur) || ts.isNonNullExpression(cur) || ts.isAsExpression(cur)) cur = cur.expression;
-      if (ts.isPropertyAccessExpression(cur) || ts.isElementAccessExpression(cur)) {
-        const key = ts.isPropertyAccessExpression(cur)
-          ? cur.name.text
-          : ts.isStringLiteralLike(cur.argumentExpression)
-            ? cur.argumentExpression.text
-            : undefined;
-        const base = cur.expression;
-        // `.plugins.x` / `.plugins['x']`
-        if (ts.isPropertyAccessExpression(base) && base.name.text === 'plugins' && afterCollection) return key ?? '*';
-        if (key !== undefined && COLLECTION_KEYS.has(key)) afterCollection = true;
-        cur = base;
-        continue;
+export function pluginWriteTargets(sf: ts.SourceFile): PluginRewrites {
+  const out: PluginRewrites = { plugins: new Set(), artifacts: new Set() };
+  type Handle = { kind: 'plugin' | 'collection' | 'artifact'; plugin: string; ref?: string };
+
+  const aliases = new Map<string, Handle>();
+  /** The handle an expression yields: `x.plugin('n')`, `x.plugins.n`, `x.controller('plugin::n.y')`… */
+  const handleOf = (e: ts.Expression): Handle | undefined => {
+    let cur = e;
+    while (ts.isParenthesizedExpression(cur) || ts.isNonNullExpression(cur) || ts.isAsExpression(cur) || ts.isAwaitExpression(cur)) cur = cur.expression;
+    if (ts.isCallExpression(cur) && ts.isPropertyAccessExpression(cur.expression)) {
+      const m = cur.expression.name.text;
+      const a0 = cur.arguments[0];
+      const lit = a0 && ts.isStringLiteralLike(a0) ? a0.text : undefined;
+      if (m === 'plugin') return { kind: 'plugin', plugin: lit ?? '*' };
+      if (m === 'controller' || m === 'service' || m === 'policy' || m === 'middleware' || m === 'contentType') {
+        const owner = handleOf(cur.expression.expression);
+        if (owner?.kind === 'plugin') return { kind: 'artifact', plugin: owner.plugin, ...(lit ? { ref: `plugin::${owner.plugin}.${lit}` } : {}) };
+        if (lit === undefined) return { kind: 'artifact', plugin: '*' };
+        const mm = /^plugin::([^.]+)\./.exec(lit);
+        return mm ? { kind: 'artifact', plugin: mm[1]!, ref: lit } : undefined;
       }
-      if (ts.isCallExpression(cur)) {
-        const c = cur.expression;
-        if (afterCollection && ts.isPropertyAccessExpression(c) && c.name.text === 'plugin') {
-          const a0 = cur.arguments[0];
-          return a0 && ts.isStringLiteralLike(a0) ? a0.text : '*';
-        }
-        cur = c;
-        continue;
-      }
-      return undefined;
     }
+    if (ts.isPropertyAccessExpression(cur) || ts.isElementAccessExpression(cur)) {
+      const key = ts.isPropertyAccessExpression(cur) ? cur.name.text : ts.isStringLiteralLike(cur.argumentExpression) ? cur.argumentExpression.text : undefined;
+      const base = cur.expression;
+      if (ts.isPropertyAccessExpression(base) && base.name.text === 'plugins') return { kind: 'plugin', plugin: key ?? '*' };
+      const owner = handleOf(base);
+      if (owner?.kind === 'plugin') return key === undefined || COLLECTION_KEYS.has(key) ? { kind: 'collection', plugin: owner.plugin } : undefined;
+      if (owner) return owner; // anything under a collection/artifact
+    }
+    if (ts.isIdentifier(cur) && aliases.has(cur.text)) return aliases.get(cur.text);
     return undefined;
   };
+
+  // One level of aliasing: `const p = strapi.plugin('x')`, `const { controllers } = strapi.plugin('x')`.
+  const collectAliases = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && n.initializer) {
+      const h = handleOf(n.initializer);
+      if (h) {
+        if (ts.isIdentifier(n.name)) aliases.set(n.name.text, h);
+        else if (ts.isObjectBindingPattern(n.name)) {
+          for (const el of n.name.elements) {
+            if (!ts.isIdentifier(el.name)) continue;
+            const key = el.propertyName && ts.isIdentifier(el.propertyName) ? el.propertyName.text : el.name.text;
+            if (h.kind === 'plugin' && COLLECTION_KEYS.has(key)) aliases.set(el.name.text, { kind: 'collection', plugin: h.plugin });
+            else if (h.kind !== 'plugin') aliases.set(el.name.text, h);
+          }
+        }
+      }
+    }
+    ts.forEachChild(n, collectAliases);
+  };
+  collectAliases(sf);
+
+  const record = (h: Handle | undefined): void => {
+    if (!h) return;
+    if (h.kind === 'artifact') out.artifacts.add(h.ref ?? (h.plugin === '*' ? '*' : `plugin::${h.plugin}.*`));
+    else out.plugins.add(h.plugin);
+  };
+  /** A write into `target` (the object written to). */
+  const writeInto = (target: ts.Expression, key: string | undefined): void => {
+    const h = handleOf(target);
+    if (h?.kind === 'plugin') {
+      // `strapi.plugin('x').provider = …` is not a collection; `….controllers = …` is.
+      if (key === undefined || COLLECTION_KEYS.has(key)) out.plugins.add(h.plugin);
+      return;
+    }
+    record(h);
+  };
+  const keyOf = (e: ts.Expression): string | undefined =>
+    ts.isPropertyAccessExpression(e) ? e.name.text : ts.isElementAccessExpression(e) && ts.isStringLiteralLike(e.argumentExpression) ? e.argumentExpression.text : undefined;
+
   const walk = (n: ts.Node): void => {
     if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
-      const t = targetOf(n.left);
-      if (t) out.add(t);
+      const left = n.left;
+      if (ts.isPropertyAccessExpression(left) || ts.isElementAccessExpression(left)) writeInto(left.expression, keyOf(left));
     } else if (ts.isDeleteExpression(n)) {
-      const t = targetOf(n.expression);
-      if (t) out.add(t);
+      const t = n.expression;
+      if (ts.isPropertyAccessExpression(t) || ts.isElementAccessExpression(t)) writeInto(t.expression, keyOf(t));
     } else if (ts.isCallExpression(n)) {
       const c = n.expression;
       if (ts.isPropertyAccessExpression(c) && WRITE_METHODS.has(c.name.text)) {
-        // x.push(…) on a collection, or Object.assign(<collection>, …)
-        const t = targetOf(c.expression) ?? (n.arguments[0] ? targetOf(n.arguments[0]) : undefined);
-        if (t) out.add(t);
-        // strapi.get('<registry>').add('plugin::x.y', …)
+        // collection.push(…) — a mutating method on a collection (or something inside it).
+        // On an artifact it's an ordinary call to that service/controller (`service('x').add(…)`).
+        const h = handleOf(c.expression);
+        if (h?.kind === 'collection') record(h);
+        // strapi.get('<registry>').add|set|extend('plugin::x.y', …)
         const reg = c.expression;
         if (
           (c.name.text === 'add' || c.name.text === 'set' || c.name.text === 'extend') &&
@@ -249,10 +303,28 @@ export function pluginWriteTargets(sf: ts.SourceFile): Set<string> {
           const a0 = n.arguments[0];
           // The UID's literal head decides: `api::${x}` (i18n v4 extending API controllers) is not a plugin.
           const head = a0 && ts.isStringLiteralLike(a0) ? a0.text : a0 && ts.isTemplateExpression(a0) ? a0.head.text : undefined;
+          const literal = a0 && ts.isStringLiteralLike(a0) ? a0.text : undefined;
           const m = head !== undefined ? /^plugin::([^.$]+)\./.exec(head) : null;
-          if (m) out.add(m[1]!);
-          else if (head === undefined || head.startsWith('plugin::') || !head.includes('::')) out.add('*');
+          const pluginScoped = head === undefined || head.startsWith('plugin::') || !head.includes('::');
+          if (c.name.text === 'extend') {
+            // Extending an existing entry changes its methods/attributes, never adds a UID.
+            // Content-types (attributes) and code artifacts (methods) are tracked apart.
+            const ns = reg.arguments[0].text === 'content-types' ? 'ct:' : '';
+            if (literal && m) out.artifacts.add(`${ns}${literal}`);
+            else if (pluginScoped) out.artifacts.add(`${ns}${m ? `plugin::${m[1]}.*` : '*'}`);
+          } else if (m) {
+            out.plugins.add(m[1]!);
+          } else if (pluginScoped) {
+            out.plugins.add('*');
+          }
         }
+      }
+      // Object.assign(strapi.plugin('x').controllers, …), _.merge(...)
+      const ct = ts.isPropertyAccessExpression(c) && ts.isIdentifier(c.expression) ? `${c.expression.text}.${c.name.text}` : undefined;
+      if (ct && /^(Object\.(assign|defineProperty|defineProperties)|_\.(merge|set|assign|defaults|defaultsDeep|extend))$/.test(ct) && n.arguments[0]) {
+        const h = handleOf(n.arguments[0]);
+        if (h?.kind === 'plugin') out.plugins.add(h.plugin);
+        else record(h);
       }
     }
     ts.forEachChild(n, walk);
@@ -260,6 +332,34 @@ export function pluginWriteTargets(sf: ts.SourceFile): Set<string> {
   walk(sf);
   return out;
 }
+
+/** Code files under `dir` (recursive, bounded), skipping dependency/build folders. */
+async function codeFilesUnder(fs: FileSystem, dir: string, limit = 2_000): Promise<string[]> {
+  const out: string[] = [];
+  const skip = new Set(['node_modules', '.git', '.cache', 'build', '.strapi', '.tmp', 'public']);
+  const walk = async (d: string): Promise<void> => {
+    if (out.length >= limit) return;
+    let entries;
+    try {
+      entries = await fs.readDirectory(d);
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (out.length >= limit) return;
+      if (e.type === FileType.Directory) {
+        if (!skip.has(e.name)) await walk(join(d, e.name));
+      } else if (e.type === FileType.File && /\.(m|c)?(j|t)sx?$/.test(e.name) && !e.name.endsWith('.d.ts')) {
+        out.push(join(d, e.name));
+      }
+    }
+  };
+  await walk(dir);
+  return out;
+}
+
+/** Cheap text pre-filter: can this file write into a plugin at runtime at all? */
+const MAY_REWRITE_PLUGINS = /\.(plugin|plugins|controller|service|policy|middleware|contentType)\b|\.get\(\s*['"`](content-types|controllers|services|policies|middlewares)/;
 
 function qualifyHandler(plugin: string, handler: string): string {
   const prefix = `plugin::${plugin}.`;
@@ -705,16 +805,20 @@ export async function readInstalledPlugins(fs: FileSystem, root: string): Promis
   const plugins: InstalledPlugin[] = [];
   /** Plugins some code rewrites at runtime (another plugin's server, or the project's src/index). */
   const rewritten = new Set<string>();
-  for (const ext of ['ts', 'js', 'mjs', 'cjs']) {
-    const file = join(root, 'src', `index.${ext}`);
+  const extended = new Set<string>();
+  const addRewrites = (r: PluginRewrites): void => {
+    for (const x of r.plugins) rewritten.add(x);
+    for (const x of r.artifacts) extended.add(x);
+  };
+  // The project's own code (src/index, register helpers, local plugins…) may rewrite plugins at boot.
+  for (const file of await codeFilesUnder(fs, join(root, 'src'))) {
     try {
       const text = await fs.readFile(file);
-      if (text.length <= 2_000_000) {
-        const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKindFor(file));
-        for (const t of pluginWriteTargets(sf)) rewritten.add(t);
-      }
+      if (text.length > 2_000_000 || !MAY_REWRITE_PLUGINS.test(text)) continue;
+      const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKindFor(file));
+      addRewrites(pluginWriteTargets(sf));
     } catch {
-      /* no such file */
+      /* unreadable — skip */
     }
   }
   for (const c of candidates) {
@@ -763,12 +867,17 @@ export async function readInstalledPlugins(fs: FileSystem, root: string): Promis
           plugin.complete = false;
           plugin.gaps.push('read budget exceeded');
         }
-        const crossWrite = pev.writesIntoModules();
+        const crossWrite = await pev.writesIntoModules();
         if (crossWrite) {
           plugin.complete = false;
           plugin.gaps.push(`a module writes into another module's exports (${crossWrite})`);
         }
-        for (const sf of pev.parsedFiles()) for (const t of pluginWriteTargets(sf)) rewritten.add(t);
+        if (pev.crawlTruncated) {
+          plugin.complete = false;
+          plugin.gaps.push('not every file of the plugin could be read');
+        }
+        for (const sf of pev.parsedFiles()) if (MAY_REWRITE_PLUGINS.test(sf.text)) addRewrites(pluginWriteTargets(sf));
+        plugin.files = pev.parsedFiles().map((sf) => sf.fileName);
       }
     }
     // `src/extensions/<plugin>/strapi-server.*` can rewrite the plugin at boot.
@@ -781,13 +890,18 @@ export async function readInstalledPlugins(fs: FileSystem, root: string): Promis
     }
     plugins.push(plugin);
   }
+  const isExtended = (ref: string, plugin: string, ns = ''): boolean =>
+    extended.has(`${ns}${ref}`) || extended.has(`${ns}*`) || extended.has(`${ns}plugin::${plugin}.*`);
   for (const p of plugins) {
     if (rewritten.has(p.name) || rewritten.has('*')) {
       p.complete = false;
       p.gaps.push('rewritten at runtime by other code (strapi.plugin(...) write)');
     }
+    // Extended in place: the entry exists, its method / attribute list may grow.
+    for (const a of p.artifacts) if (isExtended(a.ref, p.name)) a.hasSpread = true;
+    for (const ct of p.contentTypes) if (isExtended(ct.uid, p.name, 'ct:')) ct.partialAttributes = true;
   }
   const frameworkMiddlewares = await readFrameworkMiddlewares(fs, strapiDir, major);
-  return { strapiDir, strapiVersion, major, plugins, config, apiPrefix, ...(frameworkMiddlewares ? { frameworkMiddlewares } : {}) };
+  return { strapiDir, strapiVersion, major, plugins, config, apiPrefix, rewritten: [...rewritten], extended: [...extended], ...(frameworkMiddlewares ? { frameworkMiddlewares } : {}) };
 }
 

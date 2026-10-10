@@ -3,7 +3,8 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { fixturePath } from 'devkit-for-strapi-test-fixtures';
 import { build } from 'esbuild';
-import { dirname, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -13,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  */
 const here = dirname(fileURLToPath(import.meta.url));
 const cli = resolve(here, '..', 'dist', 'cli.cjs');
+const ISOLATED_ROOTS_CACHE = join(tmpdir(), `devkit-smoke-roots-${process.pid}.json`);
 
 describe('MCP server over stdio (real round-trip)', () => {
   let client: Client;
@@ -29,6 +31,8 @@ describe('MCP server over stdio (real round-trip)', () => {
     });
     const transport = new StdioClientTransport({
       command: process.execPath,
+      // Isolated from the developer's own `add_project` cache (~/.devkit-for-strapi/roots.json).
+      env: { ...(process.env as Record<string, string>), DEVKIT_ROOTS_CACHE: ISOLATED_ROOTS_CACHE },
       args: [cli, fixturePath('monorepo-two-projects')],
     });
     client = new Client({ name: 'smoke', version: '0' });
@@ -60,7 +64,11 @@ describe('MCP server discovers projects from the client\'s MCP roots (agnostic, 
   beforeAll(async () => {
     // No path argument: the server must learn the workspace from the client's
     // `roots` capability — the mechanism that makes it work anywhere with no config.
-    const transport = new StdioClientTransport({ command: process.execPath, args: [cli] });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [cli],
+      env: { ...(process.env as Record<string, string>), DEVKIT_ROOTS_CACHE: ISOLATED_ROOTS_CACHE },
+    });
     client = new Client({ name: 'smoke-roots', version: '0' }, { capabilities: { roots: {} } });
     client.setRequestHandler(ListRootsRequestSchema, () => ({
       roots: [{ uri: pathToFileURL(fixturePath('monorepo-two-projects')).href, name: 'workspace' }],
