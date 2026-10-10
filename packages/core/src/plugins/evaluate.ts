@@ -1727,10 +1727,15 @@ export class StaticEvaluator {
    * library code (a Strapi factory): it is trusted unless this file writes into
    * some call result.
    */
-  private resultSites(f: ts.Node, d: number): { sites: ts.Expression[]; escape?: string } {
+  private resultSites(f: ts.Node, d: number, walk: SitesWalk = newSitesWalk()): { sites: ts.Expression[]; escape?: string } {
     const sites: ts.Expression[] = [];
     const done = (escape: string | undefined): { sites: ts.Expression[]; escape?: string } => (escape ? { sites, escape } : { sites });
     if (d > 6) return done('returned too deeply');
+    // Each function / binding / object is walked once (aliases can form a DAG: exponential otherwise).
+    if (walk.fns.has(f)) return done(undefined);
+    walk.fns.add(f);
+    this.steps++;
+    if (this.overBudget()) return done('read budget exceeded');
     const parent = f.parent;
     // a getter / method / function-valued property of an object literal
     let member: { lit: ts.ObjectLiteralExpression; key: string | undefined; mode: 'get' | 'call' } | undefined;
@@ -1742,7 +1747,7 @@ export class StaticEvaluator {
     }
     if (member) {
       if (member.key === undefined) return done('returned from a computed member');
-      return done(this.memberSites(member.lit, member.key, member.mode, d, sites));
+      return done(this.memberSites(member.lit, member.key, member.mode, d, sites, walk));
     }
     const b = this.functionBinding(f);
     if (!b) {
@@ -1750,7 +1755,7 @@ export class StaticEvaluator {
       if (parent && ts.isClassLike(parent)) return done('returned from a class member');
       return done(this.hasCallRootedWrites(f.getSourceFile()) ? 'returned from a function whose result is written' : undefined);
     }
-    return done(this.functionValueSites(b, d, sites));
+    return done(this.functionValueSites(b, d, sites, walk));
   }
 
   /** The binding a function is known by: `function f`, `const f = …`, `f = …` (a var). */
@@ -1771,11 +1776,20 @@ export class StaticEvaluator {
   }
 
   /** Where a function VALUE goes: called (a result site), aliased, exported, kept in an object… */
-  private functionValueSites(b: { name: string; decl: Declaration; at: ts.Identifier }, d: number, sites: ts.Expression[]): string | undefined {
+  private functionValueSites(b: { name: string; decl: Declaration; at: ts.Identifier }, d: number, sites: ts.Expression[], walk: SitesWalk): string | undefined {
+    const key = declarationKey(b.decl);
+    if (key) {
+      let names = walk.bindings.get(key);
+      if (!names) walk.bindings.set(key, (names = new Set()));
+      if (names.has(b.name)) return undefined;
+      names.add(b.name);
+    }
     const sf = b.at.getSourceFile();
     const scope = b.decl.kind === 'var' ? b.decl.scopeNode : b.decl.kind === 'param' ? (b.decl.fn.body ?? sf) : sf;
     for (const r of this.refsIn(scope).get(b.name) ?? []) {
       if (r === b.at || !sameDeclaration(this.findDeclaration(b.name, r), b.decl)) continue;
+      this.steps++;
+      if (this.overBudget()) return 'read budget exceeded';
       let e: ts.Expression = r;
       while (e.parent && (ts.isParenthesizedExpression(e.parent) || ts.isAsExpression(e.parent) || ts.isNonNullExpression(e.parent))) e = e.parent;
       const q = e.parent;
@@ -1798,7 +1812,7 @@ export class StaticEvaluator {
         const ad = this.findDeclaration(alias.text, alias);
         if (!ad || ad.kind === 'opaque') return `'${b.name}' aliased where it can't be followed`;
         if (d > 6) return 'aliased too deeply';
-        const why = this.functionValueSites({ name: alias.text, decl: ad, at: alias }, d + 1, sites);
+        const why = this.functionValueSites({ name: alias.text, decl: ad, at: alias }, d + 1, sites, walk);
         if (why) return why;
         continue;
       }
@@ -1806,7 +1820,7 @@ export class StaticEvaluator {
       if ((ts.isShorthandPropertyAssignment(q) || (ts.isPropertyAssignment(q) && q.initializer === e)) && ts.isObjectLiteralExpression(q.parent)) {
         const key = ts.isShorthandPropertyAssignment(q) ? q.name.text : propName(q.name);
         if (key === undefined) return `'${b.name}' kept under a computed key`;
-        const why = this.memberSites(q.parent, key, 'call', d, sites);
+        const why = this.memberSites(q.parent, key, 'call', d, sites, walk);
         if (why) return why;
         continue;
       }
@@ -1817,7 +1831,7 @@ export class StaticEvaluator {
         while (g && !isFunctionLike(g)) g = g.parent;
         if (!g) return `'${b.name}' returned where it can't be followed`;
         if (this.flowsToExports(g as ts.Expression, d + 1)) continue;
-        const outer = this.resultSites(g, d + 1);
+        const outer = this.resultSites(g, d + 1, walk);
         if (outer.escape) return outer.escape;
         for (const site of outer.sites) {
           let c: ts.Node = site;
@@ -1839,7 +1853,11 @@ export class StaticEvaluator {
   }
 
   /** The reads of `lit.key` (a getter) / calls of `lit.key()` (a method), wherever `lit` is bound. */
-  private memberSites(lit: ts.ObjectLiteralExpression, key: string, mode: 'get' | 'call', d: number, sites: ts.Expression[]): string | undefined {
+  private memberSites(lit: ts.ObjectLiteralExpression, key: string, mode: 'get' | 'call', d: number, sites: ts.Expression[], walk: SitesWalk): string | undefined {
+    const seenKeys = walk.members.get(lit) ?? new Set<string>();
+    walk.members.set(lit, seenKeys);
+    if (seenKeys.has(`${mode}:${key}`)) return undefined;
+    seenKeys.add(`${mode}:${key}`);
     if (this.flowsToExports(lit, d)) return undefined;
     let x: ts.Node = lit;
     while (x.parent && (ts.isParenthesizedExpression(x.parent) || ts.isAsExpression(x.parent) || ts.isSatisfiesExpression(x.parent))) x = x.parent;
@@ -2173,7 +2191,7 @@ export class StaticEvaluator {
    * (an unreadable function, another object) is not followed.
    */
   private async moduleUse(start: ts.Expression, ctx: ModuleUseCtx, depth: number, container = false): Promise<string | undefined> {
-    if (depth > 10) return undefined; // followed far enough: no write seen
+    if (depth > 24) return ctx.where(start, 'followed too deep to tell');
     const visited = container ? ctx.visitedContainer : ctx.visited;
     if (visited.has(start)) return undefined;
     visited.add(start);
@@ -2217,6 +2235,8 @@ export class StaticEvaluator {
       if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.EqualsToken && ctx.privateVirtual(e)) return undefined;
       return ctx.where(p, 'written');
     }
+    // Container mode is for the fresh object itself: a member read out of it (`h.m`) is the module's value again.
+    container = container && accessDepth === 0;
     // A primitive or a function can't be written into (and a module's functions are meant to be handed around).
     const bare = skipParens(e);
     if (!container && !ts.isCallExpression(bare) && !ts.isNewExpression(bare) && !(ts.isCallExpression(p) && p.expression === e)) {
@@ -2342,7 +2362,7 @@ export class StaticEvaluator {
       for (const d of p.initializer.declarations) {
         for (const id of identifiersOf(d.name)) {
           for (const r of this.refsIn(p.statement).get(id.text) ?? []) {
-            const why = await this.moduleUse(r, ctx, depth + 1, container);
+            const why = await this.moduleUse(r, ctx, depth + 1);
             if (why) return why;
           }
         }
@@ -2715,6 +2735,32 @@ export class StaticEvaluator {
       if (hit) return hit;
     }
     return undefined;
+  }
+}
+
+/** What one result-site walk has already visited. */
+interface SitesWalk {
+  fns: Set<ts.Node>;
+  bindings: Map<ts.Node, Set<string>>;
+  members: Map<ts.Node, Set<string>>;
+}
+
+function newSitesWalk(): SitesWalk {
+  return { fns: new Set(), bindings: new Map(), members: new Map() };
+}
+
+/** The node identifying a binding's declaration (lookups build fresh objects). */
+function declarationKey(d: Declaration): ts.Node | undefined {
+  switch (d.kind) {
+    case 'var':
+    case 'destructured':
+    case 'fn':
+    case 'import':
+      return d.decl;
+    case 'param':
+      return d.fn.parameters[d.index];
+    default:
+      return undefined;
   }
 }
 
