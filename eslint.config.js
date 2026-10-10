@@ -33,4 +33,15 @@ export default tseslint.config(
       globals: { process: 'readonly', console: 'readonly' },
     },
   },
+  {
+    // CommonJS test tooling (the oracle runs inside a Strapi app with its own require).
+    files: ['scripts/**/*.cjs'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: { process: 'readonly', console: 'readonly', require: 'readonly', module: 'writable', __dirname: 'readonly' },
+    },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
 );
