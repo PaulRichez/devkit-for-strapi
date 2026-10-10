@@ -1,6 +1,17 @@
 import * as assert from 'assert';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { planRename } from 'devkit-for-strapi-pro';
+
+/** The open-source build ships a stub of the Pro rename engine: the rename tests run against the real one only. */
+const HAS_PRO_ENGINE = (() => {
+  try {
+    void planRename(undefined as never, undefined as never, '', '').catch(() => undefined);
+    return true;
+  } catch (e) {
+    return !/not included in the open-source build/.test(String(e));
+  }
+})();
 
 // Unlock Pro for the rename tests: the editor licence manager honours the dev
 // override (DEVKIT_DEV=1 + key 'dev') — the same dogfood/test path as the MCP.
@@ -210,7 +221,8 @@ suite('Strapi DevKit — integration (Extension Host)', () => {
     assert.ok(cmds.includes('strapiDevkit.clearLicenseKey'), 'clearLicenseKey not registered');
   });
 
-  test('rename: returns a workspace edit for a content-type (not applied)', async () => {
+  test('rename: returns a workspace edit for a content-type (not applied)', async function () {
+    if (!HAS_PRO_ENGINE) this.skip();
     const doc = await openPlayground();
     const idx = doc.getText().indexOf("documents('api::page.page')");
     const pos = doc.positionAt(doc.getText().indexOf('api::page.page', idx) + 2);
@@ -227,7 +239,8 @@ suite('Strapi DevKit — integration (Extension Host)', () => {
     assert.ok(wsEdit.size > 0, 'expected rename text edits across files');
   });
 
-  test('rename: a service method propagates from a call-site to its definition', async () => {
+  test('rename: a service method propagates from a call-site to its definition', async function () {
+    if (!HAS_PRO_ENGINE) this.skip();
     const doc = await openPlayground();
     // The `.notify('hi')` call (not the `api::page.notifier` UID before it).
     const pos = doc.positionAt(doc.getText().indexOf('.notify(') + 2);
