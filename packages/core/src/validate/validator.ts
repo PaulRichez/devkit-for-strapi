@@ -8,6 +8,7 @@ import type {
 } from '../model/types';
 import { isFrameworkRef, parseComponentUid, parseEntityRef, parseHandlerRef, parseRef } from '../model/uid';
 import { isVerifiablePlugin } from '../plugins/merge';
+import { contentTypeUids, hasContentType, hasPartialContentTypes } from '../index/codeContentTypes';
 import { autoCrudActions, CORE_ACTION_SET } from '../model/constants';
 import { closest } from '../util/levenshtein';
 import { owningApiName, owningPluginName, qualifyRouteHandler } from '../resolve/owner';
@@ -97,11 +98,13 @@ function validateEntityRef(
   // External (installed) plugins aren't in the workspace — we can't verify them.
   if (parsed.namespace === 'plugin' && !isLocalPlugin(project, parsed.scope)) return undefined;
   if (map.has(ref.text)) return undefined;
+  // A local plugin whose code-defined content-type list couldn't be read exhaustively.
+  if (parsed.namespace === 'plugin' && hasPartialContentTypes(project.index, parsed.scope)) return undefined;
   // A service/controller ref naming a real content-type is valid even with no
   // service/controller *file*: Strapi auto-generates the core service/controller
   // for every content-type. (For a content-type ref, `map` IS contentTypes, so
   // this is a redundant-but-safe no-op.)
-  if (project.index.contentTypes.has(ref.text)) return undefined;
+  if (hasContentType(project.index, ref.text)) return undefined;
   const suggestion = closest(ref.text, map.keys());
   return diag(ref, `Unknown ${label} '${ref.text}'.`, code, 'error', suggestion);
 }
@@ -128,7 +131,9 @@ function validateContentType(project: StrapiProject, ref: ReferenceContext): Dia
       return diag(ref, `Unknown component '${ref.text}'.`, DiagnosticCode.UnknownComponent, 'error', suggestion);
     }
   }
-  return validateEntityRef(project, ref, project.index.contentTypes, DiagnosticCode.UnknownContentType, 'content-type');
+  const idx = project.index;
+  const contentTypes: RefIndex = { has: (k) => hasContentType(idx, k), keys: () => contentTypeUids(idx).values() };
+  return validateEntityRef(project, ref, contentTypes, DiagnosticCode.UnknownContentType, 'content-type');
 }
 
 function validatePluginService(project: StrapiProject, ref: ReferenceContext): DiagnosticEntry | undefined {

@@ -122,6 +122,16 @@ export interface StrapiIndex {
   /** Every enabled installed plugin (complete or not), for plugin-name completion/hover. */
   installedPlugins?: Map<string, { packageName: string; version?: string; complete: boolean }>;
   /**
+   * Local-plugin content-types declared **in code** (`content-types/index.ts`
+   * holding the schema object) rather than in a `<ct>/schema.json` folder. Kept
+   * OUT of {@link contentTypes} on purpose: refactors derive the content-type
+   * folder from `schemaPath`, which here is a shared code file. Read paths
+   * (validation, resolve, hover, completion) consult both.
+   */
+  codeContentTypes?: Map<string, ContentType>;
+  /** Local plugins whose content-type list could not be read exhaustively (refs into them stay silent). */
+  partialContentTypePlugins?: Set<string>;
+  /**
    * Reverse map: normalized filePath → the definition entries it contributes.
    * Lets {@link updateIndexForFile} remove a file's old definitions without
    * re-walking every map (incremental definition index — O(1) removal).

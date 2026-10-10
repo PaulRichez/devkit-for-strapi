@@ -1,4 +1,5 @@
 import type { MemberAccessRef } from '../analyze/member';
+import { lookupContentType } from '../index/codeContentTypes';
 import { autoCrudActions } from '../model/constants';
 import type { CodeArtifact, ReferenceContext, StrapiProject, TargetLocation } from '../model/types';
 import { parseComponentUid, parseHandlerRef, qualifyPluginRef } from '../model/uid';
@@ -16,7 +17,7 @@ function fileTarget(artifact: CodeArtifact | undefined): TargetLocation[] {
  */
 function artifactOrSchema(artifact: CodeArtifact | undefined, project: StrapiProject, ref: string): TargetLocation[] {
   if (artifact) return [{ filePath: artifact.filePath }];
-  const ct = project.index.contentTypes.get(ref);
+  const ct = lookupContentType(project.index, ref);
   return ct ? [{ filePath: ct.schemaPath }] : [];
 }
 
@@ -78,7 +79,7 @@ export function resolveDefinition(
   switch (ctx.kind) {
     case 'content-type-uid': {
       const ref = qualifiedRef(ctx);
-      const ct = index.contentTypes.get(ref);
+      const ct = lookupContentType(index, ref);
       if (ct) return [{ filePath: ct.schemaPath }];
       // A bare `<category>.<name>` in a DB-layer content-type context is a
       // component (db.query/getModel accept components) → resolve to its JSON.

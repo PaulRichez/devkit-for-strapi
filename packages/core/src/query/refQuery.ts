@@ -17,6 +17,7 @@ import type {
 } from '../model/types';
 import { isFrameworkRef, parseAddress, parseHandlerRef, parseRef } from '../model/uid';
 import { isVerifiablePlugin } from '../plugins/merge';
+import { hasContentType, hasPartialContentTypes, lookupContentType } from '../index/codeContentTypes';
 import { closest } from '../util/levenshtein';
 
 export interface ContentTypeSummary {
@@ -146,7 +147,7 @@ export function listArtifacts(project: StrapiProject, kind?: ArtifactKind): Arti
 
 /** The real attributes/relations of a content-type or component UID (F1). */
 export function getSchema(project: StrapiProject, uid: string): SchemaInfo | undefined {
-  const ct = project.index.contentTypes.get(uid);
+  const ct = lookupContentType(project.index, uid);
   if (ct) {
     return {
       uid: ct.uid,
@@ -191,7 +192,7 @@ export function resolveRef(project: StrapiProject, address: string): ResolvedTar
   const { ref, method } = parseAddress(address);
   if (method) return resolveMethod(project, ref, method);
   const out: ResolvedTarget[] = [];
-  const ct = project.index.contentTypes.get(ref);
+  const ct = lookupContentType(project.index, ref);
   if (ct) out.push({ kind: 'content-type', filePath: ct.schemaPath, offset: ct.defOffset });
   const comp = project.index.components.get(ref);
   if (comp) out.push({ kind: 'component', filePath: comp.jsonPath, offset: comp.defOffset });
@@ -250,6 +251,9 @@ export function validateRef(project: StrapiProject, address: string): Validation
   }
   const parsed = parseRef(ref);
   if (parsed && parsed.namespace === 'plugin' && !isVerifiablePlugin(project.index, parsed.scope)) {
+    return { status: 'external', kinds: [] };
+  }
+  if (parsed && parsed.namespace === 'plugin' && hasPartialContentTypes(project.index, parsed.scope)) {
     return { status: 'external', kinds: [] };
   }
   // A method address only ever resolves to a service/controller action.
@@ -384,7 +388,7 @@ export function listBrokenRefs(project: StrapiProject): BrokenRef[] {
     return idx.controllers.has(uid) || idx.services.has(uid) || idx.contentTypes.has(uid);
   };
   const checks: Array<{ prefix: string; kind: TargetKind; has: (ref: string) => boolean }> = [
-    { prefix: 'ct:', kind: 'content-type', has: (r) => idx.contentTypes.has(r) },
+    { prefix: 'ct:', kind: 'content-type', has: (r) => hasContentType(idx, r) },
     { prefix: 'component:', kind: 'component', has: (r) => idx.components.has(r) },
     { prefix: 'service:', kind: 'service', has: (r) => idx.services.has(r) || idx.contentTypes.has(r) },
     { prefix: 'controller:', kind: 'controller', has: (r) => idx.controllers.has(r) || idx.contentTypes.has(r) },
@@ -401,6 +405,7 @@ export function listBrokenRefs(project: StrapiProject): BrokenRef[] {
     if (isFrameworkRef(ref)) continue; // framework built-in (admin::/strapi::) — unverifiable
     const parsed = parseRef(ref);
     if (parsed && parsed.namespace === 'plugin' && !isVerifiablePlugin(idx, parsed.scope)) continue; // external
+    if (parsed && parsed.namespace === 'plugin' && hasPartialContentTypes(idx, parsed.scope)) continue; // not exhaustive
     if (c.has(ref)) continue; // resolves → fine
     out.push({ ref, kind: c.kind, locations });
   }

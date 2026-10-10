@@ -1,4 +1,4 @@
-import { paths } from 'devkit-for-strapi-core';
+import { paths, touchedPaths } from 'devkit-for-strapi-core';
 import type { FileSystem, StrapiEngine } from 'devkit-for-strapi-core';
 import { computeRename, prepareRename as prepareRenameAt } from 'devkit-for-strapi-pro';
 import * as vscode from 'vscode';
@@ -53,6 +53,13 @@ export function registerRenameProvider(
           newName,
         );
         if (!result) return undefined;
+        // Installed plugins are indexed read-only: never rename/edit inside node_modules
+        // (same containment rule as the MCP executor's `pathsOutsideRoots`).
+        if (touchedPaths(result).some((p) => p.split('/').includes('node_modules'))) {
+          throw new Error(
+            'DevKit for Strapi does not rename code that lives in node_modules (an installed plugin). Rename it in the plugin itself, or extend it under src/extensions.',
+          );
+        }
         const edit = new vscode.WorkspaceEdit();
         // Text edits first, then creates, renames, deletes (they move/remove the edited files).
         for (const t of result.textEdits) {

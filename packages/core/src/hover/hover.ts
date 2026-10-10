@@ -1,4 +1,5 @@
 import type { ApiMemberRef } from '../analyze/apiMember';
+import { lookupContentType } from '../index/codeContentTypes';
 import type { MemberAccessRef } from '../analyze/member';
 import { STRAPI_APIS, lookupApiMethod } from '../model/strapiApi';
 import type { HoverInfo, ReferenceContext, StrapiProject } from '../model/types';
@@ -48,7 +49,7 @@ export function describeHover(
         md = `⚠️ \`strapi.entityService\` is deprecated in **Strapi v5** — use \`strapi.documents()\`.`;
         break;
       }
-      const ct = idx.contentTypes.get(qualifyPluginRef(ctx.text, ctx.pluginName));
+      const ct = lookupContentType(idx, qualifyPluginRef(ctx.text, ctx.pluginName));
       if (ct) {
         const n = Object.keys(ct.attributes).length;
         const name = ct.info.displayName ? ` · "${ct.info.displayName}"` : '';

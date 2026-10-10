@@ -12,6 +12,7 @@ import {
 } from '../model/types';
 import { buildArtifactRef } from '../model/uid';
 import { analyzeArtifact, definitionAnchorOffset } from './actions';
+import { indexCodeContentTypes } from './codeContentTypes';
 import { parseComponentFile } from './components';
 import { parseSchemaFile } from './schema';
 
@@ -229,24 +230,56 @@ async function indexGlobals(fs: FileSystem, srcDir: string, index: StrapiIndex):
   await indexArtifactDir(fs, join(srcDir, 'middlewares'), 'middleware', owner, index);
 }
 
+/** Where a local plugin keeps its server code, mirroring the layouts Strapi supports. */
+export type PluginLayout = 'root' | 'server' | 'server/src';
+
+/**
+ * The effective server layout of `src/plugins/<name>`: `server/src` (the Strapi 5
+ * plugin SDK scaffold, `npx @strapi/sdk-plugin init`), else `server/` (the v4
+ * layout), else the plugin root. The first that exists shadows the others.
+ */
+export async function pluginLayoutOf(fs: FileSystem, srcDir: string, pluginName: string): Promise<PluginLayout> {
+  const base = join(srcDir, 'plugins', pluginName);
+  if (await fs.exists(join(base, 'server', 'src'))) return 'server/src';
+  if (await fs.exists(join(base, 'server'))) return 'server';
+  return 'root';
+}
+
+function layoutDir(base: string, layout: PluginLayout): string {
+  return layout === 'root' ? base : join(base, layout);
+}
+
 async function indexPlugins(fs: FileSystem, srcDir: string, index: StrapiIndex): Promise<void> {
   const pluginsDir = join(srcDir, 'plugins');
   for (const pluginName of await listDirs(fs, pluginsDir)) {
     index.pluginNames.add(pluginName);
     const base = join(pluginsDir, pluginName);
-    const serverDir = (await fs.exists(join(base, 'server'))) ? join(base, 'server') : base;
+    const serverDir = layoutDir(base, await pluginLayoutOf(fs, srcDir, pluginName));
     await indexContentTypeDir(
       fs,
       join(serverDir, 'content-types'),
       { source: 'plugin', apiName: pluginName, pluginName },
       index,
     );
+    // Content-types declared in code (`content-types/index.ts`), after the schema.json folders.
+    await indexCodeContentTypes(fs, join(serverDir, 'content-types'), pluginName, index);
     const owner: ArtifactOwner = { scope: 'plugin', pluginName };
     await indexArtifactDir(fs, join(serverDir, 'services'), 'service', owner, index);
     await indexArtifactDir(fs, join(serverDir, 'controllers'), 'controller', owner, index);
     await indexArtifactDir(fs, join(serverDir, 'policies'), 'policy', owner, index);
     await indexArtifactDir(fs, join(serverDir, 'middlewares'), 'middleware', owner, index);
   }
+}
+
+/** Re-read the code-defined content-types of one local plugin (after an edit under its content-types dir). */
+export async function refreshCodeContentTypes(fs: FileSystem, project: { srcDir: string; index: StrapiIndex }, pluginName: string): Promise<void> {
+  const base = join(project.srcDir, 'plugins', pluginName);
+  if (!(await fs.exists(base))) {
+    await indexCodeContentTypes(fs, join(base, '__missing__'), pluginName, project.index);
+    return;
+  }
+  const serverDir = layoutDir(base, await pluginLayoutOf(fs, project.srcDir, pluginName));
+  await indexCodeContentTypes(fs, join(serverDir, 'content-types'), pluginName, project.index);
 }
 
 /** Build the full in-memory index for one Strapi project. */
@@ -266,9 +299,9 @@ export async function buildIndex(fs: FileSystem, srcDir: string): Promise<Strapi
 
 /** The kind of definition a file carries, derived from its path. */
 type DefKind =
-  | { kind: 'content-type'; source: 'api' | 'plugin'; apiName: string; pluginName?: string; extension?: boolean; ctName: string; pluginUnderServer?: boolean }
+  | { kind: 'content-type'; source: 'api' | 'plugin'; apiName: string; pluginName?: string; extension?: boolean; ctName: string; pluginLayout?: PluginLayout }
   | { kind: 'component'; category: string; name: string }
-  | { kind: 'artifact'; artifactKind: ArtifactKind; owner: ArtifactOwner; relPath: string; pluginUnderServer?: boolean }
+  | { kind: 'artifact'; artifactKind: ArtifactKind; owner: ArtifactOwner; relPath: string; pluginLayout?: PluginLayout }
   | { kind: 'none' };
 
 function artifactKindOfDir(dir: string): ArtifactKind | undefined {
@@ -306,11 +339,11 @@ function classifyDefinitionFile(filePath: string, project: { srcDir: string }): 
     return { kind: 'content-type', source: 'api', apiName: apiName!, ctName: ctName! };
   }
 
-  // src/plugins/<plugin>/server/content-types/<ct>/schema.json  OR  src/plugins/<plugin>/content-types/<ct>/schema.json
-  const pluginCtMatch = rel.match(/^plugins\/([^/]+)\/(server\/)?content-types\/([^/]+)\/schema\.json$/);
+  // src/plugins/<plugin>/(server/(src/)?)?content-types/<ct>/schema.json
+  const pluginCtMatch = rel.match(/^plugins\/([^/]+)\/(server\/(?:src\/)?)?content-types\/([^/]+)\/schema\.json$/);
   if (pluginCtMatch) {
     const [, pluginName, serverSeg, ctName] = pluginCtMatch;
-    return { kind: 'content-type', source: 'plugin', apiName: pluginName!, pluginName, ctName: ctName!, pluginUnderServer: !!serverSeg };
+    return { kind: 'content-type', source: 'plugin', apiName: pluginName!, pluginName, ctName: ctName!, pluginLayout: layoutOfSeg(serverSeg) };
   }
 
   // src/components/<category>/<name>.json
@@ -332,13 +365,13 @@ function classifyDefinitionFile(filePath: string, project: { srcDir: string }): 
     }
   }
 
-  // src/plugins/<plugin>/(server/)?{services,controllers,policies,middlewares}/<file>
-  const pluginArtMatch = rel.match(/^plugins\/([^/]+)\/(server\/)?(services|controllers|policies|middlewares)\/(.+)$/);
+  // src/plugins/<plugin>/(server/(src/)?)?{services,controllers,policies,middlewares}/<file>
+  const pluginArtMatch = rel.match(/^plugins\/([^/]+)\/(server\/(?:src\/)?)?(services|controllers|policies|middlewares)\/(.+)$/);
   if (pluginArtMatch) {
     const [, pluginName, serverSeg, kindDir, relPath] = pluginArtMatch;
     const artifactKind = artifactKindOfDir(kindDir!);
     if (artifactKind && isArtifactCodeFile(relPath!)) {
-      return { kind: 'artifact', artifactKind, owner: { scope: 'plugin', pluginName: pluginName! }, relPath: relPath!, pluginUnderServer: !!serverSeg };
+      return { kind: 'artifact', artifactKind, owner: { scope: 'plugin', pluginName: pluginName! }, relPath: relPath!, pluginLayout: layoutOfSeg(serverSeg) };
     }
   }
 
@@ -353,6 +386,11 @@ function classifyDefinitionFile(filePath: string, project: { srcDir: string }): 
   }
 
   return { kind: 'none' };
+}
+
+function layoutOfSeg(seg: string | undefined): PluginLayout {
+  if (!seg) return 'root';
+  return seg === 'server/src/' ? 'server/src' : 'server';
 }
 
 /** True if the artifact's file (last path segment) is a code file buildIndex would index. */
@@ -432,14 +470,13 @@ export async function updateIndexForFile(
   // 1. Classify the file by path (synchronous, no IO).
   let def = classifyDefinitionFile(filePath, project);
 
-  // Plugin `server/` precedence: buildIndex indexes a plugin's TOP-LEVEL
-  // services/content-types dir only when there is no `server/` dir; once
-  // `server/` exists it shadows the top-level one. A stray top-level file must
-  // therefore be treated as a non-definition when `server/` exists — otherwise
-  // we'd index a phantom entry buildIndex never produces.
-  if ((def.kind === 'artifact' || def.kind === 'content-type') && def.pluginUnderServer === false) {
+  // Plugin layout precedence: buildIndex reads ONE server dir per local plugin
+  // (`server/src` > `server` > root, see pluginLayoutOf). A file in a shadowed
+  // layout must be a non-definition — otherwise we'd index a phantom entry
+  // buildIndex never produces.
+  if ((def.kind === 'artifact' || def.kind === 'content-type') && def.pluginLayout !== undefined) {
     const pluginName = def.kind === 'artifact' ? def.owner.pluginName : def.pluginName;
-    if (pluginName && (await fs.exists(join(srcNorm, 'plugins', pluginName, 'server')))) {
+    if (pluginName && (await pluginLayoutOf(fs, srcNorm, pluginName)) !== def.pluginLayout) {
       def = { kind: 'none' };
     }
   }

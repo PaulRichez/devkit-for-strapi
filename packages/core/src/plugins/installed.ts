@@ -213,75 +213,11 @@ class PluginReader {
   private async readContentTypes(server: ObjValue): Promise<void> {
     const cts = await this.collection(server, 'contentTypes');
     if (!cts) return;
-    const name = this.plugin.name;
     for (const [ctName, thunk] of cts.props) {
-      let def = await thunk();
-      if (isCallable(def)) def = await this.ev.call(def, [UNKNOWN('{ strapi }')]);
-      const keyLoc = cts.keyLocs.get(ctName);
-      const schemaV = def.k === 'obj' ? await this.ev.getProp(def, 'schema') : UNKNOWN('content-type definition');
-      const ct: ContentType = {
-        uid: `plugin::${name}.${ctName}`,
-        kind: 'collectionType',
-        apiName: name,
-        ctName,
-        schemaPath: keyLoc?.file ?? this.plugin.dir,
-        source: 'plugin',
-        pluginName: name,
-        info: {},
-        attributes: {},
-        installed: true,
-        ...(keyLoc ? { defOffset: keyLoc.pos } : {}),
-      };
-      if (schemaV.k === 'obj') {
-        const plain = asRecord(await toPlain(this.ev, schemaV)) ?? {};
-        if (schemaV.loc) {
-          ct.schemaPath = schemaV.loc.file;
-          ct.defOffset = schemaV.loc.pos;
-        }
-        ct.kind = plain.kind === 'singleType' ? 'singleType' : 'collectionType';
-        const info = asRecord(plain.info) ?? {};
-        ct.info = {
-          singularName: asString(info.singularName),
-          pluralName: asString(info.pluralName),
-          displayName: asString(info.displayName),
-        };
-        const attrsV = await this.ev.getProp(schemaV, 'attributes');
-        if (attrsV.k === 'obj') {
-          ct.attributes = await this.attributes(attrsV, ct.schemaPath);
-          if (attrsV.open) ct.partialAttributes = true;
-        } else {
-          ct.partialAttributes = true;
-        }
-        if (schemaV.open) ct.partialAttributes = true;
-      } else {
-        ct.partialAttributes = true;
-      }
+      const ct = await contentTypeFromDefinition(this.ev, this.plugin.name, ctName, await thunk(), cts.keyLocs.get(ctName), this.plugin.dir);
+      ct.installed = true;
       this.plugin.contentTypes.push(ct);
     }
-  }
-
-  private async attributes(attrsV: ObjValue, schemaPath: string): Promise<Record<string, AttributeInfo>> {
-    const out: Record<string, AttributeInfo> = {};
-    for (const [attrName, thunk] of attrsV.props) {
-      if (attrName === '__proto__' || attrName === 'constructor' || attrName === 'prototype') continue;
-      const def = asRecord(await toPlain(this.ev, await thunk())) ?? {};
-      const kl = attrsV.keyLocs.get(attrName);
-      const info: AttributeInfo = {
-        name: attrName,
-        type: asString(def.type) ?? 'unknown',
-        keyOffset: kl && kl.file === schemaPath ? kl.pos : 0,
-      };
-      const target = asString(def.target);
-      if (target) info.target = target;
-      const component = asString(def.component);
-      if (component) info.component = component;
-      if (Array.isArray(def.components)) {
-        const comps = def.components.filter((c): c is string => typeof c === 'string');
-        if (comps.length) info.components = comps;
-      }
-      out[attrName] = info;
-    }
-    return out;
   }
 
   private async readArtifacts(server: ObjValue, key: string, kind: ArtifactKind): Promise<void> {
@@ -439,6 +375,86 @@ class PluginReader {
       }
     }
   }
+}
+
+async function readAttributes(ev: StaticEvaluator, attrsV: ObjValue, schemaPath: string): Promise<Record<string, AttributeInfo>> {
+  const out: Record<string, AttributeInfo> = {};
+  for (const [attrName, thunk] of attrsV.props) {
+    if (attrName === '__proto__' || attrName === 'constructor' || attrName === 'prototype') continue;
+    const def = asRecord(await toPlain(ev, await thunk())) ?? {};
+    const kl = attrsV.keyLocs.get(attrName);
+    const info: AttributeInfo = {
+      name: attrName,
+      type: asString(def.type) ?? 'unknown',
+      keyOffset: kl && kl.file === schemaPath ? kl.pos : 0,
+    };
+    const target = asString(def.target);
+    if (target) info.target = target;
+    const component = asString(def.component);
+    if (component) info.component = component;
+    if (Array.isArray(def.components)) {
+      const comps = def.components.filter((c): c is string => typeof c === 'string');
+      if (comps.length) info.components = comps;
+    }
+    out[attrName] = info;
+  }
+  return out;
+}
+
+/**
+ * A plugin content-type from its declaration value (`{ schema, lifecycles? }`,
+ * possibly a factory) as found under the plugin's `contentTypes` key `ctName`.
+ * The UID is certain (Strapi keys plugin content-types by that key); the
+ * attributes are flagged `partialAttributes` when not read exhaustively.
+ */
+export async function contentTypeFromDefinition(
+  ev: StaticEvaluator,
+  pluginName: string,
+  ctName: string,
+  definition: Value,
+  keyLoc: Loc | undefined,
+  fallbackPath: string,
+): Promise<ContentType> {
+  let def = definition;
+  if (isCallable(def)) def = await ev.call(def, [UNKNOWN('{ strapi }')]);
+  const schemaV = def.k === 'obj' ? await ev.getProp(def, 'schema') : UNKNOWN('content-type definition');
+  const ct: ContentType = {
+    uid: `plugin::${pluginName}.${ctName}`,
+    kind: 'collectionType',
+    apiName: pluginName,
+    ctName,
+    schemaPath: keyLoc?.file ?? fallbackPath,
+    source: 'plugin',
+    pluginName,
+    info: {},
+    attributes: {},
+    ...(keyLoc ? { defOffset: keyLoc.pos } : {}),
+  };
+  if (schemaV.k !== 'obj') {
+    ct.partialAttributes = true;
+    return ct;
+  }
+  const plain = asRecord(await toPlain(ev, schemaV)) ?? {};
+  if (schemaV.loc) {
+    ct.schemaPath = schemaV.loc.file;
+    ct.defOffset = schemaV.loc.pos;
+  }
+  ct.kind = plain.kind === 'singleType' ? 'singleType' : 'collectionType';
+  const info = asRecord(plain.info) ?? {};
+  ct.info = {
+    singularName: asString(info.singularName),
+    pluralName: asString(info.pluralName),
+    displayName: asString(info.displayName),
+  };
+  const attrsV = await ev.getProp(schemaV, 'attributes');
+  if (attrsV.k === 'obj') {
+    ct.attributes = await readAttributes(ev, attrsV, ct.schemaPath);
+    if (attrsV.open) ct.partialAttributes = true;
+  } else {
+    ct.partialAttributes = true;
+  }
+  if (schemaV.open) ct.partialAttributes = true;
+  return ct;
 }
 
 /** `api.rest.prefix` from `config/api.*` (default `/api`). */

@@ -1,5 +1,5 @@
 import { type FileSystem, FileType } from '../fs/FileSystem';
-import { dirname, join, normalize } from '../fs/paths';
+import { dirname, isPathInside, join, normalize } from '../fs/paths';
 import { asRecord, asString, safeParse } from '../util/json';
 
 const PRUNE = new Set([
@@ -26,6 +26,12 @@ export function isStrapiPackageJson(raw: string): boolean {
   return asString(deps['@strapi/strapi']) !== undefined || asString(devDeps['@strapi/strapi']) !== undefined;
 }
 
+/** True if a package.json is a Strapi **plugin** package (`strapi.kind: "plugin"`). */
+export function isStrapiPluginPackageJson(raw: string): boolean {
+  const json = asRecord(safeParse(raw));
+  return asRecord(json?.strapi)?.kind === 'plugin';
+}
+
 /**
  * Discover Strapi project roots by content — scanning every package.json for
  * `@strapi/strapi`. Never assumes "workspace root = Strapi root". Prunes heavy
@@ -47,7 +53,12 @@ export async function discoverProjectRoots(fs: FileSystem, folders: string[]): P
     if (entries.some((e) => e.type === FileType.File && e.name === 'package.json')) {
       const pkgPath = join(dir, 'package.json');
       try {
-        if (isStrapiPackageJson(await fs.readFile(pkgPath)) && !seen.has(dir)) {
+        const raw = await fs.readFile(pkgPath);
+        // A plugin package nested inside an app (`src/plugins/<name>/package.json`
+        // declaring @strapi/strapi as a peer/dev dep) belongs to that app — it is
+        // indexed as one of its local plugins, not as a project of its own.
+        const nestedPlugin = isStrapiPluginPackageJson(raw) && roots.some((r) => isPathInside(r, dir));
+        if (isStrapiPackageJson(raw) && !nestedPlugin && !seen.has(dir)) {
           seen.add(dir);
           roots.push(dir);
         }
@@ -77,14 +88,20 @@ export async function discoverProjectRoots(fs: FileSystem, folders: string[]): P
  */
 export async function findStrapiRootUp(fs: FileSystem, startDir: string): Promise<string | undefined> {
   let dir = normalize(startDir);
+  // A Strapi plugin package found on the way up: returned only if no app contains it.
+  let pluginRoot: string | undefined;
   for (;;) {
     try {
-      if (isStrapiPackageJson(await fs.readFile(join(dir, 'package.json')))) return dir;
+      const raw = await fs.readFile(join(dir, 'package.json'));
+      if (isStrapiPackageJson(raw)) {
+        if (!isStrapiPluginPackageJson(raw)) return dir;
+        pluginRoot ??= dir;
+      }
     } catch {
       // no/unreadable package.json here — keep climbing
     }
     const parent = dirname(dir);
-    if (parent === dir) return undefined; // reached the filesystem root
+    if (parent === dir) return pluginRoot; // reached the filesystem root
     dir = parent;
   }
 }

@@ -6,7 +6,7 @@ import { complete as completeRefs, completeMembers } from './complete/completion
 import { type FileSystem, FileType } from './fs/FileSystem';
 import { basename, dirname, isPathInside, join, normalize } from './fs/paths';
 import { describeApiMemberHover, describeHover, describeMemberHover } from './hover/hover';
-import { buildIndex, updateIndexForFile } from './index/indexer';
+import { buildIndex, refreshCodeContentTypes, updateIndexForFile } from './index/indexer';
 import type {
   CodeLensEntry,
   CompletionResult,
@@ -391,6 +391,13 @@ class Engine implements StrapiEngine {
     }
     for (const project of reload) await this.reloadInstalled(project);
     for (const project of touched) if (!reload.has(project)) mergeInstalled(project.index, project.installed);
+    // Local plugins declaring content-types in code: re-read on any edit under their content-types dir.
+    for (const p of [...changedN, ...deletedN]) {
+      const project = this.projectForFile(p);
+      const src = project ? normalize(project.srcDir) : '';
+      const m = project && p.startsWith(src + '/') && p.slice(src.length).match(/^\/plugins\/([^/]+)\/(?:.*\/)?content-types\//);
+      if (project && m) await refreshCodeContentTypes(this.fs, project, m[1]!);
+    }
 
     // Update the reference index incrementally — only the touched files, no full re-walk.
     for (const p of changedN) {

@@ -1,4 +1,5 @@
 import type { MemberCompletion } from '../analyze/memberCompletion';
+
 import { autoCrudActions, CORE_ACTION_SET } from '../model/constants';
 import { STRAPI_APIS } from '../model/strapiApi';
 import type {
@@ -135,7 +136,9 @@ export function complete(
   switch (ctx.kind) {
     case 'content-type-uid': {
       if (ctx.pluginName) return pluginBareEntries(idx.contentTypes, ctx.pluginName, 'plugin content-type');
-      const out = [...idx.contentTypes.values()].map((ct) => value(ct.uid, ct.info.displayName ?? ct.kind));
+      const out = [...idx.contentTypes.values(), ...(idx.codeContentTypes?.values() ?? [])].map((ct) =>
+        value(ct.uid, ct.info.displayName ?? ct.kind),
+      );
       // DB-layer call forms (db.query/query/getModel, v4 entityService) accept
       // component UIDs too — suggest what the validator accepts.
       const dbLayer = ctx.apiStyle === 'db.query' || ctx.apiStyle === 'query' || ctx.apiStyle === 'getModel' || ctx.apiStyle === 'entityService';
