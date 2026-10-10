@@ -11,6 +11,7 @@
 
 import type { FileSystem } from '../fs/FileSystem';
 import { dirname, join } from '../fs/paths';
+import { pathsStamp } from '../fs/stamp';
 import type { CodeArtifact, StrapiIndex } from '../model/types';
 import type { InstalledPluginsResult } from './installed';
 import { type PluginRewrites, unionRewrites } from './rewrites';
@@ -117,7 +118,7 @@ export async function installedStamp(
   root: string,
   strapiDir: string | undefined,
   installed?: InstalledPluginsResult,
-  /** Also every file each plugin read was parsed from (slow; checked less often). */
+  /** Also every file each plugin read was parsed from, and their folders (slower; checked less often). */
   full = false,
 ): Promise<string> {
   const paths = [join(root, 'package.json'), ...LOCKFILES.map((l) => join(root, l))];
@@ -127,7 +128,8 @@ export async function installedStamp(
   for (const p of installed?.plugins ?? []) {
     // A rebuilt workspace-linked plugin rewrites its entry; an extension entry point can appear in an existing folder.
     if (p.entry) paths.push(p.entry);
-    if (full) paths.push(...(p.files ?? []));
+    // the same set the per-plugin read cache is keyed on (see installed.ts#readServerCached)
+    if (full) paths.push(...pluginReadPaths(p.files ?? []));
     for (const ext of ['js', 'ts', 'mjs', 'cjs']) paths.push(join(root, 'src', 'extensions', p.name, `strapi-server.${ext}`));
   }
   if (strapiDir) {
@@ -138,10 +140,10 @@ export async function installedStamp(
   } else {
     paths.push(join(root, 'node_modules', '@strapi', 'strapi', 'package.json'));
   }
-  const parts: string[] = [];
-  for (const p of paths) {
-    const s = await fs.stat(p);
-    parts.push(s ? `${s.mtime ?? 'x'}` : '-');
-  }
-  return parts.join('|');
+  return pathsStamp(fs, paths);
+}
+
+/** What a plugin's read depends on: the files it parsed and the folders holding them (a new file can change resolution). */
+export function pluginReadPaths(files: readonly string[]): string[] {
+  return [...new Set([...files, ...files.map((f) => dirname(f))])].sort();
 }

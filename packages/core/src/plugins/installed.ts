@@ -21,10 +21,12 @@
 
 import { type FileSystem, FileType } from '../fs/FileSystem';
 import { dirname, join, normalize } from '../fs/paths';
+import { pathsStamp } from '../fs/stamp';
 import { parseMajor } from '../workspace/version';
 import type { AttributeInfo, CodeArtifact, ContentType, ControllerAction, ArtifactKind } from '../model/types';
 import { asRecord, asString, safeParse } from '../util/json';
 import { configModuleValue, readPluginsConfig, type PluginDeclaration, type PluginsConfig } from './config';
+import { pluginReadPaths } from './merge';
 import { isCallable, type Loc, type ObjValue, resolveDots, StaticEvaluator, toPlain, UNKNOWN, type Value } from './evaluate';
 import { MAY_REWRITE_PLUGINS, pluginWriteTargets, type PluginRewrites, scanProjectRewrites, unionRewrites } from './rewrites';
 import { strapiExternals } from './shims';
@@ -623,7 +625,7 @@ async function readServerCached(fs: FileSystem, name: string, dir: string, entry
   if (!reads) serverReadsByFs.set(fs, (reads = new Map()));
   const key = [name, entry, apiPrefix ?? '', major].join('\n');
   const hit = reads.get(dir);
-  if (hit && hit.key === key && (await filesStamp(fs, hit.read.files)) === hit.stamp) {
+  if (hit && hit.key === key && (await pathsStamp(fs, pluginReadPaths(hit.read.files))) === hit.stamp) {
     reads.delete(dir); // most recently used last
     reads.set(dir, hit);
     return hit.read;
@@ -631,7 +633,7 @@ async function readServerCached(fs: FileSystem, name: string, dir: string, entry
   const read = await readServer(fs, name, dir, entry, apiPrefix);
   reads.delete(dir);
   if (read.timedOut) return read; // cut by the time budget: depends on the load, never reused
-  reads.set(dir, { key, stamp: await filesStamp(fs, read.files), read });
+  reads.set(dir, { key, stamp: await pathsStamp(fs, pluginReadPaths(read.files)), read });
   while (reads.size > SERVER_READS_MAX) reads.delete(reads.keys().next().value!);
   return read;
 }
@@ -686,18 +688,6 @@ async function readServer(fs: FileSystem, name: string, dir: string, entry: stri
     rewrites,
     ...(pev.exhausted ? { timedOut: true } : {}),
   };
-}
-
-/** The mtime of every file read and of the folders holding them (a new file in a folder can change resolution). */
-async function filesStamp(fs: FileSystem, files: string[]): Promise<string> {
-  const paths = [...new Set([...files, ...files.map((f) => dirname(f))])].sort();
-  const parts = await Promise.all(
-    paths.map(async (path) => {
-      const st = await fs.stat(path);
-      return st ? `${st.type}:${st.mtime ?? 'x'}` : '-';
-    }),
-  );
-  return parts.join('|');
 }
 
 /**

@@ -528,7 +528,7 @@ export class StaticEvaluator {
   private readonly refIndex = new Map<ts.SourceFile, Map<string, ts.Identifier[]>>();
   private readonly escapeCache = new Map<ts.Node, string | null>();
   private readonly callRootedCache = new Map<ts.SourceFile, boolean>();
-  private readonly usesThisCache = new Map<ts.Node, boolean>();
+  private readonly receiverCache = new Map<ts.Node, boolean>();
   private readonly stateReturnCache = new Map<ts.Node, Promise<boolean>>();
   private readonly stateReturnFreshCache = new Map<ts.Node, Promise<boolean>>();
   private readonly stateRunning = new Set<ts.Node>();
@@ -2153,7 +2153,7 @@ export class StaticEvaluator {
 
   /** Can calling this function as a method change its receiver (through its own `this`)? */
   private receiverMayChange(fn: ts.Node): boolean {
-    const hit = this.usesThisCache.get(fn);
+    const hit = this.receiverCache.get(fn);
     if (hit !== undefined) return hit;
     let found = false;
     const walk = (n: ts.Node): void => {
@@ -2167,7 +2167,7 @@ export class StaticEvaluator {
       ts.forEachChild(n, walk);
     };
     ts.forEachChild(fn, walk);
-    this.usesThisCache.set(fn, found);
+    this.receiverCache.set(fn, found);
     return found;
   }
 
@@ -2591,19 +2591,6 @@ export class StaticEvaluator {
       return false;
     }
     return true;
-  }
-
-  /** Does a function read `arguments` (its own: nested non-arrow functions aside)? */
-  private mentionsArguments(fn: ts.Node): boolean {
-    let found = false;
-    const walk = (n: ts.Node): void => {
-      if (found) return;
-      if (ts.isIdentifier(n) && n.text === 'arguments') found = true;
-      if ((isFunctionLike(n) && !ts.isArrowFunction(n)) || ts.isClassLike(n)) return;
-      ts.forEachChild(n, walk);
-    };
-    ts.forEachChild(fn, walk);
-    return found;
   }
 
   /** Follow every reference of the binding(s) a pattern declares (an alias of a module-derived value). */
