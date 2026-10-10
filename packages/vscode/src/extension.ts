@@ -8,6 +8,7 @@ import { registerHoverProvider } from './providers/hover';
 import { registerReferenceProvider } from './providers/references';
 import { type CodeLenses, registerCodeLensProvider } from './providers/codeLens';
 import { registerRenameProvider } from './providers/rename';
+import { registerRoutesView, type RoutesView } from './views/routes';
 import { createLicenseManager, type LicenseManager } from './license';
 
 function workspaceFolderPaths(): string[] {
@@ -81,10 +82,14 @@ function activateImpl(context: vscode.ExtensionContext): void {
   registerRenameProvider(context, engine, fs, license.isLicensed);
   const codeLenses = registerCodeLensProvider(context, engine);
   // The reference index builds in the background → refresh lenses when it lands.
-  engine.onReferencesChanged(() => codeLenses.refresh());
+  const routesView = registerRoutesView(context, engine);
+  engine.onReferencesChanged(() => {
+    codeLenses.refresh();
+    routesView.refresh();
+  });
   const diagnostics = registerDiagnostics(context, engine);
   registerCompletionProvider(context, engine);
-  registerFileWatcher(context, engine, status, diagnostics, codeLenses);
+  registerFileWatcher(context, engine, status, diagnostics, codeLenses, routesView);
 
   registerMcpServer(context, license);
 
@@ -110,6 +115,7 @@ function activateImpl(context: vscode.ExtensionContext): void {
       updateStatus(engine, status);
       diagnostics.revalidateAll(); // open files were indexed-empty during init
       codeLenses.refresh();
+      routesView.refresh();
     } catch (err) {
       output.appendLine(`[init] FAILED: ${String(err)}`);
       output.show(true);
@@ -132,6 +138,7 @@ function activateImpl(context: vscode.ExtensionContext): void {
         updateStatus(engine, status);
         diagnostics.revalidateAll();
         codeLenses.refresh();
+        routesView.refresh();
       } catch (err) {
         output.appendLine(`[exclude] rescan FAILED: ${String(err)}`);
       }
@@ -167,6 +174,7 @@ function registerFileWatcher(
   status: vscode.StatusBarItem,
   diagnostics: Diagnostics,
   codeLenses: CodeLenses,
+  routesView: RoutesView,
 ): void {
   const watcher = vscode.workspace.createFileSystemWatcher('**/*.{ts,tsx,js,jsx,mjs,cjs,json}');
   const changed = new Set<string>();
@@ -184,6 +192,7 @@ function registerFileWatcher(
         updateStatus(engine, status);
         diagnostics.revalidateAll(); // the index changed → refresh open files
         codeLenses.refresh();
+        routesView.refresh();
       });
     }
   };

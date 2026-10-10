@@ -247,6 +247,27 @@ suite('Strapi DevKit — integration (Extension Host)', () => {
       `expected an edit in the method definition file; got: ${touched.join(', ')}`,
     );
   });
+
+  test('routes view: commands are registered and jump to the declaration / the handler', async () => {
+    const cmds = await vscode.commands.getCommands(true);
+    for (const c of ['strapiDevkit.routes.refresh', 'strapiDevkit.routes.open', 'strapiDevkit.routes.goToHandler']) {
+      assert.ok(cmds.includes(c), `command ${c} registered`);
+    }
+    const controller = path.join(ws, 'apps/cms-a/src/api/page/controllers/page.ts');
+    const text = (await vscode.workspace.openTextDocument(vscode.Uri.file(controller))).getText();
+    const offset = text.indexOf('async find');
+    await vscode.commands.executeCommand('strapiDevkit.routes.open', controller, offset);
+    assert.strictEqual(vscode.window.activeTextEditor?.selection.active.line, 3);
+
+    // A relative handler (`page.find`) is qualified by its owner, as Strapi does.
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    const root = path.join(ws, 'apps/cms-a').replace(/\\/g, '/');
+    const node = { kind: 'route', root: root.replace(/^([A-Z]):/, (_m: string, d: string) => `${d.toLowerCase()}:`), route: { method: 'GET', path: '/pages', handler: 'page.find', owner: 'api::page', source: 'router-file' } };
+    await vscode.commands.executeCommand('strapiDevkit.routes.goToHandler', node);
+    const active = vscode.window.activeTextEditor;
+    assert.ok(active && active.document.uri.fsPath.replace(/\\/g, '/').endsWith('controllers/page.ts'), 'opened the controller');
+    assert.strictEqual(active!.selection.active.line, 3);
+  });
 });
 
 /** The target file path of a definition result, whether Location or LocationLink. */

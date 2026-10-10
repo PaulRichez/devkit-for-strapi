@@ -69,6 +69,30 @@
       {
         "command": "strapiDevkit.clearLicenseKey",
         "title": "DevKit for Strapi: Clear License Key"
+      },
+      {
+        "command": "strapiDevkit.routes.refresh",
+        "title": "Refresh Routes",
+        "category": "DevKit for Strapi",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "strapiDevkit.routes.showAdmin",
+        "title": "Show Admin Routes",
+        "category": "DevKit for Strapi",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "strapiDevkit.routes.hideAdmin",
+        "title": "Hide Admin Routes",
+        "category": "DevKit for Strapi",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "strapiDevkit.routes.goToHandler",
+        "title": "Go to Handler",
+        "category": "DevKit for Strapi",
+        "icon": "$(symbol-method)"
       }
     ],
     "configuration": {
@@ -117,6 +141,61 @@
           "description": "Glob patterns of paths to exclude from Strapi project discovery (e.g. 'examples', '**/fixtures/**'). A discovered project whose path matches any pattern is ignored."
         }
       }
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "strapiDevkit.routes",
+          "name": "Strapi Routes",
+          "contextualTitle": "DevKit for Strapi"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "strapiDevkit.routes",
+        "contents": "No Strapi routes found yet. DevKit for Strapi lists them as soon as a Strapi project is detected in the workspace.\n[Rescan Workspace](command:strapiDevkit.rescan)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "strapiDevkit.routes.refresh",
+          "when": "view == strapiDevkit.routes",
+          "group": "navigation@2"
+        },
+        {
+          "command": "strapiDevkit.routes.showAdmin",
+          "when": "view == strapiDevkit.routes && !strapiDevkit.routesShowAdmin",
+          "group": "navigation@1"
+        },
+        {
+          "command": "strapiDevkit.routes.hideAdmin",
+          "when": "view == strapiDevkit.routes && strapiDevkit.routesShowAdmin",
+          "group": "navigation@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "strapiDevkit.routes.goToHandler",
+          "when": "view == strapiDevkit.routes && viewItem == strapiRoute.withHandler",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "strapiDevkit.routes.goToHandler",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.routes.showAdmin",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.routes.hideAdmin",
+          "when": "false"
+        }
+      ]
     }
   },
   "scripts": {
