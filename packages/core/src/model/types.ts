@@ -45,6 +45,14 @@ export interface ContentType {
    * own — a partial view of the runtime schema, honestly flagged.
    */
   extension?: boolean;
+  /**
+   * True when read from an **installed** plugin in `node_modules` (not the
+   * user's code): never a refactor target, never "unused", hidden from the model
+   * outline. Its locations point into `node_modules`.
+   */
+  installed?: boolean;
+  /** True when the schema's attributes could not be read exhaustively (the UID itself is certain). */
+  partialAttributes?: boolean;
 }
 
 export interface ComponentDef {
@@ -66,6 +74,12 @@ export interface ControllerAction {
   offset: number;
   /** The method header as written (e.g. `async notify(message: string)`), if any. */
   signature?: string;
+  /**
+   * File holding the method when it is not the artifact's own file (an installed
+   * plugin's compiled object can spread methods from another module). `offset`
+   * is relative to this file when set.
+   */
+  filePath?: string;
 }
 
 export interface CodeArtifact {
@@ -84,6 +98,8 @@ export interface CodeArtifact {
   hasSpread?: boolean;
   /** Char offset of the definition (factory call / export), for UI anchoring. */
   defOffset?: number;
+  /** True when read from an installed plugin in `node_modules` (see {@link ContentType.installed}). */
+  installed?: boolean;
 }
 
 export interface StrapiIndex {
