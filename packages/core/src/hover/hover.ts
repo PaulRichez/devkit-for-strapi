@@ -113,7 +113,7 @@ export function describeHover(
       md = idx.pluginNames.has(ctx.text)
         ? `${header('🔌', 'Local plugin', ctx.text)}`
         : inst
-          ? `${header('🔌', 'Installed plugin', ctx.text)}\n\n_${inst.packageName}${inst.version ? `@${inst.version}` : ''}_`
+          ? `${header('🔌', 'Installed plugin', ctx.text)}\n\n\`${`${inst.packageName}${inst.version ? `@${inst.version}` : ''}`.replace(/`/g, "'")}\``
           : `🔌 **Plugin** · \`${ctx.text}\``;
       break;
     }

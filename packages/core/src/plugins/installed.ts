@@ -19,6 +19,8 @@
  * Only complete plugins may make DevKit report an unknown reference.
  */
 
+import ts from 'typescript';
+import { scriptKindFor } from '../analyze/parse';
 import { type FileSystem, FileType } from '../fs/FileSystem';
 import { dirname, join, normalize } from '../fs/paths';
 import { parseMajor } from '../workspace/version';
@@ -50,6 +52,8 @@ export type PluginOrigin = 'internal' | 'dependency';
 
 export interface InstalledPlugin {
   name: string;
+  /** The server entry file read (its mtime is part of the freshness fingerprint). */
+  entry?: string;
   packageName: string;
   version?: string;
   dir: string;
@@ -99,6 +103,10 @@ const INTERNAL_FALLBACK: Record<number, string[]> = {
     '@strapi/review-workflows',
   ],
 };
+
+/** Wall-clock budget for reading one plugin, and for all plugins of a project. */
+const PLUGIN_BUDGET_MS = 3_000;
+const TOTAL_BUDGET_MS = 20_000;
 
 const ARTIFACT_COLLECTIONS: Array<{ key: string; kind: ArtifactKind }> = [
   { key: 'services', kind: 'service' },
@@ -153,16 +161,104 @@ async function internalPluginSpecs(fs: FileSystem, strapiDir: string, major: num
   return INTERNAL_FALLBACK[major >= 5 ? 5 : 4] ?? [];
 }
 
-/** Resolve `exports['./strapi-server']` with the `require` condition (like `resolve.exports`). */
+/**
+ * Resolve `exports['./strapi-server']` with the `require` condition, like
+ * `resolve.exports`: the FIRST key, in object order, among the conditions a
+ * `require` from Node matches (`require`, `node`, `default`).
+ */
 function strapiServerExport(pkg: Record<string, unknown>): string | undefined {
   const exp = asRecord(pkg.exports);
   if (!exp) return undefined;
   let target: unknown = exp['./strapi-server'];
   for (let i = 0; i < 4 && target && typeof target === 'object' && !Array.isArray(target); i++) {
     const t = target as Record<string, unknown>;
-    target = t.require ?? t.node ?? t.default;
+    const key = Object.keys(t).find((k) => k === 'require' || k === 'node' || k === 'default');
+    target = key ? t[key] : undefined;
   }
   return typeof target === 'string' ? target : undefined;
+}
+
+/** Plugin collections a write can extend (`strapi.plugin('x').controllers.y = …`). */
+const COLLECTION_KEYS = new Set(['controllers', 'services', 'routes', 'policies', 'middlewares', 'contentTypes', 'content-types']);
+const REGISTRIES = new Set(['content-types', 'controllers', 'services', 'policies', 'middlewares']);
+const WRITE_METHODS = new Set(['push', 'unshift', 'splice', 'set', 'add', 'extend', 'assign', 'merge', 'defineProperty']);
+
+/**
+ * Plugins a source file rewrites at runtime — `strapi.plugin('x').<collection>…`
+ * written to, or `strapi.get('<registry>').add('plugin::x…', …)` — so their static
+ * reading can't be exhaustive. `'*'` when the target plugin isn't literal.
+ */
+export function pluginWriteTargets(sf: ts.SourceFile): Set<string> {
+  const out = new Set<string>();
+  /** The plugin name a target chain writes into, if it goes through `.plugin('x').<collection>`. */
+  const targetOf = (e: ts.Expression): string | undefined => {
+    let cur: ts.Expression = e;
+    let afterCollection = false;
+    for (let i = 0; i < 32; i++) {
+      while (ts.isParenthesizedExpression(cur) || ts.isNonNullExpression(cur) || ts.isAsExpression(cur)) cur = cur.expression;
+      if (ts.isPropertyAccessExpression(cur) || ts.isElementAccessExpression(cur)) {
+        const key = ts.isPropertyAccessExpression(cur)
+          ? cur.name.text
+          : ts.isStringLiteralLike(cur.argumentExpression)
+            ? cur.argumentExpression.text
+            : undefined;
+        const base = cur.expression;
+        // `.plugins.x` / `.plugins['x']`
+        if (ts.isPropertyAccessExpression(base) && base.name.text === 'plugins' && afterCollection) return key ?? '*';
+        if (key !== undefined && COLLECTION_KEYS.has(key)) afterCollection = true;
+        cur = base;
+        continue;
+      }
+      if (ts.isCallExpression(cur)) {
+        const c = cur.expression;
+        if (afterCollection && ts.isPropertyAccessExpression(c) && c.name.text === 'plugin') {
+          const a0 = cur.arguments[0];
+          return a0 && ts.isStringLiteralLike(a0) ? a0.text : '*';
+        }
+        cur = c;
+        continue;
+      }
+      return undefined;
+    }
+    return undefined;
+  };
+  const walk = (n: ts.Node): void => {
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+      const t = targetOf(n.left);
+      if (t) out.add(t);
+    } else if (ts.isDeleteExpression(n)) {
+      const t = targetOf(n.expression);
+      if (t) out.add(t);
+    } else if (ts.isCallExpression(n)) {
+      const c = n.expression;
+      if (ts.isPropertyAccessExpression(c) && WRITE_METHODS.has(c.name.text)) {
+        // x.push(…) on a collection, or Object.assign(<collection>, …)
+        const t = targetOf(c.expression) ?? (n.arguments[0] ? targetOf(n.arguments[0]) : undefined);
+        if (t) out.add(t);
+        // strapi.get('<registry>').add('plugin::x.y', …)
+        const reg = c.expression;
+        if (
+          (c.name.text === 'add' || c.name.text === 'set' || c.name.text === 'extend') &&
+          ts.isCallExpression(reg) &&
+          ts.isPropertyAccessExpression(reg.expression) &&
+          reg.expression.name.text === 'get' &&
+          reg.arguments[0] &&
+          ts.isStringLiteralLike(reg.arguments[0]) &&
+          REGISTRIES.has(reg.arguments[0].text)
+        ) {
+          const a0 = n.arguments[0];
+          // The UID's literal head decides: `api::${x}` (i18n v4 extending API controllers) is not a plugin.
+          const head = a0 && ts.isStringLiteralLike(a0) ? a0.text : a0 && ts.isTemplateExpression(a0) ? a0.head.text : undefined;
+          const m = head !== undefined ? /^plugin::([^.$]+)\./.exec(head) : null;
+          if (m) out.add(m[1]!);
+          else if (head === undefined || head.startsWith('plugin::') || !head.includes('::')) out.add('*');
+        }
+      }
+    }
+    ts.forEachChild(n, walk);
+  };
+  walk(sf);
+  return out;
 }
 
 function qualifyHandler(plugin: string, handler: string): string {
@@ -198,7 +294,11 @@ class PluginReader {
     }
     let v = await this.ev.getProp(server, key);
     if (isCallable(v)) v = await this.ev.call(v, [UNKNOWN('{ strapi }')]);
-    if (v.k === 'nil') return undefined;
+    if (v.k === 'nil') {
+      // The key is there but holds nothing we could follow (often a value only known at runtime).
+      this.gap(`${key}: present but empty`);
+      return undefined;
+    }
     if (v.k !== 'obj') {
       this.gap(`${key}: ${v.k === 'unknown' ? v.why : v.k}`);
       return undefined;
@@ -225,6 +325,9 @@ class PluginReader {
       return;
     }
     if (server.open) this.gap('server object not exhaustive');
+    // Load register/bootstrap so the files they live in are scanned for runtime
+    // rewrites of plugin collections (see pluginWriteTargets).
+    for (const hook of ['register', 'bootstrap']) if (server.props.has(hook)) await this.ev.getProp(server, hook);
     await this.readContentTypes(server);
     for (const { key, kind } of ARTIFACT_COLLECTIONS) await this.readArtifacts(server, key, kind);
     await this.readRoutes(server);
@@ -487,8 +590,9 @@ export async function readPluginRoutes(
   pluginName: string,
   entryFile: string,
   apiPrefix: string | undefined,
+  pluginDir: string = dirname(entryFile),
 ): Promise<{ routes: PluginRoute[]; complete: boolean }> {
-  const ev = new StaticEvaluator(fs, {}, strapiExternals);
+  const ev = new StaticEvaluator(fs, { roots: [pluginDir], timeBudgetMs: PLUGIN_BUDGET_MS }, strapiExternals);
   const plugin: InstalledPlugin = {
     name: pluginName,
     packageName: pluginName,
@@ -528,21 +632,20 @@ export async function readApiPrefix(fs: FileSystem, root: string, ev: StaticEval
  * `@strapi/core/dist/middlewares` (v5) or `@strapi/strapi/dist|lib/middlewares` (v4),
  * the registry Strapi registers them from.
  */
-async function readFrameworkMiddlewares(
-  fs: FileSystem,
-  ev: StaticEvaluator,
-  strapiDir: string,
-  major: number,
-): Promise<FrameworkMiddlewares | undefined> {
-  const candidates: string[] = [];
+async function readFrameworkMiddlewares(fs: FileSystem, strapiDir: string, major: number): Promise<FrameworkMiddlewares | undefined> {
+  const candidates: Array<{ file: string; pkg: string }> = [];
   if (major >= 5) {
     const coreDir = (await findPackageDir(fs, strapiDir, '@strapi/core')) ?? (await findPackageDir(fs, dirname(strapiDir), '@strapi/core'));
-    if (coreDir) candidates.push(join(coreDir, 'dist', 'middlewares', 'index.js'));
+    if (coreDir) candidates.push({ file: join(coreDir, 'dist', 'middlewares', 'index.js'), pkg: coreDir });
   } else {
-    candidates.push(join(strapiDir, 'dist', 'middlewares', 'index.js'), join(strapiDir, 'lib', 'middlewares', 'index.js'));
+    candidates.push(
+      { file: join(strapiDir, 'dist', 'middlewares', 'index.js'), pkg: strapiDir },
+      { file: join(strapiDir, 'lib', 'middlewares', 'index.js'), pkg: strapiDir },
+    );
   }
-  for (const file of candidates) {
+  for (const { file, pkg } of candidates) {
     if ((await fs.stat(file))?.type !== FileType.File) continue;
+    const ev = new StaticEvaluator(fs, { roots: [pkg], timeBudgetMs: PLUGIN_BUDGET_MS });
     const mod = await ev.moduleExports(file);
     let v = await ev.getProp(mod, 'middlewares');
     if (v.k !== 'obj' && mod.k === 'obj' && !mod.props.has('middlewares')) v = mod;
@@ -554,7 +657,7 @@ async function readFrameworkMiddlewares(
       const loc = val.k === 'fn' ? val.loc : kl;
       entries.push({ name, filePath: loc?.file ?? file, offset: loc?.pos ?? 0 });
     }
-    return { complete: !v.open, entries };
+    return { complete: !v.open && !ev.exhausted, entries };
   }
   return undefined;
 }
@@ -579,7 +682,8 @@ export async function readInstalledPlugins(fs: FileSystem, root: string): Promis
   const major = strapiVersion ? parseMajor(strapiVersion) : undefined;
   if (!strapiVersion || !major) return undefined;
 
-  const ev = new StaticEvaluator(fs, {}, strapiExternals);
+  const startedAt = Date.now();
+  const ev = new StaticEvaluator(fs, { roots: [root], timeBudgetMs: PLUGIN_BUDGET_MS }, strapiExternals);
   const config = await readPluginsConfig(fs, root, ev);
   const apiPrefix = await readApiPrefix(fs, root, ev);
   const projectPkg = await readJson(fs, join(root, 'package.json'));
@@ -599,6 +703,20 @@ export async function readInstalledPlugins(fs: FileSystem, root: string): Promis
   }
 
   const plugins: InstalledPlugin[] = [];
+  /** Plugins some code rewrites at runtime (another plugin's server, or the project's src/index). */
+  const rewritten = new Set<string>();
+  for (const ext of ['ts', 'js', 'mjs', 'cjs']) {
+    const file = join(root, 'src', `index.${ext}`);
+    try {
+      const text = await fs.readFile(file);
+      if (text.length <= 2_000_000) {
+        const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKindFor(file));
+        for (const t of pluginWriteTargets(sf)) rewritten.add(t);
+      }
+    } catch {
+      /* no such file */
+    }
+  }
   for (const c of candidates) {
     const strapiInfo = asRecord(c.pkg.strapi) ?? {};
     const name = asString(strapiInfo.name);
@@ -631,9 +749,27 @@ export async function readInstalledPlugins(fs: FileSystem, root: string): Promis
 
     const exported = major >= 5 ? strapiServerExport(c.pkg) : undefined;
     const entry = resolveDots(join(c.dir, exported ?? './strapi-server.js'));
+    plugin.entry = entry;
     if ((await fs.stat(entry))?.type === FileType.File) {
       plugin.hasServer = true;
-      await new PluginReader(ev, plugin, apiPrefix).read(entry);
+      if (Date.now() - startedAt > TOTAL_BUDGET_MS) {
+        plugin.complete = false;
+        plugin.gaps.push('not read (overall time budget)');
+      } else {
+        // One evaluator per plugin: confined to the package, with its own time budget.
+        const pev = new StaticEvaluator(fs, { roots: [c.dir], timeBudgetMs: PLUGIN_BUDGET_MS }, strapiExternals);
+        await new PluginReader(pev, plugin, apiPrefix).read(entry);
+        if (pev.exhausted) {
+          plugin.complete = false;
+          plugin.gaps.push('read budget exceeded');
+        }
+        const crossWrite = pev.writesIntoModules();
+        if (crossWrite) {
+          plugin.complete = false;
+          plugin.gaps.push(`a module writes into another module's exports (${crossWrite})`);
+        }
+        for (const sf of pev.parsedFiles()) for (const t of pluginWriteTargets(sf)) rewritten.add(t);
+      }
     }
     // `src/extensions/<plugin>/strapi-server.*` can rewrite the plugin at boot.
     for (const ext of ['.js', '.ts', '.mjs', '.cjs']) {
@@ -645,7 +781,13 @@ export async function readInstalledPlugins(fs: FileSystem, root: string): Promis
     }
     plugins.push(plugin);
   }
-  const frameworkMiddlewares = await readFrameworkMiddlewares(fs, ev, strapiDir, major);
+  for (const p of plugins) {
+    if (rewritten.has(p.name) || rewritten.has('*')) {
+      p.complete = false;
+      p.gaps.push('rewritten at runtime by other code (strapi.plugin(...) write)');
+    }
+  }
+  const frameworkMiddlewares = await readFrameworkMiddlewares(fs, strapiDir, major);
   return { strapiDir, strapiVersion, major, plugins, config, apiPrefix, ...(frameworkMiddlewares ? { frameworkMiddlewares } : {}) };
 }
 

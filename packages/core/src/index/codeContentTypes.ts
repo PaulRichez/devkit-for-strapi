@@ -59,7 +59,9 @@ export async function indexCodeContentTypes(fs: FileSystem, ctDir: string, plugi
   const markPartial = (): void => {
     (index.partialContentTypePlugins ??= new Set()).add(pluginName);
   };
-  const ev = new StaticEvaluator(fs, {}, strapiExternals);
+  // Confined to the plugin's own folder (`…/src/plugins/<name>`).
+  const m = /^(.*\/plugins\/[^/]+)\//.exec(ctDir + '/');
+  const ev = new StaticEvaluator(fs, { roots: [m ? m[1]! : ctDir], timeBudgetMs: 3_000 }, strapiExternals);
   let v = await ev.moduleExports(file);
   if (v.k === 'obj' && v.esModule && v.props.has('default')) v = await ev.getProp(v, 'default');
   if (isCallable(v)) v = await ev.call(v, [UNKNOWN('{ strapi }')]);
@@ -68,10 +70,12 @@ export async function indexCodeContentTypes(fs: FileSystem, ctDir: string, plugi
     return;
   }
   if (v.open) markPartial();
+  if (ev.writesIntoModules()) markPartial();
   for (const [ctName, thunk] of v.props) {
     const uid = `${prefix}${ctName}`;
     if (index.contentTypes.has(uid)) continue; // a `<ct>/schema.json` folder — already indexed
     const ct = await contentTypeFromDefinition(ev, pluginName, ctName, await thunk(), v.keyLocs.get(ctName), file);
     (index.codeContentTypes ??= new Map()).set(uid, ct);
   }
+  if (ev.exhausted) markPartial();
 }

@@ -317,7 +317,7 @@ export function collectCoreRouterHandlers(filePath: string, text: string, projec
  */
 export async function listRoutes(fs: FileSystem, project: StrapiProject, opts: ListRoutesOptions = {}): Promise<RouteInfo[]> {
   const out: RouteInfo[] = [];
-  const prefix = project.installed ? project.installed.apiPrefix : await readApiPrefix(fs, project.root, new StaticEvaluator(fs));
+  const prefix = project.installed ? project.installed.apiPrefix : await readApiPrefix(fs, project.root, new StaticEvaluator(fs, { roots: [project.root] }));
   const apiDir = join(project.srcDir, 'api');
   for (const api of await entries(fs, apiDir)) {
     if (api.type !== FileType.Directory) continue;
@@ -360,7 +360,7 @@ export async function listRoutes(fs: FileSystem, project: StrapiProject, opts: L
       const entry = await localPluginEntry(fs, project.srcDir, name);
       if (!entry) continue;
       try {
-        const { routes } = await readPluginRoutes(fs, name, entry, prefix);
+        const { routes } = await readPluginRoutes(fs, name, entry, prefix, join(project.srcDir, 'plugins', name));
         out.push(...routes.map((r) => fromPluginRoute(r, 'local-plugin')));
       } catch {
         /* unreadable plugin — skip */

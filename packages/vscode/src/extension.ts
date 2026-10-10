@@ -86,6 +86,7 @@ function activateImpl(context: vscode.ExtensionContext): void {
   engine.onReferencesChanged(() => {
     codeLenses.refresh();
     routesView.refresh();
+    diagnostics.revalidateAll(); // also fired when installed plugins were re-read
   });
   const diagnostics = registerDiagnostics(context, engine);
   registerCompletionProvider(context, engine);

@@ -240,7 +240,13 @@ export type PluginLayout = 'root' | 'server' | 'server/src';
  */
 export async function pluginLayoutOf(fs: FileSystem, srcDir: string, pluginName: string): Promise<PluginLayout> {
   const base = join(srcDir, 'plugins', pluginName);
-  if (await fs.exists(join(base, 'server', 'src'))) return 'server/src';
+  // The v5 SDK keeps sources in server/src and has no server/index.*; a v4 plugin's
+  // server/index.* wins even if some unrelated server/src folder exists.
+  if (await fs.exists(join(base, 'server', 'src'))) {
+    let v4Entry = false;
+    for (const n of ['index.js', 'index.ts', 'index.mjs', 'index.cjs']) if (await fs.exists(join(base, 'server', n))) v4Entry = true;
+    if (!v4Entry) return 'server/src';
+  }
   if (await fs.exists(join(base, 'server'))) return 'server';
   return 'root';
 }

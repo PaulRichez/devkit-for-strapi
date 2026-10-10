@@ -306,6 +306,16 @@ exports.errors = errors;`,
     expect(diags).toEqual([]);
   });
 
+  it('an extension entry point added to an existing src/extensions folder is picked up without a watcher', async () => {
+    const fs = v5App({ [`${ROOT}/src/extensions/users-permissions/content-types/user/schema.json`]: JSON.stringify({ kind: 'collectionType', info: { singularName: 'user' }, attributes: {} }) });
+    const { engine, project } = await engineFor(fs);
+    expect(validateRef(project, 'plugin::users-permissions.jwtt').status).toBe('unknown');
+    fs.writeFile(`${ROOT}/src/extensions/users-permissions/strapi-server.js`, `module.exports = (plugin) => plugin;`);
+    (engine as unknown as { lastInstalledCheck: number }).lastInstalledCheck = 0;
+    await engine.refreshInstalledIfStale();
+    expect(validateRef(project, 'plugin::users-permissions.jwtt').status).toBe('external');
+  });
+
   it('refuses any edit that would write into node_modules', () => {
     const outside = pathsOutsideRoots([ROOT], {
       textEdits: [{ filePath: `${ROOT}/node_modules/@strapi/upload/dist/server/index.js`, start: 0, end: 0, newText: 'x' }],

@@ -3,24 +3,33 @@
  * plugin (or a project config file). It answers questions like "what are the keys
  * of the object this plugin registers as `controllers`?" by following the code the
  * way Node would — `require`/`import`, `module.exports`, bundler wrappers
- * (rollup's `x.__require()`, `getDefaultExportFromCjs`, tsc's `__importDefault`),
+ * (rollup's `x.__require()`, `getDefaultExportFromCjs`, tsc/Babel helpers),
  * identifiers, property access and simple function calls — **without executing
  * anything**.
  *
  * The contract that makes it safe to build diagnostics on: every step it cannot
  * prove yields `unknown` (or marks an object `open`: "it may have keys I could not
  * see"). Callers only treat a result as exhaustive when nothing on the path was
- * unknown/open. *Garantir, ne pas deviner.*
+ * unknown/open. *Garantir, ne pas deviner.* In particular:
+ *  - a cycle (module, value or call) answers `unknown`, never waits on itself;
+ *  - a function with several different `return`s is `unknown`;
+ *  - a variable written in any way not modelled exactly (deep or compound
+ *    writes, a reassignment over an initializer, being passed to an unknown
+ *    function, a redeclaration) is `unknown`;
+ *  - a module whose `exports` are touched in any way not modelled is `open`;
+ *  - work is bounded (depth, steps, files, bytes, wall-clock) and confined to
+ *    the given roots.
  *
  * Evaluation is lazy: object properties and array items are thunks, forced only
  * when a caller reads them, so reading the key list of an aggregator never
- * evaluates the (possibly large) values behind it.
+ * evaluates the (possibly large) values behind it. Scope and write tables are
+ * built once per file, so cost stays linear in the code actually followed.
  */
 
 import ts from 'typescript';
 import { MAX_PARSE_CHARS, scriptKindFor } from '../analyze/parse';
 import { type FileSystem, FileType } from '../fs/FileSystem';
-import { dirname, join, normalize } from '../fs/paths';
+import { dirname, isPathInside, join, normalize } from '../fs/paths';
 
 export interface Loc {
   file: string;
@@ -89,6 +98,7 @@ export const UNKNOWN = (why: string): Value => ({ k: 'unknown', why });
 const NIL: Value = { k: 'nil' };
 
 const RESOLVE_EXT = ['', '.js', '.cjs', '.mjs', '.ts', '.cts', '.mts', '.json'];
+const INDEX_FILES = ['index.js', 'index.cjs', 'index.mjs', 'index.ts', 'index.json'];
 
 /** Resolve `.` / `..` segments (the core's `normalize` keeps them) — one canonical key per file. */
 export function resolveDots(p: string): string {
@@ -104,18 +114,29 @@ export function resolveDots(p: string): string {
   }
   return out.join('/') || '/';
 }
-const INDEX_FILES = ['index.js', 'index.cjs', 'index.mjs', 'index.ts', 'index.json'];
 
 export interface EvaluatorLimits {
   /** Max nested evaluation depth (guards pathological recursion). */
   maxDepth: number;
-  /** Max evaluation steps for the evaluator's lifetime (guards blow-ups). */
+  /** Max evaluation steps (AST visits included) for the evaluator's lifetime. */
   maxSteps: number;
   /** Max distinct files parsed. */
   maxFiles: number;
+  /** Max total characters parsed. */
+  maxBytes: number;
+  /** Wall-clock budget (ms) from construction or the last {@link StaticEvaluator.resetBudget}. */
+  timeBudgetMs: number;
+  /** When set, a relative `require`/`import` must resolve inside one of these directories. */
+  roots?: string[];
 }
 
-const DEFAULT_LIMITS: EvaluatorLimits = { maxDepth: 60, maxSteps: 400_000, maxFiles: 1_500 };
+const DEFAULT_LIMITS: EvaluatorLimits = {
+  maxDepth: 60,
+  maxSteps: 2_000_000,
+  maxFiles: 1_500,
+  maxBytes: 40_000_000,
+  timeBudgetMs: 5_000,
+};
 
 /** Models of bare-specifier modules (e.g. `@strapi/utils` helpers), by specifier. */
 export type ExternalModules = (spec: string, ev: StaticEvaluator) => Value | undefined;
@@ -125,7 +146,9 @@ export function isCallable(v: Value): v is FnValue | NativeValue {
   return v.k === 'fn' || v.k === 'native';
 }
 
-function isFunctionLike(n: ts.Node): n is ts.FunctionLikeDeclaration {
+type FunctionLike = ts.FunctionLikeDeclaration;
+
+function isFunctionLike(n: ts.Node): n is FunctionLike {
   return (
     ts.isFunctionDeclaration(n) ||
     ts.isFunctionExpression(n) ||
@@ -147,46 +170,37 @@ function propName(name: ts.PropertyName): string | undefined {
   return undefined;
 }
 
-/** `module.exports` */
+function skipParens(e: ts.Expression): ts.Expression {
+  while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e) || ts.isSatisfiesExpression(e)) e = e.expression;
+  return e;
+}
+
+/** `module.exports` / `module['exports']` */
 function isModuleExports(n: ts.Expression): boolean {
-  return (
-    ts.isPropertyAccessExpression(n) &&
-    n.name.text === 'exports' &&
-    ts.isIdentifier(n.expression) &&
-    n.expression.text === 'module'
-  );
+  if (ts.isPropertyAccessExpression(n)) return n.name.text === 'exports' && ts.isIdentifier(n.expression) && n.expression.text === 'module';
+  if (ts.isElementAccessExpression(n)) {
+    const a = n.argumentExpression;
+    return ts.isStringLiteralLike(a) && a.text === 'exports' && ts.isIdentifier(n.expression) && n.expression.text === 'module';
+  }
+  return false;
 }
 
-/** `exports.X` / `module.exports.X` / `exports['X']` → X */
-function exportsMember(n: ts.Expression): string | undefined {
+/** `exports.X` / `exports['X']` (target `exports`) or `module.exports.X` (target `module`) → X */
+function exportsMember(n: ts.Expression): { name: string; target: 'exports' | 'module' } | undefined {
+  let base: ts.Expression;
+  let name: string;
   if (ts.isPropertyAccessExpression(n)) {
-    const base = n.expression;
-    if ((ts.isIdentifier(base) && base.text === 'exports') || isModuleExports(base)) return n.name.text;
+    base = n.expression;
+    name = n.name.text;
+  } else if (ts.isElementAccessExpression(n) && ts.isStringLiteralLike(n.argumentExpression)) {
+    base = n.expression;
+    name = n.argumentExpression.text;
+  } else {
+    return undefined;
   }
-  if (ts.isElementAccessExpression(n) && ts.isStringLiteralLike(n.argumentExpression)) {
-    const base = n.expression;
-    if ((ts.isIdentifier(base) && base.text === 'exports') || isModuleExports(base)) return n.argumentExpression.text;
-  }
+  if (ts.isIdentifier(base) && base.text === 'exports') return { name, target: 'exports' };
+  if (isModuleExports(base)) return { name, target: 'module' };
   return undefined;
-}
-
-/** True if `n` mentions `exports` / `module.exports` anywhere (an export write we may not understand). */
-function touchesExports(n: ts.Node): boolean {
-  let hit = false;
-  const walk = (x: ts.Node): void => {
-    if (hit) return;
-    if (ts.isIdentifier(x) && x.text === 'exports') {
-      const parent = x.parent;
-      // `foo.exports` (not `module.exports`) is someone else's property.
-      if (!(ts.isPropertyAccessExpression(parent) && parent.name === x && !(ts.isIdentifier(parent.expression) && parent.expression.text === 'module'))) {
-        hit = true;
-        return;
-      }
-    }
-    ts.forEachChild(x, walk);
-  };
-  walk(n);
-  return hit;
 }
 
 function hasExportModifier(n: ts.Node): boolean {
@@ -195,16 +209,6 @@ function hasExportModifier(n: ts.Node): boolean {
 
 function hasDefaultModifier(n: ts.Node): boolean {
   return (ts.canHaveModifiers(n) && ts.getModifiers(n)?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword)) ?? false;
-}
-
-/** Visit `node`'s descendants without entering nested function-likes. */
-function forEachInScope(node: ts.Node, visit: (n: ts.Node) => void): void {
-  const walk = (n: ts.Node): void => {
-    visit(n);
-    if (n !== node && isFunctionLike(n)) return;
-    ts.forEachChild(n, walk);
-  };
-  ts.forEachChild(node, walk);
 }
 
 function bindingNames(name: ts.BindingName): string[] {
@@ -216,6 +220,48 @@ function bindingNames(name: ts.BindingName): string[] {
   }
   return out;
 }
+
+/** Visit `node`'s descendants without entering nested function-likes. */
+function forEachInScope(node: ts.Node, visit: (n: ts.Node) => void): void {
+  const walk = (n: ts.Node): void => {
+    visit(n);
+    if (isFunctionLike(n)) return;
+    ts.forEachChild(n, walk);
+  };
+  ts.forEachChild(node, walk);
+}
+
+/**
+ * True if `n` mentions `exports` / `module.exports` in a way that could write
+ * them (scope-aware: a function whose parameter or local is named `exports` /
+ * `module` — e.g. tsc's `__exportStar(m, exports)` helper — is skipped).
+ */
+function touchesExports(n: ts.Node, ignore?: ReadonlySet<ts.Node>): boolean {
+  let hit = false;
+  const shadows = (fn: FunctionLike): boolean =>
+    fn.parameters.some((p) => bindingNames(p.name).some((x) => x === 'exports' || x === 'module'));
+  const walk = (x: ts.Node): void => {
+    if (hit || ignore?.has(x)) return;
+    if (isFunctionLike(x) && shadows(x)) return;
+    if (ts.isIdentifier(x) && (x.text === 'exports' || x.text === 'module')) {
+      const parent = x.parent;
+      // `foo.exports` / `foo.module` (a property name) is someone else's.
+      const isPropName = parent && ts.isPropertyAccessExpression(parent) && parent.name === x;
+      const isKey = parent && (ts.isPropertyAssignment(parent) || ts.isMethodDeclaration(parent)) && parent.name === x;
+      if (!isPropName && !isKey && (x.text === 'exports' || (parent && (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent))))) {
+        hit = true;
+        return;
+      }
+    }
+    ts.forEachChild(x, walk);
+  };
+  walk(n);
+  return hit;
+}
+
+// ---------------------------------------------------------------------------
+// Declarations & writes (built once per scope container)
+// ---------------------------------------------------------------------------
 
 type BindingStep = { key: string | number; dflt?: ts.Expression };
 
@@ -240,54 +286,143 @@ function bindingPath(name: ts.BindingName, target: string): BindingStep[] | 'res
 }
 
 type Declaration =
-  | { kind: 'var'; decl: ts.VariableDeclaration; container: ts.Node }
+  | { kind: 'var'; decl: ts.VariableDeclaration; scopeNode: ts.Node; redeclared: boolean }
   | { kind: 'destructured'; decl: ts.VariableDeclaration; path: BindingStep[] }
   | { kind: 'fn'; decl: ts.FunctionDeclaration }
-  | { kind: 'param'; fn: ts.Node; index: number; destructured: boolean }
+  | { kind: 'param'; fn: FunctionLike; index: number; destructured: boolean }
   | { kind: 'import'; decl: ts.ImportDeclaration; imported: 'default' | 'namespace' | string }
   | { kind: 'opaque'; why: string };
 
-/** The truthiness of a value, when knowable. */
-function truthy(v: Value): boolean | undefined {
-  switch (v.k) {
-    case 'obj':
-    case 'arr':
-    case 'fn':
-    case 'native':
-      return true;
-    case 'nil':
-      return false;
-    case 'bool':
-      return v.v;
-    case 'num':
-      return v.v !== 0;
-    case 'str':
-      return v.v.length > 0;
-    default:
-      return undefined;
+function declarationFromVar(d: ts.VariableDeclaration, name: string, scopeNode: ts.Node, redeclared: boolean): Declaration {
+  if (ts.isIdentifier(d.name)) return { kind: 'var', decl: d, scopeNode, redeclared };
+  const path = bindingPath(d.name, name);
+  if (!path || path === 'rest') return { kind: 'opaque', why: 'rest/complex destructuring' };
+  return { kind: 'destructured', decl: d, path };
+}
+
+/** One write site found in a scope (keyed by the root identifier it writes through). */
+interface WriteSite {
+  root: ts.Identifier;
+  /** `assign`: `x = v`; `prop`: `x.k = v`; anything else is not modelled. */
+  kind: 'assign' | 'prop' | 'unmodelled' | 'arg';
+  key?: string;
+  rhs?: ts.Expression;
+  node: ts.Node;
+  /** For `arg`: the call expression the variable is passed to. */
+  call?: ts.CallExpression;
+}
+
+const SELF_MUTATORS = new Set(['push', 'unshift', 'splice', 'pop', 'shift', 'set', 'delete', 'add', 'clear', 'sort', 'reverse', 'fill', 'copyWithin']);
+const PURE_GLOBAL_CALLS = new Set([
+  'Object.freeze',
+  'Object.keys',
+  'Object.values',
+  'Object.entries',
+  'Object.isFrozen',
+  'Object.getOwnPropertyNames',
+  'JSON.stringify',
+  'Array.isArray',
+]);
+const INTEROP_NAME = /^_*(interop|importDefault|importStar|getDefaultExport|toESM|toCommonJS)/i;
+
+/** Root identifier of an access chain (`a.b[c].d` → `a`) and its depth. */
+function accessRoot(e: ts.Expression): { root: ts.Expression; depth: number } {
+  let depth = 0;
+  let cur = skipParens(e);
+  while (ts.isPropertyAccessExpression(cur) || ts.isElementAccessExpression(cur)) {
+    depth++;
+    cur = skipParens(cur.expression);
   }
+  return { root: cur, depth };
 }
 
-interface VariableWrites {
-  assigns: ts.Expression[];
-  propWrites: Array<{ key: string | undefined; rhs: ts.Expression; node: ts.Node }>;
-  mutated: boolean;
+function calleeText(e: ts.Expression): string | undefined {
+  if (ts.isIdentifier(e)) return e.text;
+  if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression)) return `${e.expression.text}.${e.name.text}`;
+  return undefined;
 }
 
-/** Functions that write into their first argument. */
-const MUTATORS = new Set(['assign', 'merge', 'mergeWith', 'set', 'setWith', 'defaults', 'defaultsDeep', 'extend', 'defineProperty', 'defineProperties', 'unset']);
-/** Methods that mutate their receiver. */
-const SELF_MUTATORS = new Set(['push', 'unshift', 'splice', 'set', 'delete', 'pop', 'shift']);
+function collectWrites(container: ts.Node, count: () => void): Map<string, WriteSite[]> {
+  const out = new Map<string, WriteSite[]>();
+  const add = (site: WriteSite): void => {
+    const arr = out.get(site.root.text);
+    if (arr) arr.push(site);
+    else out.set(site.root.text, [site]);
+  };
+  const addTarget = (target: ts.Expression, node: ts.Node, op: ts.SyntaxKind, rhs: ts.Expression | undefined): void => {
+    const t = skipParens(target);
+    if (ts.isIdentifier(t)) {
+      add({ root: t, kind: op === ts.SyntaxKind.EqualsToken && rhs ? 'assign' : 'unmodelled', ...(rhs ? { rhs } : {}), node });
+      return;
+    }
+    if (ts.isObjectLiteralExpression(t) || ts.isArrayLiteralExpression(t)) {
+      // destructuring assignment: every identifier inside is written in a way we don't model
+      const visit = (x: ts.Node): void => {
+        if (ts.isIdentifier(x)) add({ root: x, kind: 'unmodelled', node });
+        ts.forEachChild(x, visit);
+      };
+      visit(t);
+      return;
+    }
+    const { root, depth } = accessRoot(t);
+    if (!ts.isIdentifier(root)) return;
+    if (depth === 1 && op === ts.SyntaxKind.EqualsToken && rhs) {
+      let key: string | undefined;
+      if (ts.isPropertyAccessExpression(t)) key = t.name.text;
+      else if (ts.isElementAccessExpression(t) && ts.isStringLiteralLike(t.argumentExpression)) key = t.argumentExpression.text;
+      if (key !== undefined) {
+        add({ root, kind: 'prop', key, rhs, node: t });
+        return;
+      }
+    }
+    add({ root, kind: 'unmodelled', node });
+  };
+  const walk = (n: ts.Node): void => {
+    count();
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+      addTarget(n.left, n, n.operatorToken.kind, n.right);
+    } else if ((ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) && (n.operator === ts.SyntaxKind.PlusPlusToken || n.operator === ts.SyntaxKind.MinusMinusToken)) {
+      addTarget(n.operand, n, ts.SyntaxKind.PlusEqualsToken, undefined);
+    } else if (ts.isDeleteExpression(n)) {
+      addTarget(n.expression, n, ts.SyntaxKind.PlusEqualsToken, undefined);
+    } else if ((ts.isForOfStatement(n) || ts.isForInStatement(n)) && !ts.isVariableDeclarationList(n.initializer)) {
+      addTarget(n.initializer as ts.Expression, n, ts.SyntaxKind.PlusEqualsToken, undefined);
+    } else if (ts.isCallExpression(n)) {
+      const c = n.expression;
+      // x.push(…), x.a.set(…) — a mutating method on something rooted at x
+      if (ts.isPropertyAccessExpression(c) && SELF_MUTATORS.has(c.name.text)) {
+        const { root } = accessRoot(c.expression);
+        if (ts.isIdentifier(root)) add({ root, kind: 'unmodelled', node: n });
+      }
+      for (const a of n.arguments) {
+        const { root } = accessRoot(ts.isSpreadElement(a) ? a.expression : a);
+        if (ts.isIdentifier(root)) add({ root, kind: 'arg', node: n, call: n });
+      }
+    }
+    ts.forEachChild(n, walk);
+  };
+  ts.forEachChild(container, walk);
+  return out;
+}
 
 export class StaticEvaluator {
   private readonly sources = new Map<string, ts.SourceFile | null>();
   private readonly modules = new Map<string, Promise<Value>>();
-  private readonly writesCache = new Map<ts.VariableDeclaration, VariableWrites>();
-  private readonly moduleVarCache = new Map<ts.VariableDeclaration, Promise<Value>>();
+  private readonly computing = new Set<string>();
   private readonly inProgress = new Set<ts.Node>();
+  private readonly blockDecls = new Map<ts.Node, Map<string, ts.VariableDeclaration[] | Declaration>>();
+  private readonly varHoist = new Map<ts.Node, Map<string, ts.VariableDeclaration[]>>();
+  private readonly declMemo = new Map<ts.Node, Declaration | null>();
+  private readonly writeIndex = new Map<ts.Node, Map<string, WriteSite[]>>();
+  private readonly moduleVarCache = new Map<ts.VariableDeclaration, Promise<Value>>();
   private steps = 0;
+  private lastTimeCheck = 0;
   private depth = 0;
+  private bytes = 0;
+  private deadline: number;
+  private timedOut = false;
   private readonly limits: EvaluatorLimits;
+  private roots: string[] | undefined;
 
   constructor(
     private readonly fs: FileSystem,
@@ -295,12 +430,48 @@ export class StaticEvaluator {
     private readonly externals?: ExternalModules,
   ) {
     this.limits = { ...DEFAULT_LIMITS, ...limits };
+    this.roots = this.limits.roots?.map(resolveDots);
+    this.deadline = Date.now() + this.limits.timeBudgetMs;
   }
 
   /** Number of files parsed so far (diagnostics/tests). */
   get filesParsed(): number {
     return this.sources.size;
   }
+
+  /** Every file parsed so far (for post-read checks). */
+  parsedFiles(): ts.SourceFile[] {
+    return [...this.sources.values()].filter((s): s is ts.SourceFile => s !== null);
+  }
+
+  /** Start a fresh wall-clock budget (e.g. per plugin). */
+  resetBudget(ms = this.limits.timeBudgetMs): void {
+    this.deadline = Date.now() + ms;
+    this.timedOut = false;
+  }
+
+  /** True once the wall-clock budget ran out (results computed after that are `unknown`). */
+  get exhausted(): boolean {
+    return this.timedOut || this.steps > this.limits.maxSteps;
+  }
+
+  /** Restrict relative module resolution to these directories (`undefined` lifts it). */
+  setRoots(roots: string[] | undefined): void {
+    this.roots = roots?.map(resolveDots);
+  }
+
+  private overBudget(): string | undefined {
+    if (this.steps > this.limits.maxSteps) return 'step budget';
+    if (this.steps - this.lastTimeCheck >= 256) {
+      this.lastTimeCheck = this.steps;
+      if (Date.now() > this.deadline) this.timedOut = true;
+    }
+    return this.timedOut ? 'time budget' : undefined;
+  }
+
+  private count = (): void => {
+    this.steps++;
+  };
 
   // -------------------------------------------------------------------------
   // Files & modules
@@ -312,7 +483,8 @@ export class StaticEvaluator {
     let sf: ts.SourceFile | null = null;
     try {
       const text = await this.fs.readFile(file);
-      if (text.length <= MAX_PARSE_CHARS) {
+      if (text.length <= MAX_PARSE_CHARS && this.bytes + text.length <= this.limits.maxBytes) {
+        this.bytes += text.length;
         sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKindFor(file));
       }
     } catch {
@@ -322,11 +494,16 @@ export class StaticEvaluator {
     return sf;
   }
 
-  /** Resolve a relative module specifier from `fromFile` to an existing file. */
+  private inRoots(p: string): boolean {
+    return !this.roots || this.roots.some((r) => r === p || isPathInside(r, p));
+  }
+
+  /** Resolve a relative module specifier from `fromFile` to an existing file (inside the roots). */
   async resolveRelative(fromFile: string, spec: string): Promise<string | undefined> {
     const base = resolveDots(join(dirname(fromFile), spec));
+    if (!this.inRoots(base)) return undefined;
     for (const ext of RESOLVE_EXT) {
-      const p = normalize(base + ext);
+      const p = base + ext;
       const st = await this.fs.stat(p);
       if (st?.type === FileType.File) return p;
     }
@@ -350,11 +527,15 @@ export class StaticEvaluator {
   /** The value of `module.exports` (CJS) or the module namespace (ESM) of `file`. */
   moduleExports(file: string): Promise<Value> {
     const key = resolveDots(file);
-    let p = this.modules.get(key);
-    if (!p) {
-      p = this.computeModuleExports(key);
-      this.modules.set(key, p);
-    }
+    // Evaluation is one sequential async chain: re-entry while computing is a cycle.
+    if (this.computing.has(key)) return Promise.resolve(UNKNOWN('module cycle'));
+    const done = this.modules.get(key);
+    if (done) return done;
+    this.computing.add(key);
+    const p = this.computeModuleExports(key)
+      .catch(() => UNKNOWN('evaluation error'))
+      .finally(() => this.computing.delete(key));
+    this.modules.set(key, p);
     return p;
   }
 
@@ -367,135 +548,127 @@ export class StaticEvaluator {
       return UNKNOWN('empty json');
     }
 
-    let base: ts.Expression | undefined;
-    let baseCount = 0;
-    const props = new Map<string, Lazy>();
-    const keyLocs = new Map<string, Loc>();
+    // CommonJS writes, applied in source order the way Node does: `exports.x = …`
+    // writes the ORIGINAL exports object; `module.exports = …` replaces the
+    // module value (later `exports.x` writes are then lost, `module.exports.x`
+    // writes land on the new value).
+    type Op =
+      | { kind: 'prop'; target: 'exports' | 'module'; name: string; node: ts.Node; thunk: Lazy }
+      | { kind: 'base'; rhs: ts.Expression };
+    const ops: Op[] = [];
     let esModule = false;
     let open = false;
-    const starFrom: Array<{ spec: string; node: ts.Node }> = [];
+    const starFrom: string[] = [];
+    // ESM namespace props (no ordering subtleties)
+    const esmProps = new Map<string, Lazy>();
+    const esmLocs = new Map<string, Loc>();
+    const setEsm = (name: string, node: ts.Node, thunk: Lazy): void => {
+      esmProps.set(name, memo(thunk));
+      esmLocs.set(name, { file, pos: node.getStart(sf) });
+    };
 
-    const setProp = (name: string, node: ts.Node, thunk: Lazy): void => {
-      props.set(name, memo(thunk));
-      keyLocs.set(name, { file, pos: node.getStart(sf) });
+    /** Register the exports writes along an assignment chain `a = b = … = rhs`; returns the nodes modelled. */
+    const assignmentChain = (expr: ts.Expression): Set<ts.Node> | undefined => {
+      const lefts: ts.Expression[] = [];
+      let e = skipParens(expr);
+      while (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+        lefts.push(e.left);
+        e = skipParens(e.right);
+      }
+      const rhs = e;
+      const modelled = new Set<ts.Node>();
+      for (const left of lefts) {
+        if (isModuleExports(left)) {
+          ops.push({ kind: 'base', rhs });
+          modelled.add(left);
+          continue;
+        }
+        const m = exportsMember(left);
+        if (!m) continue;
+        modelled.add(left);
+        if (m.name === '__esModule') {
+          const t = rhs.kind === ts.SyntaxKind.TrueKeyword || (ts.isPrefixUnaryExpression(rhs) && rhs.operator === ts.SyntaxKind.ExclamationToken);
+          if (t) esModule = true;
+          continue;
+        }
+        ops.push({ kind: 'prop', target: m.target, name: m.name, node: left, thunk: () => this.ev(rhs, file, undefined) });
+      }
+      return lefts.length && modelled.size ? modelled : undefined;
+    };
+
+    const descriptorThunk = (desc: ts.ObjectLiteralExpression): Lazy | undefined => {
+      const valueProp = desc.properties.find((q): q is ts.PropertyAssignment => ts.isPropertyAssignment(q) && propName(q.name) === 'value');
+      if (valueProp) return () => this.ev(valueProp.initializer, file, undefined);
+      const getter = desc.properties.find((q) => (ts.isPropertyAssignment(q) || ts.isMethodDeclaration(q)) && propName(q.name) === 'get');
+      if (!getter) return undefined;
+      return async () => {
+        const fnNode = ts.isPropertyAssignment(getter) ? getter.initializer : (getter as ts.MethodDeclaration);
+        const fn = ts.isMethodDeclaration(fnNode) ? this.fnValue(fnNode, file, undefined) : await this.ev(fnNode, file, undefined);
+        return fn.k === 'fn' ? this.call(fn, []) : UNKNOWN('getter');
+      };
     };
 
     for (const stmt of sf.statements) {
-      // ---- CommonJS -------------------------------------------------------
+      this.steps++;
       if (ts.isExpressionStatement(stmt)) {
-        const e = stmt.expression;
+        const e = skipParens(stmt.expression);
+        if (ts.isStringLiteralLike(e)) continue; // 'use strict'
         if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-          if (isModuleExports(e.left)) {
-            base = e.right;
-            baseCount++;
-            continue;
-          }
-          const member = exportsMember(e.left);
-          if (member !== undefined) {
-            const rhs = e.right;
-            setProp(member, e.left, () => this.ev(rhs, file, undefined));
+          const modelled = assignmentChain(e);
+          if (modelled) {
+            if (touchesExports(stmt, modelled)) open = true;
             continue;
           }
         }
         if (ts.isCallExpression(e)) {
           const callee = e.expression;
-          // Object.defineProperty(exports, '__esModule' | 'x', { … })
-          if (
-            ts.isPropertyAccessExpression(callee) &&
-            ts.isIdentifier(callee.expression) &&
-            callee.expression.text === 'Object' &&
-            callee.name.text === 'defineProperty' &&
-            e.arguments.length >= 3
-          ) {
-            const [target, nameArg, descArg] = e.arguments;
-            const isExportsTarget = (ts.isIdentifier(target!) && target.text === 'exports') || isModuleExports(target!);
-            if (isExportsTarget && nameArg && ts.isStringLiteralLike(nameArg)) {
-              if (nameArg.text === '__esModule') {
-                esModule = true;
-              } else if (descArg && ts.isObjectLiteralExpression(descArg)) {
-                const name = nameArg.text;
-                const getter = descArg.properties.find(
-                  (p) => (ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p)) && p.name && propName(p.name) === 'get',
-                );
-                const valueProp = descArg.properties.find(
-                  (p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && propName(p.name) === 'value',
-                );
-                if (valueProp) {
-                  setProp(name, nameArg, () => this.ev(valueProp.initializer, file, undefined));
-                } else if (getter) {
-                  setProp(name, nameArg, async () => {
-                    const fnNode = ts.isPropertyAssignment(getter) ? getter.initializer : getter;
-                    const fn = await this.ev(fnNode as ts.Expression, file, undefined);
-                    return fn.k === 'fn' ? this.call(fn, []) : UNKNOWN('getter');
-                  });
-                } else {
-                  open = true;
-                }
-              }
-              continue;
+          const ct = calleeText(callee);
+          const [a0, a1, a2] = e.arguments;
+          const isExportsTarget = (x: ts.Expression | undefined): 'exports' | 'module' | undefined =>
+            x && ts.isIdentifier(x) && x.text === 'exports' ? 'exports' : x && isModuleExports(x) ? 'module' : undefined;
+          if (ct === 'Object.defineProperty' && isExportsTarget(a0) && a1 && ts.isStringLiteralLike(a1)) {
+            const target = isExportsTarget(a0)!;
+            if (a1.text === '__esModule') esModule = true;
+            else {
+              const thunk = a2 && ts.isObjectLiteralExpression(a2) ? descriptorThunk(a2) : undefined;
+              if (thunk) ops.push({ kind: 'prop', target, name: a1.text, node: a1, thunk });
+              else open = true;
             }
+            continue;
           }
-          // Object.defineProperties(exports, { __esModule: { value: true }, x: { get() {…} } })
-          if (
-            ts.isPropertyAccessExpression(callee) &&
-            ts.isIdentifier(callee.expression) &&
-            callee.expression.text === 'Object' &&
-            callee.name.text === 'defineProperties' &&
-            e.arguments.length >= 2
-          ) {
-            const [target, descs] = e.arguments;
-            const isExportsTarget = (ts.isIdentifier(target!) && target.text === 'exports') || isModuleExports(target!);
-            if (isExportsTarget) {
-              if (descs && ts.isObjectLiteralExpression(descs)) {
-                for (const p of descs.properties) {
-                  const pname = ts.isPropertyAssignment(p) ? propName(p.name) : undefined;
-                  if (pname === undefined) {
-                    // `[Symbol.toStringTag]` is harmless; any other computed key may hide an export.
-                    const isSymbolKey =
-                      ts.isPropertyAssignment(p) && ts.isComputedPropertyName(p.name) && /^Symbol\./.test(p.name.expression.getText(sf));
-                    if (!isSymbolKey) open = true;
-                    continue;
-                  }
-                  if (pname === '__esModule') {
-                    esModule = true;
-                    continue;
-                  }
-                  const desc = (p as ts.PropertyAssignment).initializer;
-                  if (!ts.isObjectLiteralExpression(desc)) {
-                    open = true;
-                    continue;
-                  }
-                  const valueProp = desc.properties.find(
-                    (q): q is ts.PropertyAssignment => ts.isPropertyAssignment(q) && propName(q.name) === 'value',
-                  );
-                  const getter = desc.properties.find(
-                    (q) => (ts.isPropertyAssignment(q) || ts.isMethodDeclaration(q)) && q.name !== undefined && propName(q.name) === 'get',
-                  );
-                  if (valueProp) setProp(pname, p, () => this.ev(valueProp.initializer, file, undefined));
-                  else if (getter) {
-                    setProp(pname, p, async () => {
-                      const fnNode = ts.isPropertyAssignment(getter) ? getter.initializer : getter;
-                      const fn = await this.ev(fnNode as ts.Expression, file, undefined);
-                      return fn.k === 'fn' ? this.call(fn, []) : UNKNOWN('getter');
-                    });
-                  } else open = true;
+          if (ct === 'Object.defineProperties' && isExportsTarget(a0)) {
+            const target = isExportsTarget(a0)!;
+            if (a1 && ts.isObjectLiteralExpression(a1)) {
+              for (const p of a1.properties) {
+                const pname = ts.isPropertyAssignment(p) ? propName(p.name) : undefined;
+                if (pname === undefined) {
+                  const isSymbolKey = ts.isPropertyAssignment(p) && ts.isComputedPropertyName(p.name) && /^Symbol\./.test(p.name.expression.getText(sf));
+                  if (!isSymbolKey) open = true;
+                  continue;
                 }
-              } else {
-                open = true;
+                if (pname === '__esModule') {
+                  esModule = true;
+                  continue;
+                }
+                const desc = (p as ts.PropertyAssignment).initializer;
+                const thunk = ts.isObjectLiteralExpression(desc) ? descriptorThunk(desc) : undefined;
+                if (thunk) ops.push({ kind: 'prop', target, name: pname, node: p, thunk });
+                else open = true;
               }
-              continue;
-            }
+            } else open = true;
+            continue;
           }
           // tsc: __exportStar(require('./x'), exports)
-          if (ts.isIdentifier(callee) && /exportStar/i.test(callee.text) && e.arguments[0]) {
-            const a0 = e.arguments[0];
-            if (ts.isCallExpression(a0) && ts.isIdentifier(a0.expression) && a0.expression.text === 'require') {
-              const spec = a0.arguments[0];
-              if (spec && ts.isStringLiteralLike(spec)) starFrom.push({ spec: spec.text, node: a0 });
-              else open = true;
-            } else {
-              open = true;
-            }
+          if (ts.isIdentifier(callee) && /exportStar/i.test(callee.text) && a0 && isExportsTarget(a1)) {
+            const r = skipParens(a0);
+            if (ts.isCallExpression(r) && ts.isIdentifier(r.expression) && r.expression.text === 'require' && r.arguments[0] && ts.isStringLiteralLike(r.arguments[0])) {
+              starFrom.push(r.arguments[0].text);
+            } else open = true;
+            continue;
+          }
+          // A bare relative `require('./x')` runs that module for its side effects — it may patch anything.
+          if (ts.isIdentifier(callee) && callee.text === 'require' && a0 && ts.isStringLiteralLike(a0) && a0.text.startsWith('.')) {
+            open = true;
             continue;
           }
         }
@@ -503,16 +676,29 @@ export class StaticEvaluator {
         continue;
       }
 
+      if (ts.isVariableStatement(stmt) && !hasExportModifier(stmt)) {
+        // Babel ≥7.23: `var _default = exports.default = { … }`
+        const modelled = new Set<ts.Node>();
+        for (const d of stmt.declarationList.declarations) {
+          if (!d.initializer) continue;
+          const m = assignmentChain(d.initializer);
+          if (m) for (const x of m) modelled.add(x);
+        }
+        if (touchesExports(stmt, modelled)) open = true;
+        continue;
+      }
+
       // ---- ES modules -----------------------------------------------------
+      if (ts.isImportDeclaration(stmt)) {
+        // `import './x'` — run for side effects only
+        if (!stmt.importClause && ts.isStringLiteralLike(stmt.moduleSpecifier) && stmt.moduleSpecifier.text.startsWith('.')) open = true;
+        continue;
+      }
       if (ts.isExportAssignment(stmt)) {
         esModule = true;
         const expr = stmt.expression;
-        if (stmt.isExportEquals) {
-          base = expr;
-          baseCount++;
-        } else {
-          setProp('default', stmt, () => this.ev(expr, file, undefined));
-        }
+        if (stmt.isExportEquals) ops.push({ kind: 'base', rhs: expr });
+        else setEsm('default', stmt, () => this.ev(expr, file, undefined));
         continue;
       }
       if (ts.isExportDeclaration(stmt)) {
@@ -520,7 +706,7 @@ export class StaticEvaluator {
         if (stmt.isTypeOnly) continue;
         const spec = stmt.moduleSpecifier && ts.isStringLiteralLike(stmt.moduleSpecifier) ? stmt.moduleSpecifier.text : undefined;
         if (!stmt.exportClause) {
-          if (spec) starFrom.push({ spec, node: stmt });
+          if (spec) starFrom.push(spec);
           else open = true;
           continue;
         }
@@ -529,23 +715,16 @@ export class StaticEvaluator {
             if (el.isTypeOnly) continue;
             const exported = el.name.text;
             const local = (el.propertyName ?? el.name).text;
-            if (spec) {
-              setProp(exported, el, async () => this.getProp(await this.requireModule(file, spec), local));
-            } else {
-              const id = el.propertyName ?? el.name;
-              setProp(exported, el, () => this.resolveIdentifierByName(local, id as ts.Identifier, file, undefined));
+            if (spec) setEsm(exported, el, async () => this.getProp(await this.requireModule(file, spec), local));
+            else {
+              const id = (el.propertyName ?? el.name) as ts.Identifier;
+              setEsm(exported, el, () => this.resolveIdentifierByName(local, id, file, undefined));
             }
           }
         } else {
-          // export * as ns from './x'
           const exported = stmt.exportClause.name.text;
-          if (spec) setProp(exported, stmt, () => this.requireModule(file, spec));
+          if (spec) setEsm(exported, stmt, () => this.requireModule(file, spec));
         }
-        continue;
-      }
-      // Conditional/blocked CJS export writes (`if (x) exports.y = …`) can't be followed.
-      if (ts.isIfStatement(stmt) || ts.isBlock(stmt) || ts.isTryStatement(stmt) || ts.isForStatement(stmt) || ts.isSwitchStatement(stmt)) {
-        if (touchesExports(stmt)) open = true;
         continue;
       }
       if (hasExportModifier(stmt)) {
@@ -556,65 +735,74 @@ export class StaticEvaluator {
               open = true;
               continue;
             }
-            const init = d.initializer;
             const id = d.name;
-            setProp(id.text, id, () => (init ? this.ev(init, file, undefined) : Promise.resolve(NIL)));
+            setEsm(id.text, id, () => this.resolveIdentifierByName(id.text, id, file, undefined));
           }
-        } else if (ts.isFunctionDeclaration(stmt) || ts.isClassDeclaration(stmt)) {
+        } else if (ts.isFunctionDeclaration(stmt)) {
           const name = hasDefaultModifier(stmt) ? 'default' : stmt.name?.text;
-          if (!name) continue;
-          if (ts.isFunctionDeclaration(stmt)) {
+          if (name) {
             const node = stmt;
-            setProp(name, stmt, () => Promise.resolve(this.fnValue(node, file, undefined, node.name?.text)));
-          } else {
-            setProp(name, stmt, () => Promise.resolve(UNKNOWN('class')));
+            setEsm(name, stmt, () => Promise.resolve(this.fnValue(node, file, undefined, node.name?.text)));
           }
+        } else if (ts.isClassDeclaration(stmt)) {
+          const name = hasDefaultModifier(stmt) ? 'default' : stmt.name?.text;
+          if (name) setEsm(name, stmt, () => Promise.resolve(UNKNOWN('class')));
+        } else {
+          open = true;
         }
         continue;
       }
+      // Any other top-level statement (if/for/while/try/blocks, function
+      // declarations writing `exports`…): not modelled → if it touches exports, open.
+      if (touchesExports(stmt)) open = true;
     }
 
-    // Merge `export * from` sources (best-effort; their own openness propagates).
-    for (const { spec } of starFrom) {
-      const mod = await this.requireModule(file, spec);
-      if (mod.k !== 'obj') {
-        open = true;
+    // Apply the CommonJS ops in order.
+    const sfLoc = (node: ts.Node): Loc => ({ file, pos: node.getStart(sf) });
+    let value: ObjValue | Value = { k: 'obj', props: new Map(), keyLocs: new Map(), open: false, loc: { file, pos: 0 } } as ObjValue;
+    let replaced = false;
+    for (const op of ops) {
+      if (op.kind === 'base') {
+        value = await this.ev(op.rhs, file, undefined);
+        replaced = true;
         continue;
       }
-      if (mod.open) open = true;
-      for (const [k, thunk] of mod.props) {
-        if (k === 'default' || props.has(k)) continue;
-        props.set(k, thunk);
-        const kl = mod.keyLocs.get(k);
-        if (kl) keyLocs.set(k, kl);
+      // After `module.exports = …`, `exports.x` writes go to the stale object.
+      if (replaced && op.target === 'exports') continue;
+      if (value.k !== 'obj') {
+        value = UNKNOWN('property written on a non-object module value');
+        break;
       }
+      const next: ObjValue = { ...value, props: new Map(value.props), keyLocs: new Map(value.keyLocs) };
+      next.props.set(op.name, memo(op.thunk));
+      next.keyLocs.set(op.name, sfLoc(op.node));
+      value = next;
     }
 
-    if (base) {
-      if (baseCount > 1) return UNKNOWN('module.exports reassigned');
-      const v = await this.ev(base, file, undefined);
-      if (props.size === 0 && !esModule) {
-        // An export write we could not follow taints the module value.
-        if (!open) return v;
-        return v.k === 'obj' ? { ...v, open: true } : UNKNOWN('module exports not exhaustive');
-      }
-      if (v.k === 'obj') {
-        const merged: ObjValue = {
-          k: 'obj',
-          props: new Map(v.props),
-          keyLocs: new Map(v.keyLocs),
-          open: v.open || open,
-          esModule: v.esModule || esModule,
-          ...(v.loc ? { loc: v.loc } : {}),
-        };
-        for (const [k, t] of props) merged.props.set(k, t);
-        for (const [k, l] of keyLocs) merged.keyLocs.set(k, l);
-        return merged;
-      }
-      if (props.size === 0) return v;
-      return { k: 'obj', props, keyLocs, open: true, esModule };
+    if (value.k !== 'obj') {
+      if (esmProps.size || starFrom.length) return UNKNOWN('mixed module shapes');
+      return open && value.k !== 'unknown' ? UNKNOWN('module exports not exhaustive') : value;
     }
-    return { k: 'obj', props, keyLocs, open, esModule, loc: { file, pos: 0 } };
+    const out: ObjValue = { ...value, props: new Map(value.props), keyLocs: new Map(value.keyLocs) };
+    if (open) out.open = true;
+    if (esModule) out.esModule = true;
+    for (const [k, t] of esmProps) out.props.set(k, t);
+    for (const [k, l] of esmLocs) out.keyLocs.set(k, l);
+    for (const spec of starFrom) {
+      const mod = await this.requireModule(file, spec);
+      if (mod.k !== 'obj') {
+        out.open = true;
+        continue;
+      }
+      if (mod.open) out.open = true;
+      for (const [k, thunk] of mod.props) {
+        if (k === 'default' || out.props.has(k)) continue;
+        out.props.set(k, thunk);
+        const kl = mod.keyLocs.get(k);
+        if (kl) out.keyLocs.set(k, kl);
+      }
+    }
+    return out;
   }
 
   // -------------------------------------------------------------------------
@@ -644,37 +832,64 @@ export class StaticEvaluator {
     return { k: 'fn', node, file, scope, loc: { file, pos: anchor.getStart(sf) }, ...(name ? { name } : {}) };
   }
 
+  /** Is `fn` a bundler interop helper (by name AND by body shape)? */
+  private interopKind(fn: FnValue): 'unwrap' | 'namespace' | undefined {
+    if (!fn.name || !INTEROP_NAME.test(fn.name)) return undefined;
+    const body = fn.node.body;
+    if (!body || !body.getText(fn.node.getSourceFile()).includes('__esModule')) return undefined;
+    return /getDefaultExport/i.test(fn.name) ? 'unwrap' : 'namespace';
+  }
+
   /** Call a function value with already-evaluated arguments. */
   async call(fn: Value, args: Value[]): Promise<Value> {
     if (fn.k === 'native') return fn.impl(args);
     if (fn.k !== 'fn') return fn.k === 'unknown' ? fn : UNKNOWN(`call of ${fn.k}`);
+    const budget = this.overBudget();
+    if (budget) return UNKNOWN(budget);
     if (this.depth >= this.limits.maxDepth) return UNKNOWN('max depth');
     if (this.inProgress.has(fn.node)) return UNKNOWN('recursive call');
     const node = fn.node;
-    const bindings = new Map<string, Value>();
-    node.parameters.forEach((p, i) => {
-      if (ts.isIdentifier(p.name)) bindings.set(p.name.text, args[i] ?? NIL);
-    });
-    const scope: Scope = { fn: node, bindings, parent: fn.scope };
     const body = node.body;
     if (!body) return UNKNOWN('no body');
+    const bindings = new Map<string, Value>();
+    const scope: Scope = { fn: node, bindings, parent: fn.scope };
     this.inProgress.add(node);
     this.depth++;
     try {
-      if (!ts.isBlock(body)) return await this.ev(body, fn.file, scope);
-      // The *last* top-level `return` is the function's result (rollup's
-      // `if (cached) return x; …; x = …; return x;` and plain factories alike).
-      let last: ts.ReturnStatement | undefined;
-      for (const s of body.statements) if (ts.isReturnStatement(s)) last = s;
-      if (!last) {
-        const all: ts.ReturnStatement[] = [];
-        forEachInScope(body, (n) => {
-          if (ts.isReturnStatement(n)) all.push(n);
-        });
-        if (all.length !== 1) return all.length === 0 ? NIL : UNKNOWN('several nested returns');
-        last = all[0];
+      for (let i = 0; i < node.parameters.length; i++) {
+        const p = node.parameters[i]!;
+        if (!ts.isIdentifier(p.name)) continue;
+        let v = args[i] ?? NIL;
+        if (v.k === 'nil' && p.initializer) v = await this.ev(p.initializer, fn.file, scope);
+        bindings.set(p.name.text, v);
       }
-      return last!.expression ? await this.ev(last!.expression, fn.file, scope) : NIL;
+      if (!ts.isBlock(body)) return await this.ev(body, fn.file, scope);
+      const returns: ts.ReturnStatement[] = [];
+      forEachInScope(body, (n) => {
+        if (ts.isReturnStatement(n)) returns.push(n);
+      });
+      if (returns.length === 0) return NIL;
+      if (returns.length > 1) {
+        // Only one shape is followed: every return yields the same variable or
+        // access path on the same binding (rollup's `if (cached) return x; …; return x;`
+        // and its `return m.__module.exports` variant).
+        const exprs = returns.map((r) => (r.expression ? skipParens(r.expression) : undefined));
+        const sig = (e: ts.Expression | undefined): { text: string; decl: Declaration | undefined } | undefined => {
+          if (!e) return undefined;
+          const { root } = accessRoot(e);
+          if (!ts.isIdentifier(root)) return undefined;
+          return { text: e.getText(), decl: this.findDeclaration(root.text, root) };
+        };
+        const s0 = sig(exprs[0]);
+        if (!s0 || !s0.decl) return UNKNOWN('several returns');
+        const same = exprs.every((e) => {
+          const s1 = sig(e);
+          return !!s1 && s1.text === s0.text && sameDeclaration(s1.decl, s0.decl);
+        });
+        if (!same) return UNKNOWN('several returns');
+      }
+      const last = returns[returns.length - 1]!;
+      return last.expression ? await this.ev(last.expression, fn.file, scope) : NIL;
     } finally {
       this.depth--;
       this.inProgress.delete(node);
@@ -683,7 +898,9 @@ export class StaticEvaluator {
 
   /** Evaluate an expression. */
   async ev(node: ts.Expression, file: string, scope: Scope | undefined): Promise<Value> {
-    if (++this.steps > this.limits.maxSteps) return UNKNOWN('step budget');
+    this.steps++;
+    const budget = this.overBudget();
+    if (budget) return UNKNOWN(budget);
     if (this.depth >= this.limits.maxDepth) return UNKNOWN('max depth');
     this.depth++;
     try {
@@ -720,7 +937,7 @@ export class StaticEvaluator {
     if (ts.isObjectLiteralExpression(node)) return this.evObject(node, file, scope);
     if (ts.isArrayLiteralExpression(node)) return this.evArray(node, file, scope);
     if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
-      return this.fnValue(node, file, scope, ts.isFunctionExpression(node) ? node.name?.text : undefined);
+      return this.fnValue(node, file, scope, ts.isFunctionExpression(node) ? node.name?.text : bindingNameOf(node));
     }
     if (ts.isIdentifier(node)) {
       if (node.text === 'undefined') return NIL;
@@ -728,14 +945,28 @@ export class StaticEvaluator {
     }
     if (ts.isPropertyAccessExpression(node)) {
       if (isModuleExports(node)) return UNKNOWN('self module.exports');
+      const virtual = this.rollupVirtualExports(node);
+      if (virtual) {
+        if (virtual === 'ambiguous') return UNKNOWN('virtual module written twice');
+        const v = await this.ev(virtual.value, file, undefined);
+        if (!virtual.props.length || v.k !== 'obj') return v; // props added on a function value don't change what we read
+        const out: ObjValue = { ...v, props: new Map(v.props), keyLocs: new Map(v.keyLocs) };
+        for (const w of virtual.props) out.props.set(w.key, memo(() => this.ev(w.rhs, file, undefined)));
+        return out;
+      }
       const base = await this.ev(node.expression, file, scope);
       return this.getProp(base, node.name.text);
     }
     if (ts.isElementAccessExpression(node)) {
       const arg = node.argumentExpression;
       if (!ts.isStringLiteralLike(arg) && !ts.isNumericLiteral(arg)) return UNKNOWN('computed access');
+      if (isModuleExports(node)) return UNKNOWN('self module.exports');
       const base = await this.ev(node.expression, file, scope);
-      if (base.k === 'arr' && ts.isNumericLiteral(arg)) return this.force(base.items[Number(arg.text)]);
+      if (base.k === 'arr' && ts.isNumericLiteral(arg)) {
+        const i = Number(arg.text);
+        if (base.open) return UNKNOWN('open array');
+        return this.force(base.items[i]);
+      }
       return this.getProp(base, arg.text);
     }
     if (ts.isCallExpression(node)) return this.evCall(node, file, scope);
@@ -746,17 +977,30 @@ export class StaticEvaluator {
     }
     if (ts.isBinaryExpression(node)) {
       const op = node.operatorToken.kind;
-      if (op === ts.SyntaxKind.CommaToken || op === ts.SyntaxKind.EqualsToken) return this.ev(node.right, file, scope);
+      if (op === ts.SyntaxKind.CommaToken) return this.ev(node.right, file, scope);
+      if (op === ts.SyntaxKind.EqualsToken) return this.ev(node.right, file, scope);
+      if (op === ts.SyntaxKind.AmpersandAmpersandToken) {
+        const left = await this.ev(node.left, file, scope);
+        const t = truthy(left);
+        if (t === undefined) return UNKNOWN('&& on unknown');
+        return t ? this.ev(node.right, file, scope) : left;
+      }
       if (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.QuestionQuestionToken) {
         const left = await this.ev(node.left, file, scope);
-        if (op === ts.SyntaxKind.QuestionQuestionToken) {
-          return left.k === 'nil' ? this.ev(node.right, file, scope) : left;
-        }
+        if (left.k === 'unknown') return left;
+        if (op === ts.SyntaxKind.QuestionQuestionToken) return left.k === 'nil' ? this.ev(node.right, file, scope) : left;
         const t = truthy(left);
         if (t === undefined) return UNKNOWN('|| on unknown');
         return t ? left : this.ev(node.right, file, scope);
       }
       return UNKNOWN(`binary ${ts.SyntaxKind[op]}`);
+    }
+    if (node.kind === ts.SyntaxKind.ThisKeyword) {
+      // Top-level `this` of a CommonJS module is `module.exports` before any write — tsc's
+      // `(this && this.__importDefault) || function …` helper guard reads it. Elsewhere: unknown.
+      let f: ts.Node | undefined = node.parent;
+      while (f && !ts.isSourceFile(f) && !(isFunctionLike(f) && !ts.isArrowFunction(f))) f = f.parent;
+      return f && ts.isSourceFile(f) ? { k: 'obj', props: new Map(), keyLocs: new Map(), open: false } : UNKNOWN('this');
     }
     if (ts.isAwaitExpression(node)) return this.ev(node.expression, file, scope);
     if (ts.isTemplateExpression(node)) return UNKNOWN('template');
@@ -769,6 +1013,7 @@ export class StaticEvaluator {
     const sf = node.getSourceFile();
     const out: ObjValue = { k: 'obj', props: new Map(), keyLocs: new Map(), open: false, loc: { file, pos: node.getStart(sf) } };
     for (const p of node.properties) {
+      this.steps++;
       if (ts.isSpreadAssignment(p)) {
         const v = await this.ev(p.expression, file, scope);
         if (v.k === 'obj') {
@@ -802,8 +1047,7 @@ export class StaticEvaluator {
         const g = p;
         out.props.set(name, memo(() => this.call(this.fnValue(g, file, scope, name), [])));
       } else {
-        // setter only — not a readable value
-        continue;
+        continue; // setter only — not a readable value
       }
       out.keyLocs.set(name, keyLoc);
     }
@@ -814,6 +1058,7 @@ export class StaticEvaluator {
     const sf = node.getSourceFile();
     const out: ArrValue = { k: 'arr', items: [], open: false, loc: { file, pos: node.getStart(sf) } };
     for (const el of node.elements) {
+      this.steps++;
       if (ts.isSpreadElement(el)) {
         const v = await this.ev(el.expression, file, scope);
         if (v.k === 'arr') {
@@ -833,13 +1078,11 @@ export class StaticEvaluator {
 
   private async evCall(node: ts.CallExpression, file: string, scope: Scope | undefined): Promise<Value> {
     const callee = node.expression;
-    // require('…')
     if (ts.isIdentifier(callee) && callee.text === 'require' && !this.isLocallyDeclared(callee, 'require')) {
       const spec = node.arguments[0];
       if (spec && ts.isStringLiteralLike(spec)) return this.requireModule(file, spec.text);
       return UNKNOWN('dynamic require');
     }
-    // Object.freeze / Object.seal / Object.assign
     if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'Object') {
       const m = callee.name.text;
       if ((m === 'freeze' || m === 'seal') && node.arguments[0]) return this.ev(node.arguments[0], file, scope);
@@ -853,13 +1096,10 @@ export class StaticEvaluator {
       return fn.impl(nargs);
     }
     if (fn.k !== 'fn') return fn.k === 'unknown' ? UNKNOWN(`call: ${fn.why}`) : UNKNOWN(`call of ${fn.k}`);
-    if (fn.name && /getDefaultExport/i.test(fn.name)) {
+    const interop = this.interopKind(fn);
+    if (interop) {
       const a = node.arguments[0] ? await this.ev(node.arguments[0], file, scope) : NIL;
-      return this.unwrapDefault(a);
-    }
-    if (fn.name && /interop|importDefault|importStar|__toESM|toCommonJS/i.test(fn.name)) {
-      const a = node.arguments[0] ? await this.ev(node.arguments[0], file, scope) : NIL;
-      return this.interopNamespace(a);
+      return interop === 'unwrap' ? this.unwrapDefault(a) : this.interopNamespace(a);
     }
     const args: Value[] = [];
     for (const a of node.arguments) {
@@ -867,8 +1107,11 @@ export class StaticEvaluator {
         args.push(UNKNOWN('spread arg'));
         continue;
       }
-      // Arguments are rarely needed (factories ignore `{ strapi }`) — keep them lazy-cheap.
-      args.push(ts.isIdentifier(a) || ts.isObjectLiteralExpression(a) || ts.isStringLiteralLike(a) ? await this.ev(a, file, scope) : UNKNOWN('arg'));
+      args.push(
+        ts.isIdentifier(a) || ts.isObjectLiteralExpression(a) || ts.isStringLiteralLike(a) || ts.isArrowFunction(a) || ts.isFunctionExpression(a)
+          ? await this.ev(a, file, scope)
+          : UNKNOWN('arg'),
+      );
     }
     return this.call(fn, args);
   }
@@ -882,6 +1125,7 @@ export class StaticEvaluator {
   /** `__importDefault(x)` / `_interopDefault(x)` / `__importStar(x)`: a namespace whose `.default` is the CJS value. */
   private async interopNamespace(v: Value): Promise<Value> {
     if (v.k === 'obj' && (v.esModule || v.props.has('default'))) return v;
+    if (v.k === 'unknown') return v;
     const ns: ObjValue = { k: 'obj', props: new Map(), keyLocs: new Map(), open: false, esModule: true };
     if (v.k === 'obj') {
       for (const [k, t] of v.props) ns.props.set(k, t);
@@ -918,57 +1162,117 @@ export class StaticEvaluator {
     return d !== undefined && d.kind !== 'opaque';
   }
 
-  /** Find the declaration `name` refers to at `at`, walking lexical scopes outward. */
+  /** `var` declarations of a function body / source file (not nested functions), by name. */
+  private hoisted(body: ts.Node): Map<string, ts.VariableDeclaration[]> {
+    let m = this.varHoist.get(body);
+    if (m) return m;
+    m = new Map();
+    const map = m;
+    forEachInScope(body, (n) => {
+      this.steps++;
+      if (!ts.isVariableDeclaration(n)) return;
+      const list = n.parent;
+      const isVar = ts.isVariableDeclarationList(list) && (list.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) === 0;
+      if (!isVar) return;
+      for (const name of bindingNames(n.name)) {
+        const arr = map.get(name);
+        if (arr) arr.push(n);
+        else map.set(name, [n]);
+      }
+    });
+    this.varHoist.set(body, m);
+    return m;
+  }
+
+  /** Direct declarations of a block / source file, by name. */
+  private blockScope(block: ts.Node): Map<string, ts.VariableDeclaration[] | Declaration> {
+    let m = this.blockDecls.get(block);
+    if (m) return m;
+    m = new Map();
+    const stmts = (block as ts.Block | ts.SourceFile | ts.CaseClause).statements;
+    const put = (name: string, d: Declaration): void => {
+      if (!m!.has(name)) m!.set(name, d);
+    };
+    for (const s of stmts) {
+      this.steps++;
+      if (ts.isVariableStatement(s)) {
+        for (const d of s.declarationList.declarations) {
+          for (const name of bindingNames(d.name)) {
+            const existing = m.get(name);
+            if (Array.isArray(existing)) existing.push(d);
+            else if (!existing) m.set(name, [d]);
+          }
+        }
+      } else if (ts.isFunctionDeclaration(s) && s.name) {
+        put(s.name.text, { kind: 'fn', decl: s });
+      } else if (ts.isClassDeclaration(s) && s.name) {
+        put(s.name.text, { kind: 'opaque', why: 'class' });
+      } else if (ts.isEnumDeclaration(s)) {
+        put(s.name.text, { kind: 'opaque', why: 'enum' });
+      } else if (ts.isImportDeclaration(s) && s.importClause && !s.importClause.isTypeOnly) {
+        const ic = s.importClause;
+        if (ic.name) put(ic.name.text, { kind: 'import', decl: s, imported: 'default' });
+        const nb = ic.namedBindings;
+        if (nb && ts.isNamespaceImport(nb)) put(nb.name.text, { kind: 'import', decl: s, imported: 'namespace' });
+        if (nb && ts.isNamedImports(nb)) {
+          for (const el of nb.elements) put(el.name.text, { kind: 'import', decl: s, imported: (el.propertyName ?? el.name).text });
+        }
+      }
+    }
+    this.blockDecls.set(block, m);
+    return m;
+  }
+
+  /** The var-scope node a block's declarations belong to (function body or source file). */
+  private varScopeOf(n: ts.Node): ts.Node {
+    let c: ts.Node | undefined = n;
+    while (c && !isFunctionLike(c) && !ts.isSourceFile(c)) c = c.parent;
+    if (c && isFunctionLike(c) && c.body) return c.body;
+    return c ?? n;
+  }
+
+  /** Find the declaration `name` refers to at `at`, walking lexical scopes outward (memoized). */
   private findDeclaration(name: string, at: ts.Node): Declaration | undefined {
+    const memoKey = ts.isIdentifier(at) && at.text === name ? at : undefined;
+    if (memoKey && this.declMemo.has(memoKey)) return this.declMemo.get(memoKey) ?? undefined;
+    const d = this.findDeclarationUncached(name, at);
+    if (memoKey) this.declMemo.set(memoKey, d ?? null);
+    return d;
+  }
+
+  private findDeclarationUncached(name: string, at: ts.Node): Declaration | undefined {
     let n: ts.Node | undefined = at.parent;
     let child: ts.Node = at;
     while (n) {
+      this.steps++;
       if (isFunctionLike(n)) {
         const idx = n.parameters.findIndex((p) => bindingNames(p.name).includes(name));
         if (idx >= 0) {
           const p = n.parameters[idx]!;
           return { kind: 'param', fn: n, index: idx, destructured: !ts.isIdentifier(p.name) };
         }
-        if ((ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n)) && n.name?.text === name && child !== n.name) {
-          if (ts.isFunctionDeclaration(n)) return { kind: 'fn', decl: n };
-        }
-        // `var` declarations hoist to the function body.
+        if (ts.isFunctionDeclaration(n) && n.name?.text === name && child !== n.name) return { kind: 'fn', decl: n };
         if (n.body) {
-          const v = this.findVarIn(n.body, name, true);
-          if (v) return v;
+          const vars = this.hoisted(n.body).get(name);
+          if (vars?.length) return declarationFromVar(vars[0]!, name, n.body, vars.length > 1);
         }
       }
       if (ts.isBlock(n) || ts.isSourceFile(n) || ts.isModuleBlock(n) || ts.isCaseClause(n) || ts.isDefaultClause(n)) {
-        const stmts = (n as ts.Block | ts.SourceFile).statements;
-        for (const s of stmts) {
-          if (ts.isVariableStatement(s)) {
-            for (const d of s.declarationList.declarations) {
-              if (bindingNames(d.name).includes(name)) {
-                if (!ts.isIdentifier(d.name)) return destructured(d, name);
-                return { kind: 'var', decl: d, container: this.containerOf(n) };
-              }
-            }
-          } else if (ts.isFunctionDeclaration(s) && s.name?.text === name) {
-            return { kind: 'fn', decl: s };
-          } else if (ts.isClassDeclaration(s) && s.name?.text === name) {
-            return { kind: 'opaque', why: 'class' };
-          } else if (ts.isEnumDeclaration(s) && s.name.text === name) {
-            return { kind: 'opaque', why: 'enum' };
-          } else if (ts.isImportDeclaration(s) && s.importClause && !s.importClause.isTypeOnly) {
-            const ic = s.importClause;
-            if (ic.name?.text === name) return { kind: 'import', decl: s, imported: 'default' };
-            const nb = ic.namedBindings;
-            if (nb && ts.isNamespaceImport(nb) && nb.name.text === name) return { kind: 'import', decl: s, imported: 'namespace' };
-            if (nb && ts.isNamedImports(nb)) {
-              for (const el of nb.elements) {
-                if (el.name.text === name) return { kind: 'import', decl: s, imported: (el.propertyName ?? el.name).text };
-              }
-            }
+        const entry = this.blockScope(n).get(name);
+        if (entry) {
+          if (Array.isArray(entry)) {
+            const scopeNode = this.varScopeOf(n);
+            const first = entry[0]!;
+            const list = first.parent;
+            const isVar = ts.isVariableDeclarationList(list) && (list.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) === 0;
+            const all = isVar ? (this.hoisted(scopeNode).get(name) ?? entry) : entry;
+            return declarationFromVar(first, name, scopeNode, all.length > 1 || entry.length > 1);
           }
+          return entry;
         }
         if (ts.isSourceFile(n)) {
-          const v = this.findVarIn(n, name, true);
-          if (v) return v;
+          const vars = this.hoisted(n).get(name);
+          if (vars?.length) return declarationFromVar(vars[0]!, name, n, vars.length > 1);
         }
       }
       if ((ts.isForStatement(n) || ts.isForOfStatement(n) || ts.isForInStatement(n)) && n.initializer && ts.isVariableDeclarationList(n.initializer)) {
@@ -981,29 +1285,6 @@ export class StaticEvaluator {
       n = n.parent;
     }
     return undefined;
-  }
-
-  /** A `var name` declared anywhere in `body` (not inside nested functions). */
-  private findVarIn(body: ts.Node, name: string, varOnly: boolean): Declaration | undefined {
-    let found: Declaration | undefined;
-    forEachInScope(body, (n) => {
-      if (found) return;
-      if (ts.isVariableDeclaration(n) && bindingNames(n.name).includes(name)) {
-        const list = n.parent;
-        const isVar = ts.isVariableDeclarationList(list) && (list.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) === 0;
-        if (varOnly && !isVar) return;
-        found = ts.isIdentifier(n.name) ? { kind: 'var', decl: n, container: body } : destructured(n, name);
-      }
-    });
-    return found;
-  }
-
-  /** The function body / source file that owns a block's declarations (for assignment search). */
-  private containerOf(n: ts.Node): ts.Node {
-    let c: ts.Node | undefined = n;
-    while (c && !isFunctionLike(c) && !ts.isSourceFile(c)) c = c.parent;
-    if (c && isFunctionLike(c) && c.body) return c.body;
-    return c ?? n;
   }
 
   private async resolveIdentifierByName(name: string, at: ts.Identifier, file: string, scope: Scope | undefined): Promise<Value> {
@@ -1026,17 +1307,17 @@ export class StaticEvaluator {
         if (d.imported === 'namespace') return mod;
         if (d.imported === 'default') {
           if (mod.k === 'obj' && mod.esModule) return this.getProp(mod, 'default');
-          return mod; // CJS module imported by default → its module.exports
+          return mod;
         }
         return this.getProp(mod, d.imported);
       }
       case 'var':
-        return this.evVariable(d.decl, d.container, file, scope);
+        return this.evVariable(d, file, scope);
       case 'destructured': {
         if (!d.decl.initializer) return UNKNOWN('destructured without initializer');
         let v = await this.ev(d.decl.initializer, file, scope);
         for (const step of d.path) {
-          if (typeof step.key === 'number') v = v.k === 'arr' ? await this.force(v.items[step.key]) : UNKNOWN('array pattern');
+          if (typeof step.key === 'number') v = v.k === 'arr' && !v.open ? await this.force(v.items[step.key]) : UNKNOWN('array pattern');
           else v = await this.getProp(v, step.key);
           if (v.k === 'nil' && step.dflt) v = await this.ev(step.dflt, file, scope);
         }
@@ -1045,114 +1326,287 @@ export class StaticEvaluator {
     }
   }
 
-  /**
-   * A variable's value: its initializer and/or its (single) later assignment
-   * `name = …` in the same function scope, plus `name.key = …` property writes.
-   */
-  /** Writes to a variable inside its scope (computed once per declaration). */
-  private scanWrites(decl: ts.VariableDeclaration, container: ts.Node): VariableWrites {
-    const cached = this.writesCache.get(decl);
-    if (cached) return cached;
-    const name = (decl.name as ts.Identifier).text;
-    const out: VariableWrites = { assigns: [], propWrites: [], mutated: false };
-    const isSelf = (e: ts.Expression): boolean => {
-      if (!ts.isIdentifier(e) || e.text !== name) return false;
-      const d = this.findDeclaration(name, e);
-      return d?.kind === 'var' && d.decl === decl;
-    };
-    const visit = (n: ts.Node): void => {
-      if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-        if (isSelf(n.left)) out.assigns.push(n.right);
-        else if (ts.isPropertyAccessExpression(n.left) && isSelf(n.left.expression)) {
-          out.propWrites.push({ key: n.left.name.text, rhs: n.right, node: n.left.name });
-        } else if (ts.isElementAccessExpression(n.left) && isSelf(n.left.expression)) {
-          const a = n.left.argumentExpression;
-          out.propWrites.push({ key: ts.isStringLiteralLike(a) ? a.text : undefined, rhs: n.right, node: n.left });
-        }
-      } else if (ts.isDeleteExpression(n)) {
-        const t = n.expression;
-        if ((ts.isPropertyAccessExpression(t) || ts.isElementAccessExpression(t)) && isSelf(t.expression)) out.mutated = true;
-      } else if (ts.isCallExpression(n)) {
-        const c = n.expression;
-        const callee = ts.isIdentifier(c) ? c.text : ts.isPropertyAccessExpression(c) ? c.name.text : undefined;
-        // A known mutator writing into the variable: Object.assign(x, …), _.merge(x, …), x.push(…)…
-        // (merely *passing* the variable to a function is not a write).
-        if (callee && MUTATORS.has(callee) && n.arguments[0] && isSelf(n.arguments[0])) out.mutated = true;
-        if (ts.isPropertyAccessExpression(c) && SELF_MUTATORS.has(c.name.text) && isSelf(c.expression)) out.mutated = true;
-      }
-    };
-    const walk = (n: ts.Node): void => {
-      visit(n);
-      ts.forEachChild(n, walk);
-    };
-    walk(container);
-    this.writesCache.set(decl, out);
-    return out;
+  /** Writes to the variable `decl`, from the (once-built) write index of its scope. */
+  private writesOf(d: Extract<Declaration, { kind: 'var' }>): WriteSite[] {
+    let idx = this.writeIndex.get(d.scopeNode);
+    if (!idx) {
+      idx = collectWrites(d.scopeNode, this.count);
+      this.writeIndex.set(d.scopeNode, idx);
+    }
+    const name = (d.decl.name as ts.Identifier).text;
+    return (idx.get(name) ?? []).filter((site) => {
+      const r = this.findDeclaration(name, site.root);
+      return r?.kind === 'var' && r.decl === d.decl;
+    });
   }
 
-  private async evVariable(decl: ts.VariableDeclaration, container: ts.Node, file: string, scope: Scope | undefined): Promise<Value> {
+  /**
+   * Rollup's commonjs "virtual module" protocol: `var m = require('./_virtual/x.js')`
+   * holds `{ exports: {} }` and the owning module writes `m.__module.exports = value`.
+   * A read of `m.__module.exports` in that module is the value it writes there
+   * (rollup keeps a virtual module private to its owner). Returns the written
+   * expression, `'ambiguous'` if written more than once, or undefined when the
+   * read isn't that protocol.
+   */
+  private rollupVirtualExports(
+    node: ts.Expression,
+  ): { value: ts.Expression; props: Array<{ key: string; rhs: ts.Expression }> } | 'ambiguous' | undefined {
+    const target = virtualModuleTarget(node, this);
+    if (!target || target.key !== undefined) return undefined;
+    const sf = node.getSourceFile();
+    const values: ts.Expression[] = [];
+    const props: Array<{ key: string; rhs: ts.Expression }> = [];
+    let unmodelled = false;
+    const walk = (n: ts.Node): void => {
+      this.steps++;
+      if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+        const t = virtualModuleTarget(n.left, this);
+        if (t && t.decl === target.decl) {
+          if (n.operatorToken.kind !== ts.SyntaxKind.EqualsToken || t.key === null) unmodelled = true;
+          else if (t.key === undefined) values.push(n.right);
+          else props.push({ key: t.key, rhs: n.right });
+        }
+      }
+      ts.forEachChild(n, walk);
+    };
+    walk(sf);
+    if (values.length === 0) return undefined;
+    if (values.length > 1 || unmodelled) return 'ambiguous';
+    return { value: values[0]!, props };
+  }
+
+  /** Internal: declaration lookup for module-level helpers. */
+  lookup(name: string, at: ts.Node): Declaration | undefined {
+    return this.findDeclaration(name, at);
+  }
+
+  /** Is passing a variable to this call harmless (the callee cannot write into it)? */
+  private isPureCall(call: ts.CallExpression): boolean {
+    const c = call.expression;
+    const text = calleeText(c);
+    if (text === 'require' || (text && PURE_GLOBAL_CALLS.has(text)) || (text && /^console\./.test(text))) return true;
+    if (ts.isIdentifier(c)) {
+      const d = this.findDeclaration(c.text, c);
+      if (d?.kind === 'fn' && INTEROP_NAME.test(c.text) && d.decl.body?.getText().includes('__esModule')) return true;
+      if (d?.kind === 'var' && INTEROP_NAME.test(c.text) && d.decl.initializer?.getText().includes('__esModule')) return true;
+      return false;
+    }
+    // `helpers.getDefaultExportFromCjs(x)` — a bundler helper module
+    if (ts.isPropertyAccessExpression(c) && INTEROP_NAME.test(c.name.text)) return true;
+    return false;
+  }
+
+  /**
+   * A variable's value: its initializer, or its single assignment when it has
+   * none (rollup's `var x; … x = …`), plus top-level `x.key = …` writes. Any
+   * other write makes it unknown.
+   */
+  private async evVariable(d: Extract<Declaration, { kind: 'var' }>, file: string, scope: Scope | undefined): Promise<Value> {
+    const decl = d.decl;
     if (this.inProgress.has(decl)) return UNKNOWN('cyclic variable');
-    // Module-level variables don't depend on any call's parameters → cache them.
-    const moduleLevel = ts.isSourceFile(container);
+    const moduleLevel = ts.isSourceFile(d.scopeNode);
     if (moduleLevel) {
       const hit = this.moduleVarCache.get(decl);
       if (hit) return hit;
-      const p = this.evVariableUncached(decl, container, file, undefined);
+      const p = this.evVariableUncached(d, file, undefined);
       this.moduleVarCache.set(decl, p);
       return p;
     }
-    return this.evVariableUncached(decl, container, file, scope);
+    return this.evVariableUncached(d, file, scope);
   }
 
-  private async evVariableUncached(decl: ts.VariableDeclaration, container: ts.Node, file: string, scope: Scope | undefined): Promise<Value> {
+  private async evVariableUncached(d: Extract<Declaration, { kind: 'var' }>, file: string, scope: Scope | undefined): Promise<Value> {
+    const decl = d.decl;
     const name = (decl.name as ts.Identifier).text;
-    const { assigns, propWrites, mutated } = this.scanWrites(decl, container);
+    if (d.redeclared) return UNKNOWN(`'${name}' redeclared`);
     this.inProgress.add(decl);
     try {
-      let v: Value;
+      const writes = this.writesOf(d);
+      const assigns: ts.Expression[] = [];
+      const props: WriteSite[] = [];
+      for (const w of writes) {
+        if (w.kind === 'unmodelled') return UNKNOWN(`'${name}' written in a way not modelled`);
+        if (w.kind === 'arg') {
+          if (!this.isPureCall(w.call!)) return UNKNOWN(`'${name}' passed to a function`);
+          continue;
+        }
+        if (w.kind === 'assign') assigns.push(w.rhs!);
+        else props.push(w);
+      }
       const init = decl.initializer;
-      const initIsEmpty = !init;
+      const initIsEmpty = !init || init.kind === ts.SyntaxKind.NullKeyword || ts.isVoidExpression(init) || (ts.isIdentifier(init) && init.text === 'undefined');
+      let v: Value;
       if (assigns.length > 1) return UNKNOWN(`'${name}' reassigned`);
       if (assigns.length === 1) {
+        if (!initIsEmpty) return UNKNOWN(`'${name}' reassigned over its initializer`);
         v = await this.ev(assigns[0]!, file, scope);
-      } else if (!initIsEmpty) {
-        v = await this.ev(init!, file, scope);
       } else {
-        v = NIL;
+        v = init && !initIsEmpty ? await this.ev(init, file, scope) : NIL;
       }
-      if (propWrites.length || mutated) {
-        if (v.k !== 'obj') return mutated ? UNKNOWN(`'${name}' mutated`) : v;
-        const out: ObjValue = { ...v, props: new Map(v.props), keyLocs: new Map(v.keyLocs) };
-        if (mutated) out.open = true;
-        const sf = decl.getSourceFile();
-        for (const w of propWrites) {
-          if (w.key === undefined) {
-            out.open = true;
-            continue;
-          }
-          const rhs = w.rhs;
-          out.props.set(w.key, memo(() => this.ev(rhs, file, scope)));
-          out.keyLocs.set(w.key, { file, pos: w.node.getStart(sf) });
-        }
-        return out;
+      if (!props.length) return v;
+      if (v.k !== 'obj') return UNKNOWN(`'${name}' property written on a ${v.k}`);
+      const out: ObjValue = { ...v, props: new Map(v.props), keyLocs: new Map(v.keyLocs) };
+      const sf = decl.getSourceFile();
+      for (const w of props) {
+        const rhs = w.rhs!;
+        out.props.set(w.key!, memo(() => this.ev(rhs, file, scope)));
+        out.keyLocs.set(w.key!, { file, pos: w.node.getStart(sf) });
       }
-      return v;
+      return out;
     } finally {
       this.inProgress.delete(decl);
     }
   }
+
+  /**
+   * Does any parsed file write INTO another module's exports (a property write,
+   * a mutating call or a deep write rooted at a `require(...)` / import binding,
+   * or at `require(...)` itself)? Such a patch can add entries we never see when
+   * reading that module — callers then treat what they read as incomplete.
+   */
+  writesIntoModules(): string | undefined {
+    for (const sf of this.parsedFiles()) {
+      if (sf.fileName.endsWith('.json')) continue;
+      let hit: string | undefined;
+      const isModuleRoot = (root: ts.Expression): boolean => {
+        const r = skipParens(root);
+        if (ts.isCallExpression(r) && ts.isIdentifier(r.expression) && r.expression.text === 'require') return true;
+        if (!ts.isIdentifier(r)) return false;
+        const d = this.findDeclaration(r.text, r);
+        if (d?.kind === 'import') return true;
+        if (d?.kind === 'var' && d.decl.initializer) {
+          const init = skipParens(d.decl.initializer);
+          const call = ts.isCallExpression(init) ? init : undefined;
+          if (call && ts.isIdentifier(call.expression) && call.expression.text === 'require') return true;
+          if (call && call.arguments[0]) {
+            const a0 = skipParens(call.arguments[0]);
+            if (ts.isCallExpression(a0) && ts.isIdentifier(a0.expression) && a0.expression.text === 'require' && INTEROP_NAME.test(calleeText(call.expression) ?? '')) return true;
+          }
+        }
+        return false;
+      };
+      const walk = (n: ts.Node): void => {
+        if (hit) return;
+        this.steps++;
+        let target: ts.Expression | undefined;
+        if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment) target = n.left;
+        else if (ts.isDeleteExpression(n)) target = n.expression;
+        else if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && SELF_MUTATORS.has(n.expression.name.text)) target = n.expression.expression;
+        if (target) {
+          const t = skipParens(target);
+          if ((ts.isPropertyAccessExpression(t) || ts.isElementAccessExpression(t)) && !virtualModuleTarget(t, this)) {
+            if (isModuleRoot(accessRoot(t).root)) {
+              const line = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+              hit = `${sf.fileName}:${line}`;
+              return;
+            }
+          }
+        }
+        ts.forEachChild(n, walk);
+      };
+      walk(sf);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
 }
 
-function destructured(decl: ts.VariableDeclaration, name: string): Declaration {
-  const path = bindingPath(decl.name, name);
-  if (!path || path === 'rest') return { kind: 'opaque', why: 'rest/complex destructuring' };
-  return { kind: 'destructured', decl, path };
+/**
+ * `m.__module.exports` where `m` is bound to `require('…/_virtual/….js')` (rollup's
+ * commonjs module wrapper) → the declaration of `m`; otherwise undefined.
+ */
+function virtualModuleTarget(
+  e: ts.Expression,
+  ev: StaticEvaluator,
+): { decl: ts.VariableDeclaration; key: string | undefined | null } | undefined {
+  let x = skipParens(e);
+  // `m.__module.exports.k` → key k (null when computed); `m.__module.exports` → key undefined
+  let key: string | undefined | null;
+  if ((ts.isPropertyAccessExpression(x) || ts.isElementAccessExpression(x)) && !isExportsAccess(x)) {
+    key = ts.isPropertyAccessExpression(x) ? x.name.text : ts.isStringLiteralLike(x.argumentExpression) ? x.argumentExpression.text : null;
+    x = skipParens(x.expression);
+  }
+  if (!ts.isPropertyAccessExpression(x) || x.name.text !== 'exports') return undefined;
+  const mod = skipParens(x.expression);
+  if (!ts.isPropertyAccessExpression(mod) || mod.name.text !== '__module') return undefined;
+  const root = skipParens(mod.expression);
+  if (!ts.isIdentifier(root)) return undefined;
+  const d = ev.lookup(root.text, root);
+  if (d?.kind !== 'var' || !d.decl.initializer) return undefined;
+  const init = skipParens(d.decl.initializer);
+  if (!ts.isCallExpression(init) || !ts.isIdentifier(init.expression) || init.expression.text !== 'require') return undefined;
+  const spec = init.arguments[0];
+  if (!spec || !ts.isStringLiteralLike(spec) || !/(^|\/)_virtual\//.test(spec.text)) return undefined;
+  return { decl: d.decl, key };
 }
 
-/** Memoize a thunk (each lazy value is computed at most once). */
+/** `….__module.exports` itself (not a property of it). */
+function isExportsAccess(x: ts.Expression): boolean {
+  return ts.isPropertyAccessExpression(x) && x.name.text === 'exports' && ts.isPropertyAccessExpression(skipParens(x.expression)) && (skipParens(x.expression) as ts.PropertyAccessExpression).name.text === '__module';
+}
+
+/** Do two lookups designate the same binding? (lookups build fresh objects, compare their nodes) */
+function sameDeclaration(a: Declaration | undefined, b: Declaration | undefined): boolean {
+  if (!a || !b || a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case 'var':
+    case 'destructured':
+      return a.decl === (b as typeof a).decl;
+    case 'fn':
+      return a.decl === (b as typeof a).decl;
+    case 'param':
+      return a.fn === (b as typeof a).fn && a.index === (b as typeof a).index;
+    case 'import':
+      return a.decl === (b as typeof a).decl && a.imported === (b as typeof a).imported;
+    default:
+      return false;
+  }
+}
+
+/** The name a function expression/arrow is bound to (`const x = () => …`), for helper recognition. */
+function bindingNameOf(fn: ts.Node): string | undefined {
+  let p = fn.parent;
+  while (p && (ts.isParenthesizedExpression(p) || (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.BarBarToken))) p = p.parent;
+  if (p && ts.isVariableDeclaration(p) && ts.isIdentifier(p.name)) return p.name.text;
+  return undefined;
+}
+
+/** The truthiness of a value, when knowable. */
+function truthy(v: Value): boolean | undefined {
+  switch (v.k) {
+    case 'obj':
+    case 'arr':
+    case 'fn':
+    case 'native':
+      return true;
+    case 'nil':
+      return false;
+    case 'bool':
+      return v.v;
+    case 'num':
+      return v.v !== 0;
+    case 'str':
+      return v.v.length > 0;
+    default:
+      return undefined;
+  }
+}
+
+/** Memoize a thunk (computed at most once); re-entry while it runs is a cycle → unknown. */
 function memo(thunk: Lazy): Lazy {
   let p: Promise<Value> | undefined;
-  return () => (p ??= thunk());
+  let running = false;
+  return () => {
+    if (running) return Promise.resolve(UNKNOWN('cycle'));
+    if (p) return p;
+    running = true;
+    p = thunk()
+      .catch(() => UNKNOWN('evaluation error'))
+      .finally(() => {
+        running = false;
+      });
+    return p;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1164,7 +1618,7 @@ export function objKeys(v: Value): string[] | undefined {
   return v.k === 'obj' ? [...v.props.keys()] : undefined;
 }
 
-export async function asStr(ev: StaticEvaluator, v: Value | Promise<Value>): Promise<string | undefined> {
+export async function asStr(_ev: StaticEvaluator, v: Value | Promise<Value>): Promise<string | undefined> {
   const x = await v;
   return x.k === 'str' ? x.v : undefined;
 }

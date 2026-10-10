@@ -40,8 +40,11 @@ anything can’t be followed (a computed export, an `env()`-dependent setting, a
 always were. Without `node_modules`, nothing changes.
 
 This reading is checked against real Strapi in DevKit’s own test suite: on six real
-projects from Strapi 4.13 to 5.54, the plugins, their content-types, services,
-controllers, policies, middlewares and routes matched what Strapi registers.
+projects from Strapi 4.13 to 5.54, every plugin DevKit reads completely matched what
+Strapi registers — content-types, services, controllers, policies, middlewares and
+routes. Plugins whose server depends on the Enterprise edition (content-manager’s
+history feature, content-releases, review-workflows) stay unverified, since what they
+register depends on your licence.
 
 ## Multi-project, v4 and v5
 

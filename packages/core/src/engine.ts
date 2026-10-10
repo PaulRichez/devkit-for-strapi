@@ -252,7 +252,7 @@ class Engine implements StrapiEngine {
     mergeInstalled(index, installed);
     let stamp: string | undefined;
     try {
-      stamp = await installedStamp(this.fs, root, installed?.strapiDir);
+      stamp = await installedStamp(this.fs, root, installed?.strapiDir, installed);
     } catch {
       stamp = undefined;
     }
@@ -334,7 +334,7 @@ class Engine implements StrapiEngine {
     for (const project of [...this.projects]) {
       let stamp: string | undefined;
       try {
-        stamp = await installedStamp(this.fs, project.root, project.installed?.strapiDir);
+        stamp = await installedStamp(this.fs, project.root, project.installed?.strapiDir, project.installed);
       } catch {
         continue;
       }
@@ -356,7 +356,7 @@ class Engine implements StrapiEngine {
     let next = stamp;
     if (next === undefined) {
       try {
-        next = await installedStamp(this.fs, project.root, installed?.strapiDir);
+        next = await installedStamp(this.fs, project.root, installed?.strapiDir, installed);
       } catch {
         next = undefined;
       }
@@ -435,7 +435,9 @@ class Engine implements StrapiEngine {
   }
 
   async getDefinitions(filePath: string, offset: number, sourceText: string): Promise<TargetLocation[]> {
-    await this.refreshInstalledIfStale();
+    // Never block an editor query on a re-read: it runs in the background and the
+    // change listener refreshes the editor when it lands.
+    void this.refreshInstalledIfStale();
     const project = this.projectForFile(filePath);
     if (!project) return [];
     const ctx = analyzeAt(filePath, sourceText, offset);
@@ -458,7 +460,9 @@ class Engine implements StrapiEngine {
   }
 
   async getHover(filePath: string, offset: number, sourceText: string): Promise<HoverInfo | undefined> {
-    await this.refreshInstalledIfStale();
+    // Never block an editor query on a re-read: it runs in the background and the
+    // change listener refreshes the editor when it lands.
+    void this.refreshInstalledIfStale();
     const project = this.projectForFile(filePath);
     if (!project) return undefined;
     const ctx = analyzeAt(filePath, sourceText, offset);
@@ -471,7 +475,9 @@ class Engine implements StrapiEngine {
   }
 
   async getCompletions(filePath: string, offset: number, sourceText: string): Promise<CompletionResult> {
-    await this.refreshInstalledIfStale();
+    // Never block an editor query on a re-read: it runs in the background and the
+    // change listener refreshes the editor when it lands.
+    void this.refreshInstalledIfStale();
     const project = this.projectForFile(filePath);
     if (!project) return { items: [] };
     const ctx = analyzeAt(filePath, sourceText, offset);
@@ -485,14 +491,18 @@ class Engine implements StrapiEngine {
   }
 
   async validateFile(filePath: string, sourceText: string): Promise<DiagnosticEntry[]> {
-    await this.refreshInstalledIfStale();
+    // Never block an editor query on a re-read: it runs in the background and the
+    // change listener refreshes the editor when it lands.
+    void this.refreshInstalledIfStale();
     const project = this.projectForFile(filePath);
     if (!project) return [];
     return validateDocument(project, filePath, sourceText);
   }
 
   async getReferences(filePath: string, offset: number, sourceText: string): Promise<ReferenceLocation[]> {
-    await this.refreshInstalledIfStale();
+    // Never block an editor query on a re-read: it runs in the background and the
+    // change listener refreshes the editor when it lands.
+    void this.refreshInstalledIfStale();
     const project = this.projectForFile(filePath);
     if (!project) return [];
     const norm = normalize(filePath);
@@ -522,7 +532,9 @@ class Engine implements StrapiEngine {
   }
 
   async getCodeLenses(filePath: string, _sourceText: string): Promise<CodeLensEntry[]> {
-    await this.refreshInstalledIfStale();
+    // Never block an editor query on a re-read: it runs in the background and the
+    // change listener refreshes the editor when it lands.
+    void this.refreshInstalledIfStale();
     // Avoid flashing wrong "0 references" while the reference index is building.
     if (this.buildingRefs) return [];
     const project = this.projectForFile(filePath);

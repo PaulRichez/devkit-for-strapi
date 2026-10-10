@@ -72,7 +72,7 @@ async function declarationOf(ev: StaticEvaluator, v: Value): Promise<PluginDecla
   return out;
 }
 
-export async function readPluginsConfig(fs: FileSystem, root: string, ev = new StaticEvaluator(fs)): Promise<PluginsConfig> {
+export async function readPluginsConfig(fs: FileSystem, root: string, ev = new StaticEvaluator(fs, { roots: [root] })): Promise<PluginsConfig> {
   const declarations = new Map<string, PluginDeclaration>();
   let exhaustive = true;
   const file = await firstExisting(fs, join(root, 'config', 'plugins'));

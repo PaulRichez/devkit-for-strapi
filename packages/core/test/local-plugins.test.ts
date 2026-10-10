@@ -64,6 +64,18 @@ describe('local plugins', () => {
     expect(diags).toEqual([]);
   });
 
+  it('a v4 plugin (server/index.js) is not shadowed by an unrelated server/src folder', async () => {
+    const fs = new MemoryFileSystem({
+      [`${ROOT}/package.json`]: JSON.stringify({ dependencies: { '@strapi/strapi': '4.25.0' } }),
+      [`${ROOT}/src/plugins/legacy/server/index.js`]: `module.exports = { services: require('./services') };`,
+      [`${ROOT}/src/plugins/legacy/server/services/report.js`]: `module.exports = () => ({ run() {} });`,
+      [`${ROOT}/src/plugins/legacy/server/src/notes.md.js`]: `// unrelated`,
+    });
+    const engine = createEngine(fs);
+    await engine.init([ROOT]);
+    expect(validateRef(engine.allProjects()[0]!, 'plugin::legacy.report').status).toBe('valid');
+  });
+
   it('stays silent on a content-type aggregator it cannot read exhaustively', async () => {
     const engine = createEngine(
       app({ [`${PLUGIN}/server/src/content-types/index.ts`]: `import extra from 'some-lib';\nexport default { ...extra };` }),

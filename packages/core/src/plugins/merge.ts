@@ -77,7 +77,7 @@ export function clearInstalled(index: StrapiIndex): void {
   delete index.frameworkMiddlewares;
 }
 
-const LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb', 'npm-shrinkwrap.json'];
+const LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb', 'bun.lock', 'npm-shrinkwrap.json'];
 /** Files every package manager rewrites inside `node_modules` on install. */
 const INSTALL_MARKERS = ['.package-lock.json', '.yarn-integrity', '.modules.yaml', '.yarn-state.yml'];
 const CONFIG_FILES = ['plugins', 'api'].flatMap((b) => ['.ts', '.js', '.mjs', '.cjs'].map((e) => `${b}${e}`));
@@ -88,9 +88,21 @@ const CONFIG_FILES = ['plugins', 'api'].flatMap((b) => ['.ts', '.js', '.mjs', '.
  * into node_modules, the plugins/api config, and the config/env + extensions
  * folders. Stats only (no reads). Changes ⇒ re-read the plugins.
  */
-export async function installedStamp(fs: FileSystem, root: string, strapiDir: string | undefined): Promise<string> {
+export async function installedStamp(
+  fs: FileSystem,
+  root: string,
+  strapiDir: string | undefined,
+  installed?: InstalledPluginsResult,
+): Promise<string> {
   const paths = [join(root, 'package.json'), ...LOCKFILES.map((l) => join(root, l))];
   paths.push(...CONFIG_FILES.map((f) => join(root, 'config', f)), join(root, 'config', 'env'), join(root, 'src', 'extensions'));
+  // src/index can rewrite plugins at register time.
+  for (const ext of ['ts', 'js', 'mjs', 'cjs']) paths.push(join(root, 'src', `index.${ext}`));
+  for (const p of installed?.plugins ?? []) {
+    // A rebuilt workspace-linked plugin rewrites its entry; an extension entry point can appear in an existing folder.
+    if (p.entry) paths.push(p.entry);
+    for (const ext of ['js', 'ts', 'mjs', 'cjs']) paths.push(join(root, 'src', 'extensions', p.name, `strapi-server.${ext}`));
+  }
   if (strapiDir) {
     const nodeModules = dirname(dirname(strapiDir)); // <nm>/@strapi/strapi → <nm>
     paths.push(join(strapiDir, 'package.json'), ...INSTALL_MARKERS.map((m) => join(nodeModules, m)));

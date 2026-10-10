@@ -14,8 +14,10 @@
   methods. A plugin DevKit can't read completely stays silent, as before.
 - Strapi's built-in middlewares are checked in `config/middlewares`: `strapi::corss`
   gets "did you mean `strapi::cors`".
-- Checked against real Strapi: on six projects from 4.13 to 5.54, the plugins and
-  everything they register matched exactly.
+- Checked against real Strapi: on six projects from 4.13 to 5.54, every plugin DevKit
+  reads completely matched exactly what Strapi registers. Plugins whose server depends
+  on the Enterprise edition (content-manager's history, content-releases,
+  review-workflows) stay unverified.
 - Installing a plugin is picked up without a reload, through the files npm, yarn and
   pnpm rewrite on install.
 
