@@ -20,13 +20,16 @@ failing build, in CI, or on Strapi v4.
 
 ## Tools
 
-32 stdio tools (plus 2 deprecated aliases) in three layers. The **read/analyse** tools are free except the data-model diagram; the **refactor** tools are Pro (without a licence they return a "Pro required" upsell).
+35 stdio tools (plus 2 deprecated aliases) in four layers. The **read/analyse** tools are free except the data-model diagram; the **config-sync runtime** and **refactor** tools are Pro (without a licence they return a "Pro required" upsell).
 
 **Know** — the project's truth *(free)*
 `server_info` (version, licence tier, which tools actually run) · `list_projects` · `project_info` (versions, plugins verified or not and why, counts, health) · `list_content_types` · `list_components` · `list_artifacts` · `get_schema` · `resolve` · `validate_reference` · `find_references` · `list_routes` (filters, and a route's pipeline in Strapi's order: middlewares, auth, policies, handler) · `refresh`
 
 **Understand** — health & impact *(free)*
 `list_unused` (dead code) · `list_broken_refs` · `coverage` · `find_relation_usages` · `list_refs` (glob) · `dependencies` / `dependents` (the dependency graph) · `config_sync_status` (with strapi-plugin-config-sync: its options and its files) · `get_model_diagram` (the data model as a Mermaid `erDiagram` — Pro)
+
+**Config sync through your Strapi** *(Pro)*
+`config_sync_diff` (the real diff between config/sync and the database, from config-sync itself) · `config_sync_export` · `config_sync_import`. They load the project's own Strapi the way the plugin's CLI does — they run its code, on a local development database only.
 
 **Refactor** — plan → review → apply *(Pro)*
 `plan_rename_method` / `plan_rename_entity` · `plan_move` / `plan_move_entities` · `plan_change_relation` · `plan_rename_attribute` · `create_plugin` · `extract_to_plugin`, then `apply_edits` / `apply_rename`. Every refactor returns a reviewable, fingerprinted plan; applying is root-confined and transactional.

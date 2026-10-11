@@ -27,6 +27,11 @@ through your AI agent.
   plugin types, media and Strapi's own fields on demand; export as Markdown
   (Mermaid `erDiagram`), PNG or SVG. Your agent gets the same Mermaid with the
   `get_model_diagram` MCP tool.
+- **Config Sync through your Strapi** — the real diff between `config/sync` and the
+  database, from config-sync itself (your project's Strapi, loaded the way the
+  plugin's CLI does), and export or import entry by entry, in VS Code's diff editor
+  and for your agent (`config_sync_diff`, `config_sync_export`, `config_sync_import`).
+  Only on a local development database. See [Config Sync](/config-sync/).
 - **Safe apply** — every change is a contractual plan, applied by an executor
   that is root-confined (symlink-resolved), refuses silent overwrites, verifies
   content fingerprints before writing (anti-TOCTOU), is best-effort

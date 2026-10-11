@@ -115,6 +115,11 @@ config-sync options and files) · `get_model_diagram` (the data
 model as a Mermaid `erDiagram`, Pro). `list_routes` also explains a route: what a request goes through,
 in Strapi's order.
 
+**Config sync through your Strapi** — Pro
+`config_sync_diff` (the real diff between config/sync and the database, from config-sync itself) ·
+`config_sync_export` · `config_sync_import`: the project's own Strapi, loaded the way the plugin's CLI does,
+on a local development database only.
+
 **Refactor** — plan → review → apply
 `plan_rename_method` / `plan_rename_entity` · `plan_move` / `plan_move_entities` · `plan_change_relation` ·
 `plan_rename_attribute` · `create_plugin` · `extract_to_plugin`, then `apply_edits` / `apply_rename`.

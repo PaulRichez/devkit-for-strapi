@@ -65,3 +65,63 @@ config-sync can't read is also an error in the file. Other views link to it:
   written with the database.
 - `list_routes` with `pipeline: true` adds the roles of `config/sync` that allow each
   route (`syncedRoles`).
+
+## Pro — through your Strapi
+
+With Pro, DevKit asks **config-sync itself**: it loads your project's own Strapi the
+way the plugin's CLI does — no server, no port, no admin account — and calls the
+plugin. The answers are the plugin's, whatever the versions of Strapi and config-sync.
+Checked on Strapi 5.54 with config-sync 3.2.0 (JavaScript and TypeScript) and on
+Strapi 4.26 with 1.2.6 (JavaScript), on SQLite.
+
+- **Compare with the database**: the diff config-sync's admin page shows — each
+  entry *different*, *only in the database* or *only in config/sync*, with what
+  differs in a few words. A click opens VS Code's diff editor: the database on the
+  left, the file on the right. What a start of Strapi changes on its own is in it (a
+  new field in a content-manager view, the super-admin's permissions…): after a
+  change to a schema, a controller or a route, these are the entries to export.
+- **Export** entry by entry, a selection, or every difference: the plugin's own
+  export, the exact form it compares — so the files stop showing as different.
+- **Import** entry by entry or from a list, never everything blindly. The
+  confirmation says, for each entry, whether it is updated, created or deleted in
+  the database. Afterwards, the entries still different are exported back: the
+  database has just applied them, so what differs is its own form of them (a
+  generated `documentId`…), and the diff converges.
+- **For your agent**: `config_sync_diff`, `config_sync_export`, `config_sync_import`.
+  The loop: change the code, `config_sync_diff`, export the entries the change
+  caused, commit them with the code. To change a role or a content-manager view:
+  edit its file, import it, and the plugin writes it back in its own form.
+
+### What it runs, and what it refuses
+
+Loading the project runs its code (its `register()`, its plugins), and does to the
+database what a start of `strapi develop` does: the schema follows the code, pending
+migrations run. So:
+
+- it only runs in a **trusted workspace**, after you agree once per project;
+- it only loads Strapi on a **local development database** (localhost, a socket, a
+  SQLite file in the project) — unless you allow remote ones explicitly;
+- it **refuses**, before anything runs: a SQLite file that doesn't exist (Strapi would
+  create a new, empty one), a Strapi 4 database under Strapi 5 code (DevKit never runs
+  the 4 → 5 migration, which can't be undone), an import with `NODE_ENV=production`,
+  and an export from a database with no Strapi table yet (it would write a fresh
+  install's defaults into `config/sync`);
+- it warns when a Strapi server already answers on the same SQLite database.
+
+When a load fails, DevKit says at which step (compiling, loading the code, checking
+the database, starting Strapi), with Strapi's or the plugin's own message, its last
+output, and what to do.
+
+### Settings
+
+| Setting | Default | |
+|---|---|---|
+| `strapiDevkit.runtime.nodePath` | `node` on the PATH | The Node your project's dependencies were installed with (native modules are built for it). User settings only. |
+| `strapiDevkit.runtime.timeoutSeconds` | 180 | A first TypeScript compilation can take over a minute. |
+| `strapiDevkit.configSync.environment` | `development` | `NODE_ENV` of the load. |
+| `strapiDevkit.configSync.envPath` | the project's `.env` | The `.env` Strapi loads. |
+| `strapiDevkit.configSync.allowRemoteDatabase` | off | Load Strapi on a database that is not on this machine. |
+
+The bundled MCP server uses the same settings. A standalone one reads `DEVKIT_NODE`,
+`DEVKIT_CONFIG_SYNC_ENV`, `DEVKIT_CONFIG_SYNC_ENV_PATH`, `DEVKIT_ALLOW_REMOTE_DATABASE=1`
+and `DEVKIT_RUNTIME_TIMEOUT_S`.

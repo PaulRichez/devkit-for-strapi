@@ -72,6 +72,25 @@
 - MCP: `config_sync_status`; `project_info` says when a project uses config-sync;
   `list_routes` with `pipeline: true` adds the synced roles on the auth step.
 
+**New, Pro: Config Sync through your Strapi**
+
+- The real diff between `config/sync` and the database, from config-sync itself:
+  DevKit loads your project's own Strapi the way the plugin's CLI does (no server,
+  no port, no admin account) and asks the plugin — whatever the versions of Strapi
+  and config-sync. A **Database** section in the Config Sync view; a click opens
+  VS Code's diff editor, the database on the left.
+- Export and import entry by entry, with a confirmation saying what each one does
+  (updated, created, deleted); after an import, the entries still different are
+  exported back in the database's own form, so the diff converges.
+- MCP: `config_sync_diff`, `config_sync_export`, `config_sync_import`, and the loop
+  in the server's instructions: change the code, diff, export what the change
+  caused, commit it with the code.
+- Only in a trusted workspace, after your agreement, on a local development
+  database. Refused before anything runs: a missing SQLite file, a Strapi 4 database
+  under Strapi 5 code, an import in production, an export from an empty database.
+- Checked against the plugin itself on Strapi 5.54 (JavaScript and TypeScript) and
+  4.26 (JavaScript), on SQLite.
+
 **Routes: what Strapi really does with names**
 
 - Policy and middleware names are checked the way Strapi looks them up (read in
