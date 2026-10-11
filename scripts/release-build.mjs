@@ -137,6 +137,10 @@ step('2b', 'Checking the MCP registry manifest is in step…');
         `Update every "version" in server.json, or the MCP registry will advertise a stale release.`,
     );
   }
+  // The registry refuses a longer description (422) — found at publish time otherwise.
+  if (typeof manifest.description !== 'string' || manifest.description.length > 100) {
+    die(`packages/mcp/server.json: the description must be 100 characters at most (the MCP registry refuses it); it has ${String(manifest.description ?? '').length}.`);
+  }
   log(`  ✓ server.json matches package.json (${pkgVersion})`);
 }
 
@@ -276,6 +280,9 @@ if (FREE) {
   console.log(`    file        : ${vsixPath}\n`);
   console.log(`  MCP server — npm has no upload page, so this one stays CLI:`);
   console.log(`    cd "${mcpDir}" && npm publish "${tgz[0]}" --access public\n`);
+  console.log(`  MCP registry (registry.modelcontextprotocol.io) — after npm, from the repo's packages/mcp`);
+  console.log(`  (it reads server.json; mcp-publisher: github.com/modelcontextprotocol/registry/releases):`);
+  console.log(`    mcp-publisher login github && mcp-publisher publish\n`);
   console.log(`  (CLI equivalents for the extension, if needed:`);
   console.log(`     npx vsce publish --packagePath "${vsix[0]}"`);
   console.log(`     npx ovsx publish "${vsix[0]}" -p <OPEN_VSX_TOKEN>)\n`);
