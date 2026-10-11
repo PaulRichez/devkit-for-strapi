@@ -12,9 +12,12 @@ checked once against the Polar licensing API, then DevKit works offline.
 
 ## Does it run my project’s code?
 
-No. DevKit reads files, including the installed plugins in `node_modules`, and
-follows their code **statically**. It never starts Strapi, never executes a plugin,
-and never touches your database.
+Not unless you ask it to, with Pro. DevKit reads files, including the installed
+plugins in `node_modules`, and follows their code **statically**: it doesn't start
+Strapi, execute a plugin or touch your database. The one exception is Pro's
+[Config Sync through your Strapi](/config-sync/#pro--through-your-strapi): when you
+compare, export or import, it loads your project's Strapi the way config-sync's own
+CLI does — on a local development database only.
 
 ## Strapi v4 or v5?
 

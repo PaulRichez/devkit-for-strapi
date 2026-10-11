@@ -3,9 +3,10 @@ title: MCP tool reference
 description: Every MCP tool an AI agent can call — read, analyse, and refactor a Strapi project with verified, real values.
 ---
 
-The MCP server exposes **31 stdio tools** (29 active + 2 deprecated aliases) so an AI agent works from your project's
-**real values** instead of grepping for them. Three layers: **Know** (read the truth),
-**Understand** (health & graph), **Refactor** (plan → review → apply).
+The MCP server exposes **37 stdio tools** (35 active + 2 deprecated aliases) so an AI agent works from your project's
+**real values** instead of grepping for them. Four layers: **Know** (read the truth),
+**Understand** (health & graph), **Config sync through your Strapi** (Pro), **Refactor**
+(plan → review → apply).
 
 See [For your AI agent (MCP)](/mcp/) for setup. In VS Code, Cursor, Windsurf and
 Antigravity the server is bundled and auto-registered — no config.

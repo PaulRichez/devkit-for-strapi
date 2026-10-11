@@ -86,7 +86,10 @@ and PostgreSQL) and on Strapi 4.26 with 1.2.6 (JavaScript, on SQLite).
   confirmation says, for each entry, whether it is updated, created or deleted in
   the database. Afterwards, the entries still different are exported back: the
   database has just applied them, so what differs is its own form of them (a
-  generated `documentId`…), and the diff converges. With config-sync's `soft` option,
+  generated `documentId`…), and the diff converges. What you confirmed is checked again
+  when it runs: an entry whose state changed since the comparison (a checkout deleted
+  its file, and importing it would now delete it from the database) is left alone,
+  and said. With config-sync's `soft` option,
   the plugin leaves the entries already in the database as they are: DevKit says
   which, and keeps their files.
 - **For your agent**: `config_sync_diff`, `config_sync_export`, `config_sync_import`.
@@ -115,11 +118,13 @@ Loading the project runs its code (its `register()`, its plugins), and does to t
 database what a start of `strapi develop` does: the schema follows the code, pending
 migrations run. So:
 
-- it only runs in a **trusted workspace**, after you agree once per project;
+- in VS Code, it only runs in a **trusted workspace**, after you agree once per
+  project; for an agent, the tools say they run the project's code, the import is
+  marked destructive, and each call goes through your MCP client's tool approval;
 - it only loads Strapi on a **local development database** (localhost, a socket, a
   SQLite file in the project; a database URL such as `DATABASE_URL` is judged by the
   host it points to) — unless you allow remote ones explicitly;
-- it **refuses**, before anything runs: a SQLite file that doesn't exist (Strapi would
+- it **refuses**, before Strapi's bootstrap — where it writes to the database: a SQLite file that doesn't exist (Strapi would
   create a new, empty one), a Strapi 4 database under Strapi 5 code (DevKit never runs
   the 4 → 5 migration, which can't be undone), an import when `NODE_ENV` is
   `production` (for the load, where DevKit runs, or in the project's `.env`), and an

@@ -95,7 +95,7 @@ Inside a Strapi project — zero config, no type generation:
 
 The same engine, exposed over the [Model Context Protocol](https://modelcontextprotocol.io) so coding
 agents (Claude Code, Copilot agent mode, Cursor, …) **query your project's real values instead of
-grepping for them**. 31 stdio tools (plus 2 deprecated aliases), in three layers.
+grepping for them**. 35 stdio tools (plus 2 deprecated aliases), in four layers.
 
 > **Not Strapi's own MCP server** — they do different jobs. Strapi's
 > [official MCP](https://docs.strapi.io/cms/features/strapi-mcp-server) acts on your **content**

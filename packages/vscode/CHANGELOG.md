@@ -92,8 +92,9 @@
   `strapiDevkit.configSync.followRefactors` (a `config/sync` exported from another
   environment): plans then leave those files and say which still use the old names.
   An agent chooses per call with `configSync`. Nothing is imported without you.
-- Only in a trusted workspace, after your agreement, on a local development
-  database. Refused before anything runs: a missing SQLite file, a Strapi 4 database
+- In VS Code, only in a trusted workspace, after your agreement; for an agent,
+  through your MCP client's tool approval. Only on a local development database.
+  Refused before Strapi's bootstrap (where it writes to the database): a missing SQLite file, a Strapi 4 database
   under Strapi 5 code, an import in production, an export from an empty database.
 - Checked against the plugin itself on Strapi 5.54 (JavaScript and TypeScript, on
   SQLite and PostgreSQL) and 4.26 (JavaScript, on SQLite).
