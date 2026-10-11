@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_EXCLUDED_CONFIG, detectConfigSync } from '../src/configSync/detect';
 import { configSyncLabel } from '../src/configSync/labels';
+import { configSyncPlanNote, syncFilesInPlan } from '../src/configSync/planNote';
 import { routeAccessForRoute, routeAccessInSync } from '../src/configSync/routeAccess';
 import { configSyncStatus } from '../src/configSync/status';
 import { escapeName, readSyncDir, unescapeName } from '../src/configSync/syncDir';
@@ -120,6 +121,20 @@ describe('config-sync, read from the files', () => {
   it('is undefined when config-sync is not used', async () => {
     const { fs, project } = await load({ [`${ROOT}/package.json`]: j({ dependencies: v5 }), ...STRAPI_5 });
     expect(await configSyncStatus(fs, project)).toBeUndefined();
+  });
+
+  it("says when a refactor plan edits sync files: they reach the database only through an import", async () => {
+    const { fs, project } = await load(FILES);
+    const at = { line: 0, character: 0 };
+    const code = { filePath: `${ROOT}/src/api/article/controllers/article.ts`, start: at, end: at, newText: '' };
+    const role = { ...code, filePath: `${SYNC}/user-role.public.json` };
+    const view = { from: `${SYNC}/core-store.plugin_content_manager_configuration_content_types##api##article.article.json`, to: `${SYNC}/core-store.x.json` };
+    expect(syncFilesInPlan(SYNC, { textEdits: [code, role, role], fileRenames: [view] })).toEqual([role.filePath, view.from]);
+    expect(syncFilesInPlan(`${ROOT}/config/syn`, { textEdits: [role], fileRenames: [] })).toEqual([]);
+    expect(await configSyncPlanNote(fs, project, { textEdits: [code], fileRenames: [] })).toBeUndefined();
+    const note = await configSyncPlanNote(fs, project, { textEdits: [role], fileRenames: [view] });
+    expect(note).toMatch(/^config\/sync: this plan also updates 2 files/);
+    expect(note).toContain('config_sync_import');
   });
 });
 

@@ -121,6 +121,7 @@ export {
 export { escapeName, parseSyncFileName, readSyncDir, syncFileName, unescapeName, type SyncFileEntry, type SyncFileStatus } from './configSync/syncDir';
 export { CM_COMPONENT_PREFIX, CM_CT_PREFIX, configSyncLabel, type ConfigSyncGroup, type ConfigSyncLabel } from './configSync/labels';
 export { routeAccessForRoute, routeAccessInSync, type RouteRoleAccess } from './configSync/routeAccess';
+export { configSyncPlanNote, syncFilesInPlan } from './configSync/planNote';
 export { modelOf, type ModelComponent, type ModelContentType, type ModelField, type ModelIncoming, type ProjectModel } from './query/model';
 export { devkitNameCandidates, lookupStrapiName, ownerOf, strapiNameCandidates, type NameLookup, type RouteOwner } from './resolve/strapiNames';
 export { movedUid, refKind, renamedUid, storedUidWarnings, type ActionChange, type RefKind, type UidChange } from './edit/storedUids';
