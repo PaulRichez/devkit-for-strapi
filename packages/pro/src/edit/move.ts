@@ -9,13 +9,15 @@ const PRO_ONLY =
 
 /** One artifact/entity to relocate. */
 export interface MoveSpec {
+  /** The ref to move: an artifact (`plugin::src.helper`) or a content-type (`api::x.x`). */
   ref: string;
-  toNamespace?: string;
-  allowNewNamespace?: boolean;
+  /** Destination namespace: `plugin::dst` or `api::foo`. */
+  toNamespace: string;
 }
 
 export interface MoveOptions {
-  [key: string]: unknown;
+  /** Allow a destination namespace with no existing artifacts yet (extract_to_plugin). */
+  allowNewNamespace?: boolean;
 }
 
 /** The move plan (or its errors). */

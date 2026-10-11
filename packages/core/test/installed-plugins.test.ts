@@ -8,9 +8,9 @@ import { readInstalledPlugins } from '../src/plugins/installed';
 const ROOT = '/app';
 
 /** A Strapi 5 app whose plugins are compiled the way rollup ships @strapi/* (per-file CJS + `__require` wrappers). */
-function v5App(extra: Record<string, string> = {}): MemoryFileSystem {
+function v5Files(extra: Record<string, string> = {}): Record<string, string> {
   const nm = `${ROOT}/node_modules`;
-  return new MemoryFileSystem({
+  return {
     [`${ROOT}/package.json`]: JSON.stringify({
       name: 'app',
       dependencies: { '@strapi/strapi': '5.10.0', '@strapi/plugin-users-permissions': '5.10.0', 'left-pad': '1.0.0' },
@@ -119,6 +119,56 @@ module.exports = ({ strapi }) => ({ issue() {}, verify() {} });`,
     // a non-plugin dependency
     [`${nm}/left-pad/package.json`]: JSON.stringify({ name: 'left-pad', version: '1.0.0' }),
     ...extra,
+  };
+}
+
+function v5App(extra: Record<string, string> = {}): MemoryFileSystem {
+  return new MemoryFileSystem(v5Files(extra));
+}
+
+/** Links resolved like the disk does (pnpm's node_modules/<dep> → node_modules/.pnpm/…/<dep>). */
+class LinkedFs extends MemoryFileSystem {
+  constructor(
+    files: Record<string, string>,
+    private readonly links: Record<string, string>,
+  ) {
+    super(files);
+  }
+  private real(p: string): string {
+    for (const [link, target] of Object.entries(this.links)) if (p === link || p.startsWith(`${link}/`)) return target + p.slice(link.length);
+    return p;
+  }
+  override readFile(p: string) {
+    return super.readFile(this.real(p));
+  }
+  override readDirectory(p: string) {
+    return super.readDirectory(this.real(p));
+  }
+  override stat(p: string) {
+    return super.stat(this.real(p));
+  }
+  override exists(p: string) {
+    return super.exists(this.real(p));
+  }
+  async realpath(p: string): Promise<string> {
+    return this.real(p);
+  }
+}
+
+/** The same app installed by pnpm (isolated layout): only the direct dependencies are linked at the root. */
+function v5PnpmApp(): LinkedFs {
+  const nm = `${ROOT}/node_modules`;
+  const store = `${nm}/.pnpm/@strapi+strapi@5.10.0/node_modules`;
+  const up = `${nm}/.pnpm/@strapi+plugin-users-permissions@5.10.0/node_modules`;
+  const files: Record<string, string> = {};
+  for (const [path, text] of Object.entries(v5Files())) {
+    if (path.startsWith(`${nm}/@strapi/plugin-users-permissions/`)) files[up + path.slice(nm.length)] = text;
+    else if (path.startsWith(`${nm}/@strapi/`)) files[store + path.slice(nm.length)] = text; // strapi, core and the built-ins side by side
+    else files[path] = text;
+  }
+  return new LinkedFs(files, {
+    [`${nm}/@strapi/strapi`]: `${store}/@strapi/strapi`,
+    [`${nm}/@strapi/plugin-users-permissions`]: `${up}/@strapi/plugin-users-permissions`,
   });
 }
 
@@ -130,6 +180,14 @@ async function engineFor(fs: MemoryFileSystem) {
 }
 
 describe('installed plugins — static reading', () => {
+  it("pnpm's isolated layout: Strapi's built-in plugins are found next to its real folder", async () => {
+    const res = await readInstalledPlugins(v5PnpmApp(), ROOT);
+    expect(res?.strapiVersion).toBe('5.10.0');
+    const names = res!.plugins.map((p) => p.name).sort();
+    expect(names).toEqual(['upload', 'users-permissions']);
+    expect(res!.plugins.find((p) => p.name === 'upload')).toMatchObject({ origin: 'internal', complete: true });
+  });
+
   it('reads internal (rollup) and dependency (source) plugins exhaustively', async () => {
     const res = await readInstalledPlugins(v5App(), ROOT);
     expect(res?.strapiVersion).toBe('5.10.0');

@@ -144,6 +144,15 @@ describe('config_sync_status, and config-sync in project_info and list_routes', 
     } finally {
       delete process.env.DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS;
     }
+    // VS Code's per-folder setting: the folders that turned it off.
+    process.env.DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS_OFF = JSON.stringify(['C:\\cs']);
+    try {
+      expect(touched(await plan({}))).not.toContain(role);
+      process.env.DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS_OFF = JSON.stringify(['c:/other']);
+      expect(touched(await plan({}))).toContain(role);
+    } finally {
+      delete process.env.DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS_OFF;
+    }
   });
 
   it('says plainly when config-sync is not used', async () => {

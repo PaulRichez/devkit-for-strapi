@@ -3,6 +3,7 @@ import {
   FileType as CoreFileType,
   type FileSystem,
 } from 'devkit-for-strapi-core';
+import { realpath } from 'node:fs/promises';
 import * as vscode from 'vscode';
 
 const decoder = new TextDecoder('utf-8');
@@ -43,5 +44,10 @@ export class VscodeFileSystem implements FileSystem {
 
   async exists(path: string): Promise<boolean> {
     return (await this.stat(path)) !== null;
+  }
+
+  /** The real path behind links (pnpm's node_modules, workspace links), as the MCP server's file system gives it. */
+  async realpath(path: string): Promise<string> {
+    return (await realpath(path)).replace(/\\/g, '/');
   }
 }

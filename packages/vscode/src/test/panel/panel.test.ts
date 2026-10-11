@@ -153,6 +153,15 @@ suite('DevKit panel', () => {
     }
   });
 
+  test('pro: rename a field from the Model view (the schema plan, with config/sync following)', async function () {
+    const m = views.model as AnyProvider;
+    const article = await child(m, await child(m, undefined, 'Content-types'), 'Article');
+    const title = await child(m, await child(m, article, 'Fields'), 'title');
+    const edit = await dryRun(this, 'strapiDevkit.refactor.renameField', title, { newName: 'headline' });
+    assert.ok(edit.textEdits.some((e) => e.filePath.endsWith('schema.json') && e.newText.includes('headline')), JSON.stringify(edit.textEdits.map((e) => e.filePath)));
+    assert.deepStrictEqual(edit.fileRenames, []);
+  });
+
   test('pro: rename a controller action from its route pipeline', async function () {
     const r = views.routes as AnyProvider;
     const publish = await child(r, await child(r, await child(r, undefined, 'API'), 'article'), 'POST /api/articles/:id/publish');

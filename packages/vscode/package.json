@@ -568,12 +568,12 @@
         },
         {
           "command": "strapiDevkit.plugins.openConfig",
-          "when": "view == strapiDevkit.plugins && viewItem =~ /^strapiPlugin/",
+          "when": "view == strapiDevkit.plugins && viewItem =~ /^strapiPlugin\\.(local|installed)$/",
           "group": "1_plugin@1"
         },
         {
           "command": "strapiDevkit.plugins.openEntry",
-          "when": "view == strapiDevkit.plugins && viewItem =~ /^strapiPlugin/",
+          "when": "view == strapiDevkit.plugins && viewItem =~ /^strapiPlugin\\.(local|installed)$/",
           "group": "1_plugin@2"
         },
         {

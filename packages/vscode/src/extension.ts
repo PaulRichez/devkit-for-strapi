@@ -116,12 +116,25 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
   const healthView = registerHealthView(context, engine, fs, configSync);
   const configSyncDb = new ConfigSyncDb(context, license.isLicensed);
   const configSyncView = registerConfigSyncView(context, engine, configSync, configSyncDb);
-  registerConfigSyncDb(context, configSyncDb, (node) => {
+  registerConfigSyncDb(context, configSyncDb, async (node) => {
     const root = typeof node === 'string' ? node : (node as { root?: string } | undefined)?.root;
     if (root) return root;
-    // From the palette: the active editor's project, else the first one.
+    // From the palette (or a view button with nothing selected): a project that uses config-sync —
+    // the active editor's when it does, the only one, else ask. Never another project's code.
+    const roots = (await configSync.all()).map((x) => paths.normalize(x.root));
+    if (!roots.length) {
+      void vscode.window.showInformationMessage('DevKit for Strapi: no project in this workspace uses strapi-plugin-config-sync.');
+      return undefined;
+    }
     const active = vscode.window.activeTextEditor?.document.uri.fsPath;
-    return (active ? engine.projectForFile(paths.normalize(active))?.root : undefined) ?? engine.allProjects()[0]?.root;
+    const mine = active ? engine.projectForFile(paths.normalize(active))?.root : undefined;
+    if (mine && roots.includes(paths.normalize(mine))) return mine;
+    if (roots.length === 1) return roots[0];
+    const pick = await vscode.window.showQuickPick(
+      roots.map((r) => ({ label: paths.basename(r), description: r, root: r })),
+      { title: 'Config Sync: which project?' },
+    );
+    return pick?.root;
   });
   const configSyncDiagnostics = registerConfigSyncDiagnostics(context, configSync);
   const pluginsView = registerPluginsView(context, engine, fs, routesView);

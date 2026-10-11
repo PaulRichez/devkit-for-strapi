@@ -27,6 +27,7 @@ export {
   type ConfigSyncDbState,
   type ConfigSyncDiffData,
   type ConfigSyncWriteData,
+  type ConfigSyncWriteOptions,
 } from './config-sync/runtime';
 export type { DatabaseTarget, RuntimeErrorKind, RuntimeFailure, RuntimeOptions, RuntimeResult, RuntimeStep, RuntimeSuccess, RuntimeTimings } from './runtime/types';
 export { runtimeHint } from './runtime/hints';

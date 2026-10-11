@@ -46,6 +46,14 @@ export function diagramOf(project: StrapiProject, projects: readonly StrapiProje
   if (edges.some((e) => e.kind === 'media') && !nodes.some((n) => n.id === UPLOAD_FILE)) {
     nodes.push({ id: UPLOAD_FILE, label: 'File', kind: 'collectionType', origin: 'strapi', fields: 0, attrs: [] });
   }
+  // A relation to a type that wasn't read (a plugin's, before node_modules is installed; admin::user;
+  // a broken target): the target stands as a node of its own, so the field isn't lost from the diagram.
+  const known = new Set(nodes.map((n) => n.id));
+  for (const e of edges) {
+    if (e.kind !== 'relation' || known.has(e.to)) continue;
+    known.add(e.to);
+    nodes.push({ id: e.to, label: e.to, kind: 'collectionType', origin: 'strapi', fields: 0, attrs: [], partial: true });
+  }
   return {
     root: project.root,
     project: basename(project.root),

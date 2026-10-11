@@ -307,6 +307,24 @@ describe('the data-model diagram (shared by the editor, its exports and the MCP)
     expect(rows).toEqual(['createdAt', 'updatedAt', 'publishedAt']); // Strapi 5: publishedAt always
   });
 
+  it("keeps a relation to a type that wasn't read: its target stands as a node", async () => {
+    const engine = createEngine(
+      new MemoryFileSystem({
+        ...FILES,
+        [`${ROOT}/src/api/article/content-types/article/schema.json`]: JSON.stringify({
+          kind: 'collectionType',
+          info: { singularName: 'article', pluralName: 'articles', displayName: 'Article' },
+          attributes: { title: { type: 'string' }, owner: { type: 'relation', relation: 'manyToOne', target: 'plugin::users-permissions.user' } },
+        }),
+      }),
+    );
+    await engine.init([ROOT]);
+    const data = diagramOf(engine.allProjects()[0]!);
+    expect(data.nodes.find((n) => n.id === 'plugin::users-permissions.user')).toMatchObject({ origin: 'strapi', partial: true });
+    const view = diagramView(data, {});
+    expect(diagramLinks(view.edges).some((l) => l.label === 'owner' && l.to === 'plugin::users-permissions.user')).toBe(true);
+  });
+
   it('writes a Mermaid erDiagram', () => {
     const { mermaid, entities } = toMermaid(diagramOf(project));
     expect(entities).toBe(2);

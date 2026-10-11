@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { escapeName, paths } from 'devkit-for-strapi-core';
 import {
   configSyncDiff,
@@ -15,7 +16,6 @@ import {
   runtimeHint,
 } from 'devkit-for-strapi-pro';
 import * as vscode from 'vscode';
-import { relPath } from './tree';
 
 /**
  * config-sync against the database (Pro): the project's own Strapi, loaded the way the
@@ -59,9 +59,12 @@ export function runtimeSettings(): RuntimeOptions {
 /** The same settings, for the bundled MCP server (it reads them from its environment). */
 export function runtimeEnv(): Record<string, string> {
   const o = runtimeSettings();
-  const follow = vscode.workspace.getConfiguration('strapiDevkit.configSync').get<boolean>('followRefactors', true);
+  // followRefactors is per folder (multi-root): the server gets the folders that turned it off.
+  const off = (vscode.workspace.workspaceFolders ?? [])
+    .filter((f) => !vscode.workspace.getConfiguration('strapiDevkit.configSync', f.uri).get<boolean>('followRefactors', true))
+    .map((f) => paths.normalize(f.uri.fsPath));
   return {
-    ...(follow ? {} : { DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS: '0' }),
+    ...(off.length ? { DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS_OFF: JSON.stringify(off) } : {}),
     ...(o.nodePath ? { DEVKIT_NODE: o.nodePath } : {}),
     ...(o.env ? { DEVKIT_CONFIG_SYNC_ENV: o.env } : {}),
     ...(o.envPath ? { DEVKIT_CONFIG_SYNC_ENV_PATH: o.envPath } : {}),
@@ -70,10 +73,10 @@ export function runtimeEnv(): Record<string, string> {
   };
 }
 
-/** Where the database side of an entry is served (read-only) for the diff editor. */
-export function dbUri(root: string, key: string): vscode.Uri {
+/** Where the database side of an entry is served (read-only) for the diff editor; `file`: its sync file. */
+export function dbUri(root: string, key: string, file?: string): vscode.Uri {
   const id = createHash('sha1').update(root).digest('hex').slice(0, 10);
-  return vscode.Uri.from({ scheme: DB_SCHEME, path: `/${id}/${encodeURIComponent(key)}.json`, query: root });
+  return vscode.Uri.from({ scheme: DB_SCHEME, path: `/${id}/${encodeURIComponent(key)}.json`, query: root, ...(file ? { fragment: file } : {}) });
 }
 
 export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
@@ -82,6 +85,8 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
   /** Fired with the project root whose state changed. */
   readonly onDidChangeState = this.changed.event;
   private readonly docChanged = new vscode.EventEmitter<vscode.Uri>();
+  /** What each database document showed last: kept while a run fails or nothing is known. */
+  private readonly served = new Map<string, string>();
   /** The database side of an open diff changed (a new diff, an export, an import). */
   readonly onDidChange = this.docChanged.event;
 
@@ -103,8 +108,21 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
     const root = uri.query;
     const key = decodeURIComponent(paths.basename(uri.path, '.json'));
     const s = this.state(root);
-    const entry = s?.kind === 'done' ? s.result.data.entries.find((e) => e.key === key) : undefined;
-    return entry?.db === null || entry?.db === undefined ? '' : `${JSON.stringify(entry.db, null, 2)}\n`;
+    let text = this.served.get(uri.toString());
+    if (s?.kind === 'done') {
+      const entry = s.result.data.entries.find((e) => e.key === key);
+      if (entry) text = entry.db === null || entry.db === undefined ? '' : `${JSON.stringify(entry.db, null, 2)}\n`;
+      else {
+        // No longer different (an export, an import): the database holds what the file says.
+        try {
+          text = uri.fragment ? readFileSync(uri.fragment, 'utf8') : '';
+        } catch {
+          text = '';
+        }
+      }
+    }
+    this.served.set(uri.toString(), text ?? '');
+    return text ?? '';
   }
 
   /** Licence, workspace trust and the project's consent; false (said why) when one is missing. */
@@ -173,9 +191,20 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
     for (const doc of vscode.workspace.textDocuments) if (doc.uri.scheme === DB_SCHEME && paths.normalize(doc.uri.query) === paths.normalize(root)) this.docChanged.fire(doc.uri);
   }
 
+  /** A failure said in a notification too: the Config Sync view may not be on screen. */
+  private sayFailure(root: string, what: string): void {
+    const s = this.state(root);
+    if (s?.kind !== 'failed') return;
+    const t = failureText(s.failure);
+    const done = 'detail' in s.failure ? s.failure.detail?.done : undefined;
+    const partial = done?.length ? ` Already done before it stopped: ${done.join(', ')}.` : '';
+    void vscode.window.showErrorMessage(`DevKit for Strapi — ${what} failed: ${t.title}${partial}${t.todo ? ` ${t.todo}` : ''}`);
+  }
+
   async compare(root: string, noPrompt = false): Promise<void> {
     if (!(await this.allowed(root, noPrompt))) return;
     this.settle(root, await this.run(root, `comparing config/sync with the database (${paths.basename(root)})`, (o) => configSyncDiff(root, o)));
+    if (!noPrompt) this.sayFailure(root, 'Comparing with the database');
   }
 
   async export(root: string, entries: ConfigSyncDbEntry[] | undefined, noPrompt = false): Promise<RuntimeResult<ConfigSyncWriteData> | undefined> {
@@ -187,9 +216,12 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
       const ok = await vscode.window.showWarningMessage(`Export ${list.length} entr${list.length === 1 ? 'y' : 'ies'} from the database into config/sync?`, { modal: true, detail: lines.join('\n') }, 'Export');
       if (ok !== 'Export') return undefined;
     }
-    const r = await this.run(root, `exporting ${list.length} entr${list.length === 1 ? 'y' : 'ies'}`, (o) => configSyncExport(root, list.map((e) => e.key), o));
+    // With the states confirmed: an entry that changed since the comparison is left alone.
+    const expected = Object.fromEntries(list.map((e) => [e.key, e.state]));
+    const r = await this.run(root, `exporting ${list.length} entr${list.length === 1 ? 'y' : 'ies'}`, (o) => configSyncExport(root, list.map((e) => e.key), { ...o, expected }));
     this.settle(root, r);
-    if (r?.ok && !noPrompt) say(`DevKit for Strapi: ${r.data.done.length} exported into ${relPath(paths.join(root, 'config/sync'))}. Commit them with the code that caused them.`, r.warnings);
+    if (r?.ok && !noPrompt) say(`DevKit for Strapi: ${r.data.done.length} exported into the sync directory. Commit them with the code that caused them.`, r.warnings);
+    if (!noPrompt) this.sayFailure(root, 'Exporting');
     return r;
   }
 
@@ -201,8 +233,12 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
       const ok = await vscode.window.showWarningMessage(`Import ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} into the ${env} database?`, { modal: true, detail: `${lines.join('\n')}\n\nAfterwards, the entries still different are exported back in the database's own form.` }, 'Import');
       if (ok !== 'Import') return undefined;
     }
-    const r = await this.run(root, `importing ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}`, (o) => configSyncImport(root, entries.map((e) => e.key), o));
+    // With the states confirmed: an entry that changed since the comparison (its file deleted by a
+    // checkout: the same import would delete it from the database) is left alone.
+    const expected = Object.fromEntries(entries.map((e) => [e.key, e.state]));
+    const r = await this.run(root, `importing ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}`, (o) => configSyncImport(root, entries.map((e) => e.key), { ...o, expected }));
     this.settle(root, r);
+    if (!noPrompt) this.sayFailure(root, 'Importing');
     if (r?.ok && !noPrompt) {
       const re = r.data.reexported.length ? ` ${r.data.reexported.length} written back in the database's form.` : '';
       say(`DevKit for Strapi: ${r.data.done.length} imported.${re}`, r.warnings);
@@ -230,7 +266,7 @@ export function failureText(f: RuntimeFailure | { message: string; kind?: undefi
   return { title: f.message, todo: runtimeHint(f.kind) };
 }
 
-export function registerConfigSyncDb(context: vscode.ExtensionContext, db: ConfigSyncDb, rootOf: (node?: unknown) => string | undefined): void {
+export function registerConfigSyncDb(context: vscode.ExtensionContext, db: ConfigSyncDb, rootOf: (node?: unknown) => Promise<string | undefined>): void {
   type EntryNode = { kind: 'dbEntry'; root: string; entry: ConfigSyncDbEntry };
   const asEntries = (node: unknown, nodes?: unknown[]): { root: string; entries: ConfigSyncDbEntry[] } | undefined => {
     const all = (nodes?.length ? nodes : [node]).filter((n): n is EntryNode => (n as EntryNode)?.kind === 'dbEntry');
@@ -240,13 +276,13 @@ export function registerConfigSyncDb(context: vscode.ExtensionContext, db: Confi
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(DB_SCHEME, db),
     vscode.commands.registerCommand('strapiDevkit.configSync.compare', async (node?: unknown, opts?: { noPrompt?: boolean }) => {
-      const found = rootOf(node);
+      const found = await rootOf(node);
       const root = found ? paths.normalize(found) : undefined;
       if (root) await db.compare(root, opts?.noPrompt);
     }),
     vscode.commands.registerCommand('strapiDevkit.configSync.openDiff', async (root: string, entry: ConfigSyncDbEntry, syncDir?: string) => {
       const file = vscode.Uri.file(paths.join(syncDir ?? paths.join(root, 'config/sync'), `${escapeName(entry.key)}.json`));
-      const left = dbUri(root, entry.key);
+      const left = dbUri(root, entry.key, file.fsPath);
       if (entry.state === 'only-in-db') await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(left), { preview: true });
       else if (entry.state === 'only-in-sync-dir') await vscode.window.showTextDocument(file, { preview: true });
       else await vscode.commands.executeCommand('vscode.diff', left, file, `${entry.key}: database ↔ config/sync`, { preview: true });
@@ -256,7 +292,7 @@ export function registerConfigSyncDb(context: vscode.ExtensionContext, db: Confi
       if (sel) await db.export(sel.root, sel.entries);
     }),
     vscode.commands.registerCommand('strapiDevkit.configSync.exportAll', async (node?: unknown) => {
-      const root = rootOf(node);
+      const root = await rootOf(node);
       if (root) await db.export(root, undefined);
     }),
     vscode.commands.registerCommand('strapiDevkit.configSync.import', async (node?: unknown, nodes?: unknown[]) => {
@@ -264,7 +300,7 @@ export function registerConfigSyncDb(context: vscode.ExtensionContext, db: Confi
       if (sel) await db.import(sel.root, sel.entries);
     }),
     vscode.commands.registerCommand('strapiDevkit.configSync.importPick', async (node?: unknown) => {
-      const root = rootOf(node);
+      const root = await rootOf(node);
       if (!root) return;
       const items = db.entries(root).map((entry) => ({ label: entry.key, description: entry.state, detail: entry.summary.join(' · '), entry }));
       if (!items.length) {

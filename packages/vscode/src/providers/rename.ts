@@ -1,4 +1,4 @@
-import { analyzeAt, paths, refKind, renamedUid, storedUidWarnings, touchedPaths } from 'devkit-for-strapi-core';
+import { analyzeAt, followConfigSync, paths, refKind, renamedUid, storedUidWarnings, touchedPaths } from 'devkit-for-strapi-core';
 import type { FileSystem, StrapiEngine, StrapiProject } from 'devkit-for-strapi-core';
 import { computeRename, prepareRename as prepareRenameAt } from 'devkit-for-strapi-pro';
 import * as vscode from 'vscode';
@@ -61,9 +61,14 @@ export function registerRenameProvider(
             'DevKit for Strapi does not rename code that lives in node_modules (an installed plugin). Rename it in the plugin itself, or extend it under src/extensions.',
           );
         }
+        // config/sync follows the rename unless the project says otherwise, as from the panel.
+        const follow = vscode.workspace.getConfiguration('strapiDevkit.configSync', document.uri).get<boolean>('followRefactors', true);
+        const sync = await followConfigSync(fs, project, result, follow);
         // UIDs Strapi also stores in the database (permissions, media links, components): say it.
         for (const w of databaseWarnings(project, filePath, document, position, newName)) void vscode.window.showWarningMessage(`DevKit for Strapi — ${w}`);
-        return toVscodeWorkspaceEdit(result);
+        for (const w of result.warnings ?? []) void vscode.window.showWarningMessage(`DevKit for Strapi — ${w}`);
+        if (sync.note) void vscode.window.showWarningMessage(`DevKit for Strapi — ${sync.note}`);
+        return toVscodeWorkspaceEdit(sync.edit);
       },
     }),
   );

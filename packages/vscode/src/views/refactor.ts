@@ -161,7 +161,7 @@ export function registerRefactorCommands(
   };
 
   const editOf = (e: WorkspaceEdit | null, fallback: string): PlanOutcome =>
-    e ? { edit: e, errors: [], warnings: [] } : { errors: [fallback], warnings: [] };
+    e ? { edit: e, errors: [], warnings: e.warnings ?? [] } : { errors: [fallback], warnings: [] };
 
   const schemaOutcome = (p: { ok: boolean; errors: string[]; warnings: string[]; textEdits: WorkspaceEdit['textEdits']; fileRenames: WorkspaceEdit['fileRenames'] }): PlanOutcome =>
     p.ok ? { edit: { textEdits: p.textEdits, fileRenames: p.fileRenames }, errors: [], warnings: p.warnings } : { errors: p.errors, warnings: p.warnings };
@@ -244,7 +244,7 @@ export function registerRefactorCommands(
         async (p) => {
           const scaffold = create ? await planCreatePlugin(fs, p, name) : undefined;
           if (scaffold && !scaffold.ok) return { errors: scaffold.errors, warnings: scaffold.warnings };
-          const move = await planMove(fs, p, [{ ref: uid, toNamespace: ns, ...(create ? { allowNewNamespace: true } : {}) }], create ? { allowNewNamespace: true } : undefined);
+          const move = await planMove(fs, p, [{ ref: uid, toNamespace: ns }], create ? { allowNewNamespace: true } : undefined);
           const warnings = [...(scaffold?.warnings ?? []), ...move.warnings];
           if (!move.ok) return { errors: move.errors, warnings };
           return { edit: { textEdits: move.textEdits, fileRenames: move.fileRenames, ...(scaffold ? { fileCreates: scaffold.fileCreates } : {}) }, errors: [], warnings };

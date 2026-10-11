@@ -143,8 +143,22 @@ const configSyncArg = {
     ),
 };
 
-/** Whether refactors follow config/sync when a call doesn't say. */
-const followRefactorsByDefault = (): boolean => !/^(0|false|no|off)$/i.test((process.env.DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS ?? '').trim());
+/**
+ * Whether refactors in the project at `root` follow config/sync when a call doesn't say:
+ * DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS=0 turns it off everywhere; VS Code passes the
+ * folders whose strapiDevkit.configSync.followRefactors is off (a per-folder setting).
+ */
+const followRefactorsByDefault = (root: string): boolean => {
+  if (/^(0|false|no|off)$/i.test((process.env.DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS ?? '').trim())) return false;
+  let off: unknown = [];
+  try {
+    off = JSON.parse(process.env.DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS_OFF ?? '[]');
+  } catch {
+    off = [];
+  }
+  const r = paths.normalize(root);
+  return !(Array.isArray(off) ? off : []).some((d) => typeof d === 'string' && (r === paths.normalize(d) || r.startsWith(`${paths.normalize(d)}/`)));
+};
 
 /** Resolve the project for a call, or a "specify which project" result (never a silent guess). */
 function pick(
@@ -251,7 +265,7 @@ export function registerTools(
    * default), and its warnings with the note saying which — so the agent knows either way.
    */
   const syncPlan = async <E extends Pick<WorkspaceEdit, 'textEdits' | 'fileRenames'>>(project: StrapiProject, edit: E, warnings: string[], configSync: boolean | undefined): Promise<{ edit: E; warnings: string[] }> => {
-    const r = await followConfigSync(fs, project, edit, configSync ?? followRefactorsByDefault());
+    const r = await followConfigSync(fs, project, edit, configSync ?? followRefactorsByDefault(project.root));
     return { edit: r.edit, warnings: r.note ? [...warnings, r.note] : warnings };
   };
 
@@ -782,7 +796,8 @@ export function registerTools(
     env: args.env ?? process.env.DEVKIT_CONFIG_SYNC_ENV ?? 'development',
     ...(process.env.DEVKIT_CONFIG_SYNC_ENV_PATH ? { envPath: process.env.DEVKIT_CONFIG_SYNC_ENV_PATH } : {}),
     ...(process.env.DEVKIT_ALLOW_REMOTE_DATABASE === '1' ? { allowRemoteDatabase: true } : {}),
-    ...(process.env.DEVKIT_RUNTIME_TIMEOUT_S ? { timeoutMs: Number(process.env.DEVKIT_RUNTIME_TIMEOUT_S) * 1000 } : {}),
+    // A timeout that isn't a positive number of seconds is ignored (NaN or 0 would stop every run at once).
+    ...(Number(process.env.DEVKIT_RUNTIME_TIMEOUT_S) > 0 ? { timeoutMs: Math.max(30, Number(process.env.DEVKIT_RUNTIME_TIMEOUT_S)) * 1000 } : {}),
   });
   /** A failed run, said plainly, with what to do. */
   const runtimeFailure = (r: RuntimeFailure): CallToolResult =>
@@ -819,7 +834,7 @@ export function registerTools(
     return configSyncLabel(project, key.slice(0, dot), key.slice(dot + 1)).label;
   };
   const RUNS_PROJECT =
-    "It runs the project's code: Strapi is loaded the way config-sync's own CLI does (no server, no port, no admin account), and a load does what a start of `strapi develop` does to the database (schema sync, pending migrations) — so only on a local development database: a remote one, a Strapi 4 database under Strapi 5 code, or a missing SQLite file are refused before anything runs.";
+    "It runs the project's code: Strapi is loaded the way config-sync's own CLI does (no server, no port, no admin account), and a load does what a start of `strapi develop` does to the database (schema sync, pending migrations) — so only on a local development database: a remote one, a Strapi 4 database under Strapi 5 code, or a missing SQLite file are refused before Strapi's bootstrap (where it writes to the database).";
   const envArg = z.string().max(40).optional().describe('NODE_ENV for the run (default development).');
 
   reg(
@@ -828,7 +843,7 @@ export function registerTools(
       title: 'config-sync: the real diff between config/sync and the database',
       description: `The diff config-sync's admin page shows, from the real plugin: each entry that differs between config/sync and the database — \`different\`, \`only-in-db\`, \`only-in-sync-dir\` — with what differs in a few words. It includes what a start of Strapi changes on its own (a new field in a content-manager view, the super-admin's permissions…): after changing a schema, a controller or a route, these are the entries to export and commit with the code. With \`key\`, one entry with both sides in full. ${RUNS_PROJECT} Takes a few seconds.`,
       inputSchema: { key: z.string().max(400).optional().describe('One entry, `<type>.<name>`, for both sides in full.'), env: envArg, ...selector },
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
     async (args) =>
       runConfigSync(
@@ -867,7 +882,7 @@ export function registerTools(
       title: 'config-sync: export entries from the database into config/sync',
       description: `Write entries from the database into config/sync with the plugin's own export — the exact form config-sync compares, so the files stop showing as different. Only entries that differ are exported; \`keys\` narrows it (default: every difference). An entry only in config/sync has its file deleted. Commit the files with the code that caused them. ${RUNS_PROJECT}`,
       inputSchema: { keys: z.array(z.string().max(400)).max(500).optional().describe('The entries to export (default: every difference).'), env: envArg, ...selector },
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
     async (args) => runConfigSync(args, (root) => configSyncExport(root, args.keys, runtimeOptions(args)), writeResult),
   );
@@ -998,7 +1013,7 @@ export function registerTools(
           renamed: false,
           reason: `\`${args.method}\` is not an indexed method of \`${args.ref}\`, or \`${args.newName}\` is invalid/unchanged. ${RENAME_HINT}`,
         });
-      const s = await syncPlan(p.project, edit, renameWarnings(p.project, args.ref, args.newName, args.method), args.configSync);
+      const s = await syncPlan(p.project, edit, [...renameWarnings(p.project, args.ref, args.newName, args.method), ...(edit.warnings ?? [])], args.configSync);
       const planned = await planEdit(fs, s.edit);
       rememberPlan(planned);
       return json(s.warnings.length ? { ...planned, warnings: s.warnings } : planned);
@@ -1029,7 +1044,7 @@ export function registerTools(
           renamed: false,
           reason: `\`${args.ref}\` is not an indexed entity in this project, or \`${args.newName}\` is invalid/unchanged. ${RENAME_HINT}`,
         });
-      const s = await syncPlan(p.project, edit, renameWarnings(p.project, args.ref, args.newName), args.configSync);
+      const s = await syncPlan(p.project, edit, [...renameWarnings(p.project, args.ref, args.newName), ...(edit.warnings ?? [])], args.configSync);
       const planned = await planEdit(fs, s.edit);
       rememberPlan(planned);
       return json(s.warnings.length ? { ...planned, warnings: s.warnings } : planned);
@@ -1255,7 +1270,7 @@ export function registerTools(
         const p = pick(engine, args, roots());
         if ('result' in p) return p.result;
         const planned = await planRename(fs, p.project, args.ref, args.newName, args.method);
-        const s = planned ? await syncPlan(p.project, planned, renameWarnings(p.project, args.ref, args.newName, args.method), args.configSync) : undefined;
+        const s = planned ? await syncPlan(p.project, planned, [...renameWarnings(p.project, args.ref, args.newName, args.method), ...(planned.warnings ?? [])], args.configSync) : undefined;
         const edit = s?.edit;
         const dbWarnings = s?.warnings ?? [];
         if (!edit)

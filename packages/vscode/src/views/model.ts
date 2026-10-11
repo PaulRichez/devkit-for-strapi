@@ -450,7 +450,8 @@ export class ModelProvider extends CachedTree<Node> {
     else if (f.type === 'component' && f.component) item.command = { command: 'strapiDevkit.model.reveal', title: 'Show component', arguments: [n.root, f.component] };
     else item.command = { command: 'strapiDevkit.open', title: 'Open in schema', arguments: [file, f.offset] };
     const readonly = n.type.kind === 'ct' ? n.type.ct.origin === 'installed-plugin' || !!n.type.ct.inCode : isInstalledPath(file);
-    item.contextValue = `strapiModel.field${f.type === 'relation' ? '.relation' : ''}${readonly ? '.readonly' : ''}`;
+    // A component's field: no rename/retarget from the panel yet (those handle content-types).
+    item.contextValue = `strapiModel.field${f.type === 'relation' ? '.relation' : ''}${n.type.kind === 'ct' ? '' : '.component'}${readonly ? '.readonly' : ''}`;
     return item;
   }
 }

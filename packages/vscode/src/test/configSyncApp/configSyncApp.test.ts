@@ -86,6 +86,13 @@ suite('Config Sync through Strapi (Pro, a real app)', () => {
     assert.ok(imported?.ok, JSON.stringify(imported));
     assert.deepStrictEqual(imported.data.done, ['user-role.public']);
     assert.deepStrictEqual(ext.configSyncDb.entries(root), []);
+    // The open diff's database side: now what the file says, not an empty document.
+    let dbSide = '';
+    for (let i = 0; i < 40 && !dbSide.trim(); i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      dbSide = (await vscode.workspace.openTextDocument(tab.original)).getText();
+    }
+    assert.deepStrictEqual(JSON.parse(dbSide), JSON.parse(readFileSync(role, 'utf8')));
     await vscode.commands.executeCommand('workbench.action.closeAllEditors');
 
     // A view file deleted: only in the database; exporting it writes it back.

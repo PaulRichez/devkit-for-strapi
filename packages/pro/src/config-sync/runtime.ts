@@ -41,10 +41,15 @@ export function configSyncDiff(_root: string, _opts?: RuntimeOptions): Promise<R
   throw new Error(PRO_ONLY);
 }
 
-export function configSyncExport(_root: string, _keys: string[] | undefined, _opts?: RuntimeOptions): Promise<RuntimeResult<ConfigSyncWriteData>> {
+/** `expected`: each key's state when the user confirmed — a key whose state changed since is left alone (a warning says so). */
+export interface ConfigSyncWriteOptions extends RuntimeOptions {
+  expected?: Record<string, ConfigSyncDbState>;
+}
+
+export function configSyncExport(_root: string, _keys: string[] | undefined, _opts?: ConfigSyncWriteOptions): Promise<RuntimeResult<ConfigSyncWriteData>> {
   throw new Error(PRO_ONLY);
 }
 
-export function configSyncImport(_root: string, _keys: string[], _opts?: RuntimeOptions & { reexport?: boolean }): Promise<RuntimeResult<ConfigSyncWriteData>> {
+export function configSyncImport(_root: string, _keys: string[], _opts?: ConfigSyncWriteOptions & { reexport?: boolean }): Promise<RuntimeResult<ConfigSyncWriteData>> {
   throw new Error(PRO_ONLY);
 }

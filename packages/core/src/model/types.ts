@@ -434,6 +434,8 @@ export interface WorkspaceEdit {
   fileCreates?: FileCreateOp[];
   /** Paths to delete. */
   fileDeletes?: string[];
+  /** What the plan leaves undone or can't do, said before it is applied. */
+  warnings?: string[];
 }
 
 /** @deprecated Alias of {@link WorkspaceEdit}, kept for existing rename call-sites. */

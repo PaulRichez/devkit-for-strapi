@@ -151,6 +151,20 @@ export async function findPackageDir(fs: FileSystem, fromDir: string, spec: stri
   return undefined;
 }
 
+/**
+ * The real folder behind a linked package (pnpm's node_modules/<dep> → node_modules/.pnpm/…,
+ * workspace links), when the file system can tell: a package's own dependencies sit next to
+ * its real folder, as Node resolves them.
+ */
+async function realDir(fs: FileSystem, dir: string): Promise<string> {
+  if (!fs.realpath) return dir;
+  try {
+    return normalize(await fs.realpath(dir));
+  } catch {
+    return dir;
+  }
+}
+
 /** Read Strapi's own INTERNAL_PLUGINS list (literal array in its loader). */
 async function internalPluginSpecs(fs: FileSystem, strapiDir: string, major: number): Promise<string[]> {
   const candidates: string[] = [];
@@ -751,8 +765,10 @@ async function readServer(fs: FileSystem, name: string, dir: string, entry: stri
  * the installed plugins' own code rewrites — the project side is the caller's to merge.
  */
 export async function readInstalledPlugins(fs: FileSystem, root: string, projectRewrites?: PluginRewrites): Promise<InstalledPluginsResult | undefined> {
-  const strapiDir = await findPackageDir(fs, root, '@strapi/strapi');
-  if (!strapiDir) return undefined;
+  const linkedStrapiDir = await findPackageDir(fs, root, '@strapi/strapi');
+  if (!linkedStrapiDir) return undefined;
+  // Under pnpm, @strapi/core and the built-in plugins are beside @strapi/strapi's real folder, not at the root.
+  const strapiDir = await realDir(fs, linkedStrapiDir);
   const strapiPkg = await readJson(fs, join(strapiDir, 'package.json'));
   const strapiVersion = asString(strapiPkg?.version);
   const major = strapiVersion ? parseMajor(strapiVersion) : undefined;
@@ -768,12 +784,15 @@ export async function readInstalledPlugins(fs: FileSystem, root: string, project
   const candidates: Array<{ spec: string; dir: string; pkg: Record<string, unknown>; origin: PluginOrigin }> = [];
   const seen = new Set<string>();
   for (const spec of await internalPluginSpecs(fs, strapiDir, major)) {
-    const dir = (await findPackageDir(fs, strapiDir, spec)) ?? (await findPackageDir(fs, root, spec));
+    const found = (await findPackageDir(fs, strapiDir, spec)) ?? (await findPackageDir(fs, root, spec));
+    const dir = found && (await realDir(fs, found));
     const pkg = dir ? await readJson(fs, join(dir, 'package.json')) : undefined;
     if (dir && pkg) candidates.push({ spec, dir, pkg, origin: 'internal' });
   }
   for (const spec of deps) {
-    const dir = await findPackageDir(fs, root, spec);
+    const found = await findPackageDir(fs, root, spec);
+    // Its own dependencies (@strapi/utils…) resolve from its real folder.
+    const dir = found && (await realDir(fs, found));
     const pkg = dir ? await readJson(fs, join(dir, 'package.json')) : undefined;
     if (dir && pkg && asRecord(pkg.strapi)?.kind === 'plugin') candidates.push({ spec, dir, pkg, origin: 'dependency' });
   }
