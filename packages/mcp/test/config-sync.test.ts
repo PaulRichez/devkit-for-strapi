@@ -91,6 +91,19 @@ describe('config_sync_status, and config-sync in project_info and list_routes', 
     expect(data.kind === 'no-strapi' || /not included in the open-source build/.test(data.message)).toBe(true);
   });
 
+  it('the Pro tools say so, without loading Strapi, when the plugin is not used or disabled', async () => {
+    const run = async (files: Record<string, string>): Promise<Record<string, unknown>> => {
+      const fs = new MemoryFileSystem(files);
+      const engine = createEngine(fs);
+      await engine.init([ROOT]);
+      const h = new Map<string, Handler>();
+      registerTools({ registerTool: (name: string, _c: unknown, cb: Handler) => h.set(name, cb) } as unknown as McpServer, engine, fs, Promise.resolve());
+      return JSON.parse(((await h.get('config_sync_diff')!({})).content[0] as { text: string }).text);
+    };
+    expect(await run({ [`${ROOT}/package.json`]: j({ dependencies: { '@strapi/strapi': '^5.0.0' } }) })).toMatchObject({ detected: false });
+    expect(await run({ ...FILES, [`${ROOT}/config/plugins.js`]: "module.exports = { 'config-sync': { enabled: false } };" })).toMatchObject({ detected: true, disabled: true });
+  });
+
   it('says plainly when config-sync is not used', async () => {
     const fs = new MemoryFileSystem({ [`${ROOT}/package.json`]: j({ dependencies: { '@strapi/strapi': '^5.0.0' } }) });
     const engine = createEngine(fs);

@@ -776,7 +776,10 @@ export function registerTools(
     await ready;
     const p = pick(engine, args, roots());
     if ('result' in p) return p.result;
-    if (!(await configSyncStatus(fs, p.project))) return json({ detected: false, message: `${CONFIG_SYNC_PACKAGE} is neither in package.json nor installed in this project.` });
+    const status = await configSyncStatus(fs, p.project);
+    if (!status) return json({ detected: false, message: `${CONFIG_SYNC_PACKAGE} is neither in package.json nor installed in this project.` });
+    // Said without loading Strapi: nothing to ask a disabled plugin.
+    if (status.detection.disabled) return json({ detected: true, disabled: true, message: `${CONFIG_SYNC_PACKAGE} is disabled in config/plugins (enabled: false): enable it to compare, export or import.` });
     let r: RuntimeResult<T>;
     try {
       r = await run(p.project.root);
