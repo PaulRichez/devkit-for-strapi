@@ -27,6 +27,8 @@ import { createLicenseManager, type LicenseManager } from './license';
 /** What `activate` returns: read access to the panel's trees (integration tests). */
 export interface DevkitExports {
   views: { routes: RoutesProvider; model: ModelProvider; health: HealthProvider; plugins: PluginsProvider; configSync: ConfigSyncProvider };
+  /** Config Sync through the project's Strapi (Pro): its state per project, export and import without the confirmations (tests). */
+  configSyncDb: ConfigSyncDb;
 }
 
 function workspaceFolderPaths(): string[] {
@@ -221,7 +223,7 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
     vscode.commands.registerCommand('strapiDevkit.enterLicenseKey', () => license.enterKey()),
     vscode.commands.registerCommand('strapiDevkit.clearLicenseKey', () => license.clearKey()),
   );
-  return { views: { routes: routesView.provider, model: modelView.provider, health: healthView.provider, plugins: pluginsView.provider, configSync: configSyncView.provider } };
+  return { views: { routes: routesView.provider, model: modelView.provider, health: healthView.provider, plugins: pluginsView.provider, configSync: configSyncView.provider }, configSyncDb };
 }
 
 export function deactivate(): void {
