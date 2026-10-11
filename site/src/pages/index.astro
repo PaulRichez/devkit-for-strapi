@@ -57,12 +57,14 @@ const editorFeatures = [
   ['Go to definition', 'Ctrl/Cmd-click a string to jump to the right target — a UID to its schema.json, a route handler to the controller method, a plugin chain to the plugin’s service.'],
   ['Find references & CodeLens', 'A "N references (Strapi)" lens on every definition, including per-method usages the TypeScript server can’t see because strapi.service(...) is typed any.'],
   ['Hover', 'Describes what a string resolves to, with the signature for service methods and usage insights (incoming relations, route handlers, data usages).'],
+  ['The DevKit panel', 'Health, routes with what each request goes through in Strapi’s order, the model and the plugins, read from your code, including the plugins installed in node_modules.'],
+  ['Config Sync', 'For strapi-plugin-config-sync: your config/sync files with readable names, and the ones the plugin can’t read flagged. With Pro, the real diff with your database, and export or import entry by entry.'],
 ];
 
-const mcpFree = ['server_info', 'add_project', 'refresh', 'list_projects', 'list_content_types', 'list_components', 'list_artifacts', 'get_schema', 'resolve', 'validate_reference', 'find_references', 'list_routes', 'list_unused', 'list_broken_refs', 'coverage', 'find_relation_usages', 'list_refs', 'dependencies', 'dependents'];
+const mcpFree = ['server_info', 'add_project', 'refresh', 'list_projects', 'project_info', 'list_content_types', 'list_components', 'list_artifacts', 'get_schema', 'resolve', 'validate_reference', 'find_references', 'list_routes', 'list_unused', 'list_broken_refs', 'coverage', 'find_relation_usages', 'list_refs', 'dependencies', 'dependents', 'config_sync_status'];
 
 const stats = [
-  ['31', 'MCP tools for your AI agent'],
+  ['35', 'MCP tools for your AI agent'],
   ['v4 & v5', 'auto-detected per project'],
   ['JS & TS', 'ESM + CommonJS, parity-tested'],
   ['0', 'telemetry · config · network calls'],
@@ -86,7 +88,7 @@ const faqs = [
   ['Which editors?', 'VS Code and its forks — Cursor, Windsurf, Google Antigravity, VSCodium — via the VS Code Marketplace and Open VSX.'],
   ['What about Strapi 6?', 'No Strapi 6 is announced yet — the CMS is on v5. DevKit reads your real schema.json and detects the version per project, so it’s built to adapt when v6 lands.'],
   ['JavaScript or TypeScript?', 'Identical behavior for ESM and CommonJS projects — challenged by a JS⇄TS parity test in the engine.'],
-  ['Found a bug, or need help?', 'Email pro@paulrichez.fr — bug reports, questions and feedback are all welcome. There’s no public issue tracker, so this inbox is the way to reach me.'],
+  ['Found a bug, or need help?', 'Open an issue on GitHub (github.com/PaulRichez/devkit-for-strapi/issues): bugs, questions and feature ideas are all welcome. For anything about a Pro licence (key, refund, billing), email pro@paulrichez.fr, which stays private.'],
 ];
 ---
 
@@ -253,16 +255,21 @@ strapi.documents(<span class="bad">'api::article.artcle'</span>) <span class="cb
     <!-- Free vs Pro -->
     <section class="band">
       <h2 class="reveal">Understand for free. Pay only to <em>change</em>.</h2>
-      <p class="band-lede reveal" data-delay="60">Everything that reads and navigates your project is free. The refactoring automation — propagated rename, move/extract, safe apply — is Pro.</p>
+      <p class="band-lede reveal" data-delay="60">Everything that reads your code and catches its mistakes is free. Pro is for changing it safely (refactors across call-sites and files), plus Config Sync with your database and the relations diagram.</p>
 
       <div class="table reveal" data-delay="80">
         <div class="trow thead"><span>Capability</span><span>Free</span><span>Pro</span></div>
         <div class="trow"><span>Autocomplete · diagnostics · go-to-def · hover</span><span class="y">✓</span><span class="y">✓</span></div>
         <div class="trow"><span>Find references &amp; CodeLens (incl. per-method)</span><span class="y">✓</span><span class="y">✓</span></div>
         <div class="trow"><span>MCP read &amp; analysis (schema, resolve, validate, graph, dead-code)</span><span class="y">✓</span><span class="y">✓</span></div>
+        <div class="trow"><span><strong>DevKit panel</strong>: health, routes &amp; their pipeline, model, plugins</span><span class="y">✓</span><span class="y">✓</span></div>
+        <div class="trow"><span>Installed plugins checked like your own code (when DevKit can read them completely)</span><span class="y">✓</span><span class="y">✓</span></div>
+        <div class="trow"><span><strong>Config Sync</strong>: your config/sync files, readable and checked</span><span class="y">✓</span><span class="y">✓</span></div>
         <div class="trow"><span><strong>Propagated rename</strong> (entity &amp; method, call-sites + files)</span><span class="n">—</span><span class="y">✓</span></div>
         <div class="trow"><span><strong>Move / extract-to-plugin</strong>, schema edits</span><span class="n">—</span><span class="y">✓</span></div>
         <div class="trow"><span><strong>Safe apply</strong> — verified, root-confined, self-checked writes</span><span class="n">—</span><span class="y">✓</span></div>
+        <div class="trow"><span><strong>Config Sync with your database</strong>: the real diff, export &amp; import entry by entry (local dev database)</span><span class="n">—</span><span class="y">✓</span></div>
+        <div class="trow"><span><strong>Relations diagram</strong>, exported as Markdown (Mermaid), PNG or SVG</span><span class="n">—</span><span class="y">✓</span></div>
       </div>
     </section>
 
@@ -277,6 +284,7 @@ strapi.documents(<span class="bad">'api::article.artcle'</span>) <span class="cb
           <ul class="ticks">
             <li>The full editor wedge (autocomplete, diagnostics, nav, references)</li>
             <li>The MCP server — read, validate &amp; analyse for your agent</li>
+            <li>The DevKit panel · Config Sync files, readable and checked</li>
             <li>Multi-project · v4 &amp; v5 · JS &amp; TS · no telemetry</li>
           </ul>
           <a class="btn btn-lg block" href={VSCODE_MARKETPLACE} data-umami-event="install-free" data-umami-event-cta="pricing">Install free →</a>
@@ -292,6 +300,8 @@ strapi.documents(<span class="bad">'api::article.artcle'</span>) <span class="cb
             <li>Propagated rename (entity &amp; method)</li>
             <li>Move / extract-to-plugin · schema edits</li>
             <li>Safe apply — verified, transactional, root-confined writes</li>
+            <li>Config Sync with your database: diff, export, import</li>
+            <li>Relations diagram (Markdown, PNG, SVG)</li>
             <li>For your editor <strong>and</strong> your AI agent</li>
           </ul>
           <a class="btn btn-lg block" href={proHref} data-umami-event="pro-checkout" data-umami-event-cta="pricing">Get Pro →</a>
