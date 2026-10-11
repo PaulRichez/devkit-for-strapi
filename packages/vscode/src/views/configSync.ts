@@ -7,7 +7,9 @@ import {
   type StrapiEngine,
   type SyncFileEntry,
 } from 'devkit-for-strapi-core';
+import type { ConfigSyncDbEntry, ConfigSyncDbState } from 'devkit-for-strapi-pro';
 import * as vscode from 'vscode';
+import { type ConfigSyncDb, failureText, STEP_LABEL } from './configSyncDb';
 import { setContext } from './panel';
 import { CachedTree, code, markdown, openCommand, orderedRoots, projectLabel, relPath, type TreeNode } from './tree';
 
@@ -79,7 +81,17 @@ type Node = TreeNode &
     | { kind: 'files'; root: string }
     | { kind: 'fileGroup'; root: string; group: ConfigSyncGroup; files: SyncFileEntry[] }
     | { kind: 'file'; root: string; file: SyncFileEntry }
+    | { kind: 'database'; root: string }
+    | { kind: 'dbNote'; root: string; text: string; icon: string }
+    | { kind: 'dbGroup'; root: string; state: ConfigSyncDbState; entries: ConfigSyncDbEntry[] }
+    | { kind: 'dbEntry'; root: string; entry: ConfigSyncDbEntry }
   );
+
+const DB_GROUP: Record<ConfigSyncDbState, string> = {
+  different: 'Different',
+  'only-in-db': 'Only in the database',
+  'only-in-sync-dir': 'Only in config/sync',
+};
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
@@ -89,9 +101,13 @@ export class ConfigSyncProvider extends CachedTree<Node> {
   private shown = new Map<string, ConfigSyncStaticStatus>();
   view: vscode.TreeView<Node> | undefined;
 
+  /** Pro: a licence is active (the Database entry offers the comparison, else the upsell). */
+  licensed = false;
+
   constructor(
     private readonly engine: StrapiEngine,
     private readonly cache: ConfigSyncCache,
+    private readonly db?: ConfigSyncDb,
   ) {
     super();
   }
@@ -147,6 +163,26 @@ export class ConfigSyncProvider extends CachedTree<Node> {
           .filter((g) => groups.has(g))
           .map((group): Node => ({ kind: 'fileGroup', id: `${base}|files|${group}`, root: element.root, group, files: groups.get(group)! }));
       }
+      case 'database': {
+        const s = this.db?.state(element.root);
+        if (s?.kind === 'failed') {
+          const t = failureText(s.failure);
+          return [
+            ...(t.todo ? [{ kind: 'dbNote' as const, id: `${base}|db|todo`, root: element.root, text: t.todo, icon: 'lightbulb' }] : []),
+            { kind: 'dbNote' as const, id: `${base}|db|message`, root: element.root, text: t.title, icon: 'info' },
+          ];
+        }
+        if (s?.kind !== 'done') return [];
+        const entries = s.result.data.entries;
+        if (!entries.length) return [{ kind: 'dbNote', id: `${base}|db|same`, root: element.root, text: 'config/sync and the database agree', icon: 'pass' }];
+        return (Object.keys(DB_GROUP) as ConfigSyncDbState[])
+          .filter((state) => entries.some((e) => e.state === state))
+          .map((state): Node => ({ kind: 'dbGroup', id: `${base}|db|${state}`, root: element.root, state, entries: entries.filter((e) => e.state === state) }));
+      }
+      case 'dbGroup':
+        return [...element.entries]
+          .sort((a, b) => this.label(element.root, a.key).localeCompare(this.label(element.root, b.key)))
+          .map((entry): Node => ({ kind: 'dbEntry', id: `${base}|db|entry|${entry.key}`, root: element.root, entry }));
       case 'fileGroup':
         return [...element.files]
           .sort((a, b) => this.label(element.root, a.key).localeCompare(this.label(element.root, b.key)))
@@ -163,6 +199,7 @@ export class ConfigSyncProvider extends CachedTree<Node> {
     const out: Node[] = [{ kind: 'header', id: `${base}|header`, root }];
     st.detection.warnings.forEach((text, i) => out.push({ kind: 'warning', id: `${base}|warning|${i}`, root, text }));
     if (st.files.some((f) => f.status === 'invalid')) out.push({ kind: 'invalid', id: `${base}|invalid`, root });
+    if (this.db) out.push({ kind: 'database', id: `${base}|database`, root });
     out.push({ kind: 'files', id: `${base}|files`, root });
     return out;
   }
@@ -212,7 +249,75 @@ export class ConfigSyncProvider extends CachedTree<Node> {
       }
       case 'file':
         return this.fileItem(n.root, n.file);
+      case 'database':
+        return this.databaseItem(n.root);
+      case 'dbNote': {
+        const item = new vscode.TreeItem(n.text, none);
+        item.iconPath = new vscode.ThemeIcon(n.icon, n.icon === 'pass' ? new vscode.ThemeColor('testing.iconPassed') : undefined);
+        item.tooltip = n.text;
+        return item;
+      }
+      case 'dbGroup': {
+        const item = new vscode.TreeItem(DB_GROUP[n.state], vscode.TreeItemCollapsibleState.Expanded);
+        item.description = String(n.entries.length);
+        item.iconPath = new vscode.ThemeIcon(n.state === 'different' ? 'diff-modified' : n.state === 'only-in-db' ? 'diff-added' : 'diff-removed');
+        return item;
+      }
+      case 'dbEntry': {
+        const e = n.entry;
+        const item = new vscode.TreeItem(this.label(n.root, e.key), none);
+        item.description = e.summary[0];
+        item.iconPath = new vscode.ThemeIcon(e.state === 'different' ? 'diff-modified' : e.state === 'only-in-db' ? 'diff-added' : 'diff-removed');
+        const md = markdown();
+        md.appendMarkdown(`${code(e.key)}\n\n`);
+        for (const line of e.summary) md.appendMarkdown(`- ${line}\n`);
+        md.appendMarkdown('\n_Click to compare: the database on the left, config/sync on the right._');
+        item.tooltip = md;
+        item.command = { command: 'strapiDevkit.configSync.openDiff', title: 'Compare', arguments: [n.root, e, st.detection.syncDirPath] };
+        item.contextValue = 'strapiConfigSyncDb.entry';
+        return item;
+      }
     }
+  }
+
+  private databaseItem(root: string): vscode.TreeItem {
+    const s = this.db?.state(root);
+    const item = new vscode.TreeItem('Database', s && s.kind !== 'running' ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
+    const md = markdown();
+    if (!this.licensed) {
+      item.description = 'compare with the database — Pro';
+      item.iconPath = new vscode.ThemeIcon('database');
+      md.appendMarkdown("**Pro**: the real diff between config/sync and the database, from config-sync itself (your project's Strapi, loaded the way the plugin's CLI does), and export or import entry by entry.");
+      item.command = { command: 'strapiDevkit.configSync.compare', title: 'Compare with the database', arguments: [root] };
+    } else if (!s) {
+      item.description = 'not compared yet';
+      item.iconPath = new vscode.ThemeIcon('database');
+      md.appendMarkdown("Load the project's Strapi (the way config-sync's CLI does) and ask config-sync what differs. It runs the project's code; a load does to the database what a start of `strapi develop` does.");
+      item.command = { command: 'strapiDevkit.configSync.compare', title: 'Compare with the database', arguments: [root] };
+      item.contextValue = 'strapiConfigSyncDb.idle';
+    } else if (s.kind === 'running') {
+      item.description = `${STEP_LABEL[s.step]}…`;
+      item.iconPath = new vscode.ThemeIcon('loading~spin');
+      md.appendMarkdown(s.label);
+    } else if (s.kind === 'failed') {
+      item.description = s.failure.kind ?? 'not available';
+      item.iconPath = new vscode.ThemeIcon('error', new vscode.ThemeColor('problemsErrorIcon.foreground'));
+      md.appendMarkdown(failureText(s.failure).title);
+      item.contextValue = 'strapiConfigSyncDb.failed';
+    } else {
+      const r = s.result;
+      const n = r.data.entries.length;
+      const t = r.target;
+      const where = t.filename ? relPath(t.filename) : [t.host, t.port].filter(Boolean).join(':') + (t.database ? `/${t.database}` : '');
+      item.description = `${n} difference${n === 1 ? '' : 's'} · ${t.env} · ${where} · ${s.at.toLocaleTimeString()}`;
+      item.iconPath = new vscode.ThemeIcon(n ? 'database' : 'pass', n ? undefined : new vscode.ThemeColor('testing.iconPassed'));
+      md.appendMarkdown(`**${t.client}** ${code(where)} · NODE_ENV ${code(t.env)}\n\nStrapi ${r.versions.strapi} · config-sync ${r.versions.configSync} · ${Math.round((r.timings.total ?? 0) / 100) / 10} s\n\n`);
+      for (const w of r.warnings) md.appendMarkdown(`$(warning) ${w}\n\n`);
+      md.appendMarkdown('_What a start of Strapi changes on its own is included: export these entries with the code that caused them._');
+      item.contextValue = n ? 'strapiConfigSyncDb.done' : 'strapiConfigSyncDb.same';
+    }
+    item.tooltip = md;
+    return item;
   }
 
   private headerItem(st: ConfigSyncStaticStatus): vscode.TreeItem {
@@ -259,14 +364,24 @@ export class ConfigSyncProvider extends CachedTree<Node> {
 export interface ConfigSyncView {
   refresh(): void;
   provider: ConfigSyncProvider;
+  /** Re-read the licence (the Database entry: the comparison, or the upsell). */
+  updateLicence(): Promise<void>;
 }
 
-export function registerConfigSyncView(context: vscode.ExtensionContext, engine: StrapiEngine, cache: ConfigSyncCache): ConfigSyncView {
-  const provider = new ConfigSyncProvider(engine, cache);
+export function registerConfigSyncView(context: vscode.ExtensionContext, engine: StrapiEngine, cache: ConfigSyncCache, db?: ConfigSyncDb): ConfigSyncView {
+  const provider = new ConfigSyncProvider(engine, cache, db);
+  const updateLicence = async (): Promise<void> => {
+    provider.licensed = db ? await db.isLicensed() : false;
+    provider.refresh();
+  };
+  if (db) {
+    void updateLicence();
+    context.subscriptions.push(db.onDidChangeState(() => provider.refresh()));
+  }
   const view = vscode.window.createTreeView('strapiDevkit.configSync', { treeDataProvider: provider, showCollapseAll: true });
   provider.view = view;
   context.subscriptions.push(view, vscode.commands.registerCommand('strapiDevkit.configSync.refresh', () => provider.refresh()));
-  return { refresh: () => provider.refresh(), provider };
+  return { refresh: () => provider.refresh(), provider, updateLicence };
 }
 
 /** The sync files config-sync can't read, every project (for diagnostics and Health). */

@@ -42,6 +42,9 @@ const TOOL_FEATURE: Record<string, string> = {
   apply_edits: 'Safe apply',
   apply_rename: 'Safe apply',
   get_model_diagram: 'Relations diagram',
+  config_sync_diff: 'Config sync',
+  config_sync_export: 'Config sync',
+  config_sync_import: 'Config sync',
 };
 
 /** Is this MCP tool gated behind a Pro license? */

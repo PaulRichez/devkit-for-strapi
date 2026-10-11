@@ -225,6 +225,41 @@
         "title": "Refresh Config Sync",
         "category": "DevKit for Strapi",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "strapiDevkit.configSync.compare",
+        "title": "Compare with the Database",
+        "category": "DevKit for Strapi",
+        "icon": "$(database)"
+      },
+      {
+        "command": "strapiDevkit.configSync.openDiff",
+        "title": "Open the Database ↔ config/sync Diff",
+        "category": "DevKit for Strapi"
+      },
+      {
+        "command": "strapiDevkit.configSync.export",
+        "title": "Export from the Database",
+        "category": "DevKit for Strapi",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "strapiDevkit.configSync.exportAll",
+        "title": "Export All Differences",
+        "category": "DevKit for Strapi",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "strapiDevkit.configSync.import",
+        "title": "Import into the Database",
+        "category": "DevKit for Strapi",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "strapiDevkit.configSync.importPick",
+        "title": "Import into the Database…",
+        "category": "DevKit for Strapi",
+        "icon": "$(cloud-upload)"
       }
     ],
     "configuration": {
@@ -288,6 +323,33 @@
           "type": "boolean",
           "default": true,
           "description": "When the Model or Routes view is open, reveal the schema, controller or route file of the active editor in it (without taking the focus)."
+        },
+        "strapiDevkit.runtime.nodePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Pro — the Node that runs your project when DevKit loads its Strapi (config-sync diff, export, import). Empty: `node` on the PATH. Use the Node the project's dependencies were installed with: native modules such as better-sqlite3 are built for it."
+        },
+        "strapiDevkit.runtime.timeoutSeconds": {
+          "type": "number",
+          "default": 180,
+          "minimum": 30,
+          "markdownDescription": "Pro — how long a load of your project's Strapi may take (a first TypeScript compilation can take over a minute)."
+        },
+        "strapiDevkit.configSync.environment": {
+          "type": "string",
+          "default": "development",
+          "markdownDescription": "Pro — `NODE_ENV` when DevKit loads your project's Strapi for config-sync. An import is refused with `production`."
+        },
+        "strapiDevkit.configSync.envPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Pro — the `.env` file Strapi loads (`ENV_PATH`). Empty: the project's `.env`."
+        },
+        "strapiDevkit.configSync.allowRemoteDatabase": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Pro — also load Strapi on a database that is not on this machine. A load does what a start of `strapi develop` does to the database (schema sync, migrations): leave this off unless you are sure."
         }
       }
     },
@@ -405,9 +467,54 @@
           "command": "strapiDevkit.configSync.refresh",
           "when": "view == strapiDevkit.configSync",
           "group": "navigation@1"
+        },
+        {
+          "command": "strapiDevkit.configSync.compare",
+          "when": "view == strapiDevkit.configSync",
+          "group": "navigation@0"
+        },
+        {
+          "command": "strapiDevkit.configSync.exportAll",
+          "when": "view == strapiDevkit.configSync && strapiDevkit.pro",
+          "group": "1_db@1"
+        },
+        {
+          "command": "strapiDevkit.configSync.importPick",
+          "when": "view == strapiDevkit.configSync && strapiDevkit.pro",
+          "group": "1_db@2"
         }
       ],
       "view/item/context": [
+        {
+          "command": "strapiDevkit.configSync.compare",
+          "when": "view == strapiDevkit.configSync && viewItem =~ /^strapiConfigSyncDb\\.(idle|failed|done|same)$/",
+          "group": "inline"
+        },
+        {
+          "command": "strapiDevkit.configSync.exportAll",
+          "when": "view == strapiDevkit.configSync && viewItem == strapiConfigSyncDb.done",
+          "group": "inline"
+        },
+        {
+          "command": "strapiDevkit.configSync.export",
+          "when": "view == strapiDevkit.configSync && viewItem == strapiConfigSyncDb.entry",
+          "group": "inline@1"
+        },
+        {
+          "command": "strapiDevkit.configSync.import",
+          "when": "view == strapiDevkit.configSync && viewItem == strapiConfigSyncDb.entry",
+          "group": "inline@2"
+        },
+        {
+          "command": "strapiDevkit.configSync.export",
+          "when": "view == strapiDevkit.configSync && viewItem == strapiConfigSyncDb.entry",
+          "group": "1_db@1"
+        },
+        {
+          "command": "strapiDevkit.configSync.import",
+          "when": "view == strapiDevkit.configSync && viewItem == strapiConfigSyncDb.entry",
+          "group": "1_db@2"
+        },
         {
           "command": "strapiDevkit.routes.goToHandler",
           "when": "view == strapiDevkit.routes && viewItem == strapiRoute.withHandler",
@@ -500,6 +607,30 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "strapiDevkit.configSync.compare",
+          "when": "strapiDevkit.configSync"
+        },
+        {
+          "command": "strapiDevkit.configSync.openDiff",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.configSync.export",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.configSync.import",
+          "when": "false"
+        },
+        {
+          "command": "strapiDevkit.configSync.exportAll",
+          "when": "strapiDevkit.configSync"
+        },
+        {
+          "command": "strapiDevkit.configSync.importPick",
+          "when": "strapiDevkit.configSync"
+        },
         {
           "command": "strapiDevkit.configSync.refresh",
           "when": "strapiDevkit.configSync"
@@ -667,5 +798,16 @@
     "@vscode/vsce": "^3.2.0",
     "esbuild": "^0.24.0",
     "ovsx": "^0.10.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Reading your code works everywhere. Loading your project's Strapi (config-sync diff, export, import) runs its code: only in a trusted workspace.",
+      "restrictedConfigurations": [
+        "strapiDevkit.configSync.envPath",
+        "strapiDevkit.configSync.allowRemoteDatabase",
+        "strapiDevkit.configSync.environment"
+      ]
+    }
   }
 }

@@ -75,6 +75,22 @@ describe('config_sync_status, and config-sync in project_info and list_routes', 
     expect(del.routes[0].pipeline[0].syncedRoles).toBeUndefined();
   });
 
+  it('the Pro diff, export and import: the upsell without a licence, a plain failure otherwise', async () => {
+    const fs = new MemoryFileSystem(FILES);
+    const engine = createEngine(fs);
+    await engine.init([ROOT]);
+    const unlicensed = new Map<string, Handler>();
+    registerTools({ registerTool: (name: string, _c: unknown, cb: Handler) => unlicensed.set(name, cb) } as unknown as McpServer, engine, fs, Promise.resolve(), () => [], () => Promise.resolve(false));
+    for (const tool of ['config_sync_diff', 'config_sync_export', 'config_sync_import']) {
+      const up = JSON.parse(((await unlicensed.get(tool)!({ keys: ['user-role.public'] })).content[0] as { text: string }).text);
+      expect(up).toMatchObject({ proRequired: true, feature: 'Config sync', tool });
+    }
+    // Licensed: the open-source build says the engine isn't there; the real one finds no project on disk.
+    const data = await call('config_sync_diff');
+    expect(data.ok).toBe(false);
+    expect(data.kind === 'no-strapi' || /not included in the open-source build/.test(data.message)).toBe(true);
+  });
+
   it('says plainly when config-sync is not used', async () => {
     const fs = new MemoryFileSystem({ [`${ROOT}/package.json`]: j({ dependencies: { '@strapi/strapi': '^5.0.0' } }) });
     const engine = createEngine(fs);

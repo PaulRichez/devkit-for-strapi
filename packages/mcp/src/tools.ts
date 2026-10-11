@@ -39,6 +39,15 @@ import {
   validateRef,
 } from 'devkit-for-strapi-core';
 import {
+  configSyncDiff,
+  configSyncExport,
+  configSyncImport,
+  type ConfigSyncWriteData,
+  type RuntimeFailure,
+  type RuntimeOptions,
+  type RuntimeResult,
+  type RuntimeSuccess,
+  runtimeHint,
   planChangeRelation,
   planCreatePlugin,
   planEdit,
@@ -739,6 +748,115 @@ export function registerTools(
         ...partial,
       });
     },
+  );
+
+  /** How this server runs a project (VS Code passes its settings through the environment). */
+  const runtimeOptions = (args: { env?: string }): RuntimeOptions => ({
+    ...(process.env.DEVKIT_NODE ? { nodePath: process.env.DEVKIT_NODE } : {}),
+    env: args.env ?? process.env.DEVKIT_CONFIG_SYNC_ENV ?? 'development',
+    ...(process.env.DEVKIT_CONFIG_SYNC_ENV_PATH ? { envPath: process.env.DEVKIT_CONFIG_SYNC_ENV_PATH } : {}),
+    ...(process.env.DEVKIT_ALLOW_REMOTE_DATABASE === '1' ? { allowRemoteDatabase: true } : {}),
+    ...(process.env.DEVKIT_RUNTIME_TIMEOUT_S ? { timeoutMs: Number(process.env.DEVKIT_RUNTIME_TIMEOUT_S) * 1000 } : {}),
+  });
+  /** A failed run, said plainly, with what to do. */
+  const runtimeFailure = (r: RuntimeFailure): CallToolResult =>
+    json({
+      ok: false,
+      kind: r.kind,
+      message: r.message,
+      todo: runtimeHint(r.kind),
+      step: r.step,
+      ...(r.target ? { target: r.target } : {}),
+      ...(r.detail?.frame ? { where: r.detail.frame } : {}),
+      ...(r.output && (r.kind === 'crashed' || r.kind === 'compile-failed' || r.kind === 'bootstrap-error') ? { output: r.output.slice(-3000) } : {}),
+      ...(r.warnings.length ? { warnings: r.warnings } : {}),
+    });
+  /** Run a config-sync command on a project using the plugin (the stub build throws: said plainly). */
+  const runConfigSync = async <T>(args: { from?: string; project?: string }, run: (root: string) => Promise<RuntimeResult<T>>, ok: (r: RuntimeSuccess<T>, project: StrapiProject) => CallToolResult): Promise<CallToolResult> => {
+    await ready;
+    const p = pick(engine, args, roots());
+    if ('result' in p) return p.result;
+    if (!(await configSyncStatus(fs, p.project))) return json({ detected: false, message: `${CONFIG_SYNC_PACKAGE} is neither in package.json nor installed in this project.` });
+    let r: RuntimeResult<T>;
+    try {
+      r = await run(p.project.root);
+    } catch (e) {
+      return json({ ok: false, message: e instanceof Error ? e.message : String(e) });
+    }
+    return r.ok ? ok(r, p.project) : runtimeFailure(r);
+  };
+  const entryLabel = (project: StrapiProject, key: string): string => {
+    const dot = key.indexOf('.');
+    return configSyncLabel(project, key.slice(0, dot), key.slice(dot + 1)).label;
+  };
+  const RUNS_PROJECT =
+    "It runs the project's code: Strapi is loaded the way config-sync's own CLI does (no server, no port, no admin account), and a load does what a start of `strapi develop` does to the database (schema sync, pending migrations) — so only on a local development database: a remote one, a Strapi 4 database under Strapi 5 code, or a missing SQLite file are refused before anything runs.";
+  const envArg = z.string().max(40).optional().describe('NODE_ENV for the run (default development).');
+
+  reg(
+    'config_sync_diff',
+    {
+      title: 'config-sync: the real diff between config/sync and the database',
+      description: `The diff config-sync's admin page shows, from the real plugin: each entry that differs between config/sync and the database — \`different\`, \`only-in-db\`, \`only-in-sync-dir\` — with what differs in a few words. It includes what a start of Strapi changes on its own (a new field in a content-manager view, the super-admin's permissions…): after changing a schema, a controller or a route, these are the entries to export and commit with the code. With \`key\`, one entry with both sides in full. ${RUNS_PROJECT} Takes a few seconds.`,
+      inputSchema: { key: z.string().max(400).optional().describe('One entry, `<type>.<name>`, for both sides in full.'), env: envArg, ...selector },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) =>
+      runConfigSync(
+        args,
+        (root) => configSyncDiff(root, runtimeOptions(args)),
+        (r, project) => {
+          if (args.key) {
+            const e = r.data.entries.find((x) => x.key === args.key);
+            return json(e ? { key: e.key, label: entryLabel(project, e.key), state: e.state, summary: e.summary, file: e.file, db: e.db, target: r.target } : { key: args.key, state: 'same', message: 'config/sync and the database agree on this entry (or it exists in neither).', target: r.target });
+          }
+          return json({
+            target: r.target,
+            versions: r.versions,
+            ms: r.timings.total,
+            differences: r.data.entries.length,
+            entries: r.data.entries.map((e) => ({ key: e.key, label: entryLabel(project, e.key), state: e.state, summary: e.summary })),
+            ...(r.warnings.length ? { warnings: r.warnings } : {}),
+          });
+        },
+      ),
+  );
+
+  const writeResult = (r: RuntimeSuccess<ConfigSyncWriteData>, project: StrapiProject): CallToolResult =>
+    json({
+      done: r.data.done,
+      ...(r.data.skipped.length ? { skipped: r.data.skipped, skippedWhy: 'not different: nothing to do' } : {}),
+      ...(r.data.reexported.length ? { reexported: r.data.reexported, reexportedWhy: "imported, then written back in the database's own form (a generated documentId…)" } : {}),
+      stillDifferent: r.data.entries.map((e) => ({ key: e.key, label: entryLabel(project, e.key), state: e.state, summary: e.summary })),
+      target: r.target,
+      ...(r.warnings.length ? { warnings: r.warnings } : {}),
+    });
+
+  reg(
+    'config_sync_export',
+    {
+      title: 'config-sync: export entries from the database into config/sync',
+      description: `Write entries from the database into config/sync with the plugin's own export — the exact form config-sync compares, so the files stop showing as different. Only entries that differ are exported; \`keys\` narrows it (default: every difference). An entry only in config/sync has its file deleted. Commit the files with the code that caused them. ${RUNS_PROJECT}`,
+      inputSchema: { keys: z.array(z.string().max(400)).max(500).optional().describe('The entries to export (default: every difference).'), env: envArg, ...selector },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => runConfigSync(args, (root) => configSyncExport(root, args.keys, runtimeOptions(args)), writeResult),
+  );
+
+  reg(
+    'config_sync_import',
+    {
+      title: 'config-sync: import entries from config/sync into the database',
+      description: `Apply entries of config/sync to the database with the plugin's own import — a role's permissions, a content-manager view, a setting. \`keys\` is required: never everything at once. An entry only in the database is deleted from it. Afterwards, the entries still different are exported back (\`reexport\`, default true): the database's own form of what was just imported (a generated documentId…), so the diff converges. Refused with NODE_ENV=production. ${RUNS_PROJECT}`,
+      inputSchema: {
+        keys: z.array(z.string().max(400)).min(1).max(500).describe('The entries to import, `<type>.<name>`.'),
+        reexport: z.boolean().optional().describe('Export back the entries still different afterwards (default true).'),
+        env: envArg,
+        ...selector,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async (args) => runConfigSync(args, (root) => configSyncImport(root, args.keys, { ...runtimeOptions(args), ...(args.reexport === false ? { reexport: false } : {}) }), writeResult),
   );
 
   reg(

@@ -201,15 +201,38 @@ suite('DevKit panel', () => {
       'config-sync ^3.2.0',
       'strapi-plugin-config-sync is declared but not installed.',
       'Unreadable files',
+      'Database',
       'Files',
     ]);
     assert.strictEqual(descOf(c, roots[0]), 'config/sync');
     assert.deepStrictEqual((await children(c, roots[2])).map((n) => labelOf(c, n)), ['Media library view']);
-    assert.strictEqual(descOf(c, roots[3]), '6 · ok 4 · invalid 1 · excluded 1');
-    const roles = await child(c, roots[3], 'Roles (Users & Permissions)');
+    assert.strictEqual(descOf(c, roots[4]), '6 · ok 4 · invalid 1 · excluded 1');
+    const roles = await child(c, roots[4], 'Roles (Users & Permissions)');
     assert.deepStrictEqual((await children(c, roles)).map((n) => labelOf(c, n)), ['Role Authenticated', 'Role Public']);
-    const settings = await child(c, roots[3], 'Settings');
+    const settings = await child(c, roots[4], 'Settings');
     assert.strictEqual(descOf(c, await child(c, settings, 'Users & Permissions — providers')), 'excluded');
+  });
+
+  test('config sync, Pro: comparing with the database runs the real plugin, or says plainly why not', async () => {
+    const c = views.configSync as AnyProvider;
+    const db = async (): Promise<unknown> => (await children(c)).find((n) => labelOf(c, n) === 'Database');
+    assert.strictEqual(descOf(c, await db()), 'not compared yet');
+    await vscode.commands.executeCommand('strapiDevkit.configSync.compare', ws, { noPrompt: true });
+    if (!vscode.workspace.isTrusted) {
+      // Restricted mode: DevKit never runs the project's code.
+      assert.strictEqual(descOf(c, await db()), 'not compared yet');
+      return;
+    }
+    const node = await until(
+      () => { views.configSync.refresh(); return db(); },
+      (n) => !!n && !/…$|not compared yet/.test(descOf(c, n)),
+    );
+    // The open-source build: the engine isn't there. The real one: no node_modules in this fixture.
+    const desc = descOf(c, node);
+    assert.ok(desc === 'not available' || desc === 'no-strapi', desc);
+    const notes = (await children(c, node)).map((n) => labelOf(c, n)).join(' | ');
+    assert.ok(/not included in the open-source build|not installed in this project/.test(notes), notes);
+    if (desc === 'no-strapi') assert.ok(/Install the project's dependencies/.test(notes), notes);
   });
 
   test('config sync: a file config-sync cannot read is an error in the file', async () => {

@@ -15,6 +15,7 @@ import { registerFollow } from './views/follow';
 import { RefreshBus, setContext } from './views/panel';
 import { registerConfigSyncDiagnostics } from './providers/configSyncDiagnostics';
 import { ConfigSyncCache, type ConfigSyncProvider, registerConfigSyncView } from './views/configSync';
+import { ConfigSyncDb, registerConfigSyncDb, runtimeEnv } from './views/configSyncDb';
 import { type HealthProvider, registerHealthView } from './views/health';
 import { type ModelProvider, registerModelView } from './views/model';
 import { type PluginsProvider, registerPluginsView } from './views/plugins';
@@ -48,7 +49,8 @@ function registerMcpServer(context: vscode.ExtensionContext, license: LicenseMan
       provideMcpServerDefinitions: async () => {
         // Forward the editor's licence key so the bundled MCP gates its Pro tools
         // with the same key entered here — set once, unlocks both surfaces.
-        const env: Record<string, string> = { ELECTRON_RUN_AS_NODE: '1' };
+        // The runtime settings too: the bundled server runs config-sync the way the editor does.
+        const env: Record<string, string> = { ELECTRON_RUN_AS_NODE: '1', ...runtimeEnv() };
         const key = await license.getKey();
         if (key) env.DEVKIT_LICENSE_KEY = key;
         return [
@@ -64,6 +66,9 @@ function registerMcpServer(context: vscode.ExtensionContext, license: LicenseMan
     // Re-offer with the new folder set, or when the licence key changes.
     vscode.workspace.onDidChangeWorkspaceFolders(() => didChange.fire()),
     license.onDidChange(() => didChange.fire()),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('strapiDevkit.runtime') || e.affectsConfiguration('strapiDevkit.configSync')) didChange.fire();
+    }),
   );
 }
 
@@ -107,7 +112,15 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
   const routesView = registerRoutesView(context, engine, configSync);
   const modelView = registerModelView(context, engine, routesView, configSync);
   const healthView = registerHealthView(context, engine, fs, configSync);
-  const configSyncView = registerConfigSyncView(context, engine, configSync);
+  const configSyncDb = new ConfigSyncDb(context, license.isLicensed);
+  const configSyncView = registerConfigSyncView(context, engine, configSync, configSyncDb);
+  registerConfigSyncDb(context, configSyncDb, (node) => {
+    const root = typeof node === 'string' ? node : (node as { root?: string } | undefined)?.root;
+    if (root) return root;
+    // From the palette: the active editor's project, else the first one.
+    const active = vscode.window.activeTextEditor?.document.uri.fsPath;
+    return (active ? engine.projectForFile(paths.normalize(active))?.root : undefined) ?? engine.allProjects()[0]?.root;
+  });
   const configSyncDiagnostics = registerConfigSyncDiagnostics(context, configSync);
   const pluginsView = registerPluginsView(context, engine, fs, routesView);
   registerRefactorCommands(context, engine, fs, license.isLicensed);
@@ -145,7 +158,10 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
   const updatePro = async (): Promise<void> => setContext('strapiDevkit.pro', await license.isLicensed());
   void updatePro();
   context.subscriptions.push(
-    license.onDidChange(() => void updatePro()),
+    license.onDidChange(() => {
+      void updatePro();
+      void configSyncView.updateLicence();
+    }),
     vscode.commands.registerCommand('strapiDevkit.open', (filePath: string, offset?: number) => openAt(filePath, offset ?? 0)),
   );
 
