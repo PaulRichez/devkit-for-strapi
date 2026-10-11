@@ -162,7 +162,10 @@ Right-click a content-type, a component, a field or a controller action in the
 panel. You can rename it, retarget a relation, move a content-type into a plugin, or
 scaffold a plugin. Each refactor first lists what it doesn't do, such as the UIDs
 Strapi also stores in the database. Then it opens VS Code's **Refactor Preview**:
-nothing is written until you apply it.
+nothing is written until you apply it. With strapi-plugin-config-sync, the plan also
+updates the `config/sync` files the refactor concerns, unless
+`strapiDevkit.configSync.followRefactors` is off for the project — see
+[Config Sync](/config-sync/).
 
 ## Go to a Strapi name
 

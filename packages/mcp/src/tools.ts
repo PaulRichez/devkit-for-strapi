@@ -3,8 +3,8 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
   CONFIG_SYNC_PACKAGE,
   configSyncLabel,
-  configSyncPlanNote,
   configSyncStatus,
+  followConfigSync,
   type PipelineStep,
   routeAccessForRoute,
   callFormCoverage,
@@ -133,6 +133,19 @@ const selector = {
     .describe('A project name (its folder) or root path. Use when you have no file path in hand.'),
 };
 
+/** The refactor tools: whether the plan also updates the config/sync files the refactor concerns. */
+const configSyncArg = {
+  configSync: z
+    .boolean()
+    .optional()
+    .describe(
+      "With strapi-plugin-config-sync: also update the config/sync files this refactor concerns (roles' permissions, content-manager views) to the new names. Default: true (the strapiDevkit.configSync.followRefactors setting; DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS=0 for a standalone server). Pass false when config/sync is not yours to change here (exported from another environment). The plan's warnings say which sync files it updates, or leaves with the old names.",
+    ),
+};
+
+/** Whether refactors follow config/sync when a call doesn't say. */
+const followRefactorsByDefault = (): boolean => !/^(0|false|no|off)$/i.test((process.env.DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS ?? '').trim());
+
 /** Resolve the project for a call, or a "specify which project" result (never a silent guess). */
 function pick(
   engine: StrapiEngine,
@@ -233,27 +246,32 @@ export function registerTools(
     return { brokenRefs: broken.length, broken };
   };
 
-  /** The plan's warnings, plus the config/sync note when it edits sync files (DevKit Pro keeps them in step). */
-  const withSyncNote = async (project: StrapiProject, edit: Pick<WorkspaceEdit, 'textEdits' | 'fileRenames'>, warnings: string[]): Promise<string[]> => {
-    const note = await configSyncPlanNote(fs, project, edit);
-    return note ? [...warnings, note] : warnings;
+  /**
+   * The plan with its config/sync files, or without them (the call's `configSync`, else the
+   * default), and its warnings with the note saying which — so the agent knows either way.
+   */
+  const syncPlan = async <E extends Pick<WorkspaceEdit, 'textEdits' | 'fileRenames'>>(project: StrapiProject, edit: E, warnings: string[], configSync: boolean | undefined): Promise<{ edit: E; warnings: string[] }> => {
+    const r = await followConfigSync(fs, project, edit, configSync ?? followRefactorsByDefault());
+    return { edit: r.edit, warnings: r.note ? [...warnings, r.note] : warnings };
   };
 
   /** A schema-edit plan → a contractual plan result, or refusal. */
-  const schemaResult = async (project: StrapiProject, plan: SchemaEditPlan, verb: string): Promise<CallToolResult> => {
+  const schemaResult = async (project: StrapiProject, plan: SchemaEditPlan, verb: string, configSync?: boolean): Promise<CallToolResult> => {
     if (!plan.ok) return json({ [verb]: false, errors: plan.errors, warnings: plan.warnings });
-    const planned = await planEdit(fs, { textEdits: plan.textEdits, fileRenames: [] });
+    const s = await syncPlan(project, { textEdits: plan.textEdits, fileRenames: [] as WorkspaceEdit['fileRenames'] }, plan.warnings, configSync);
+    const planned = await planEdit(fs, s.edit);
     rememberPlan(planned);
-    return json({ ...planned, warnings: await withSyncNote(project, { textEdits: plan.textEdits, fileRenames: [] }, plan.warnings) });
+    return json({ ...planned, warnings: s.warnings });
   };
 
   /** Plan a move (single or grouped) → a contractual plan result, or refusal. */
-  const moveResult = async (project: StrapiProject, specs: MoveSpec[]): Promise<CallToolResult> => {
+  const moveResult = async (project: StrapiProject, specs: MoveSpec[], configSync?: boolean): Promise<CallToolResult> => {
     const move = await planMove(fs, project, specs);
     if (!move.ok) return json({ moved: false, errors: move.errors, warnings: move.warnings });
-    const planned = await planEdit(fs, { textEdits: move.textEdits, fileRenames: move.fileRenames });
+    const s = await syncPlan(project, { textEdits: move.textEdits, fileRenames: move.fileRenames }, [...move.warnings, ...movedWarnings(project, specs)], configSync);
+    const planned = await planEdit(fs, s.edit);
     rememberPlan(planned);
-    return json({ ...planned, warnings: await withSyncNote(project, move, [...move.warnings, ...movedWarnings(project, specs)]) });
+    return json({ ...planned, warnings: s.warnings });
   };
   /** The database caveats of moving these refs (UIDs Strapi stores as strings). */
   const movedWarnings = (project: StrapiProject, specs: MoveSpec[]): string[] =>
@@ -965,6 +983,7 @@ export function registerTools(
         ref: z.string().describe('The owning service/controller ref, e.g. api::page.notifier'),
         method: z.string().describe('The current method name, e.g. notify'),
         newName: z.string().describe('The new method name, e.g. announce'),
+        ...configSyncArg,
         ...selector,
       },
     },
@@ -979,10 +998,10 @@ export function registerTools(
           renamed: false,
           reason: `\`${args.method}\` is not an indexed method of \`${args.ref}\`, or \`${args.newName}\` is invalid/unchanged. ${RENAME_HINT}`,
         });
-      const planned = await planEdit(fs, edit);
+      const s = await syncPlan(p.project, edit, renameWarnings(p.project, args.ref, args.newName, args.method), args.configSync);
+      const planned = await planEdit(fs, s.edit);
       rememberPlan(planned);
-      const warnings = await withSyncNote(p.project, edit, renameWarnings(p.project, args.ref, args.newName, args.method));
-      return json(warnings.length ? { ...planned, warnings } : planned);
+      return json(s.warnings.length ? { ...planned, warnings: s.warnings } : planned);
     },
   );
 
@@ -991,10 +1010,11 @@ export function registerTools(
     {
       title: 'Plan an entity rename (dry-run)',
       description:
-        'Compute the exact edits to rename a content-type / service / controller / policy / middleware / component: every magic-string call-site and route handler, plus the file/folder renames. Dry-run: returns a plan (edits + `planId`, + `warnings` listing the UIDs Strapi also stores in the database — permissions, media links, components — which the plan does not migrate; with config-sync, the plan also updates the sync files of those permissions and views, to import afterwards), writes nothing. Review, then apply with `apply_edits` (pass the `planId`).',
+        'Compute the exact edits to rename a content-type / service / controller / policy / middleware / component: every magic-string call-site and route handler, plus the file/folder renames. Dry-run: returns a plan (edits + `planId`, + `warnings` listing the UIDs Strapi also stores in the database — permissions, media links, components — which the plan does not migrate; with config-sync, the plan also updates the sync files of those permissions and views unless `configSync: false`, and says which), writes nothing. Review, then apply with `apply_edits` (pass the `planId`).',
       inputSchema: {
         ref: z.string().describe('The entity UID/ref, e.g. api::product.product or shared.seo'),
         newName: z.string().describe("The UID's new last segment, e.g. item (api::product.product → api::product.item, shared.seo → shared.item)"),
+        ...configSyncArg,
         ...selector,
       },
     },
@@ -1009,10 +1029,10 @@ export function registerTools(
           renamed: false,
           reason: `\`${args.ref}\` is not an indexed entity in this project, or \`${args.newName}\` is invalid/unchanged. ${RENAME_HINT}`,
         });
-      const planned = await planEdit(fs, edit);
+      const s = await syncPlan(p.project, edit, renameWarnings(p.project, args.ref, args.newName), args.configSync);
+      const planned = await planEdit(fs, s.edit);
       rememberPlan(planned);
-      const warnings = await withSyncNote(p.project, edit, renameWarnings(p.project, args.ref, args.newName));
-      return json(warnings.length ? { ...planned, warnings } : planned);
+      return json(s.warnings.length ? { ...planned, warnings: s.warnings } : planned);
     },
   );
 
@@ -1025,6 +1045,7 @@ export function registerTools(
       inputSchema: {
         ref: z.string().describe('An artifact ref (plugin::src.helper) or a content-type UID (api::x.x)'),
         toNamespace: z.string().describe('Destination namespace: plugin::dst or api::foo'),
+        ...configSyncArg,
         ...selector,
       },
     },
@@ -1033,7 +1054,7 @@ export function registerTools(
       await engine.whenReferencesReady();
       const p = pick(engine, args, roots());
       if ('result' in p) return p.result;
-      return moveResult(p.project, [{ ref: args.ref, toNamespace: args.toNamespace }]);
+      return moveResult(p.project, [{ ref: args.ref, toNamespace: args.toNamespace }], args.configSync);
     },
   );
 
@@ -1046,6 +1067,7 @@ export function registerTools(
       inputSchema: {
         refs: z.array(z.string()).describe('The artifact/content-type refs to move together.'),
         toNamespace: z.string().describe('Destination namespace for all of them: plugin::dst or api::foo'),
+        ...configSyncArg,
         ...selector,
       },
     },
@@ -1054,7 +1076,7 @@ export function registerTools(
       await engine.whenReferencesReady();
       const p = pick(engine, args, roots());
       if ('result' in p) return p.result;
-      return moveResult(p.project, args.refs.map((ref) => ({ ref, toNamespace: args.toNamespace })));
+      return moveResult(p.project, args.refs.map((ref) => ({ ref, toNamespace: args.toNamespace })), args.configSync);
     },
   );
 
@@ -1090,6 +1112,7 @@ export function registerTools(
       inputSchema: {
         refs: z.array(z.string()).describe('Artifact refs to extract together.'),
         name: z.string().describe('New plugin name, kebab-case.'),
+        ...configSyncArg,
         ...selector,
       },
     },
@@ -1112,13 +1135,10 @@ export function registerTools(
         ...(move.ok ? movedWarnings(p.project, args.refs.map((ref) => ({ ref, toNamespace: `plugin::${args.name}` }))) : []),
       ];
       if (!move.ok) return json({ extracted: false, errors: move.errors, warnings });
-      const planned = await planEdit(fs, {
-        textEdits: move.textEdits,
-        fileRenames: move.fileRenames,
-        fileCreates: scaffold.fileCreates,
-      });
+      const s = await syncPlan(p.project, { textEdits: move.textEdits, fileRenames: move.fileRenames, fileCreates: scaffold.fileCreates }, warnings, args.configSync);
+      const planned = await planEdit(fs, s.edit);
       rememberPlan(planned);
-      return json({ ...planned, warnings: await withSyncNote(p.project, move, warnings) });
+      return json({ ...planned, warnings: s.warnings });
     },
   );
 
@@ -1150,12 +1170,13 @@ export function registerTools(
     await engine.whenReferencesReady();
     const p = pick(engine, args, roots());
     if ('result' in p) return p.result;
-    return schemaResult(p.project, await planRenameAttribute(fs, p.project, args.uid, args.oldName, args.newName), 'renamed');
+    return schemaResult(p.project, await planRenameAttribute(fs, p.project, args.uid, args.oldName, args.newName), 'renamed', args.configSync);
   };
   const renameAttributeSchema = {
     uid: z.string().describe('The content-type UID.'),
     oldName: z.string().describe('Current attribute name.'),
     newName: z.string().describe('New attribute name.'),
+    ...configSyncArg,
     ...selector,
   };
   const renameAttributeDesc =
@@ -1223,6 +1244,7 @@ export function registerTools(
         ref: z.string().describe(REF_HELP),
         newName: z.string().describe("The new method name (with `method`), else the UID's new last segment (api::product.product + item → api::product.item)."),
         method: z.string().optional().describe('Pass to rename a method; omit to rename the entity.'),
+        ...configSyncArg,
         ...selector,
       },
     },
@@ -1232,8 +1254,10 @@ export function registerTools(
         await engine.whenReferencesReady();
         const p = pick(engine, args, roots());
         if ('result' in p) return p.result;
-        const edit = await planRename(fs, p.project, args.ref, args.newName, args.method);
-        const dbWarnings = edit ? await withSyncNote(p.project, edit, renameWarnings(p.project, args.ref, args.newName, args.method)) : [];
+        const planned = await planRename(fs, p.project, args.ref, args.newName, args.method);
+        const s = planned ? await syncPlan(p.project, planned, renameWarnings(p.project, args.ref, args.newName, args.method), args.configSync) : undefined;
+        const edit = s?.edit;
+        const dbWarnings = s?.warnings ?? [];
         if (!edit)
           return json({
             applied: false,

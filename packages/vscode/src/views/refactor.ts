@@ -1,5 +1,5 @@
 import {
-  configSyncPlanNote,
+  followConfigSync,
   type FileSystem,
   movedUid,
   paths,
@@ -135,10 +135,12 @@ export function registerRefactorCommands(
       if (!test) void vscode.window.showErrorMessage(msg);
       return msg;
     }
-    if (test?.dryRun) return outcome.edit;
-    const syncNote = await configSyncPlanNote(fs, project, outcome.edit);
-    const caveats = [...outcome.warnings, ...dbWarnings(project), ...(syncNote ? [syncNote] : [])];
-    const edit = toVscodeWorkspaceEdit(outcome.edit, { label, description: 'DevKit for Strapi' });
+    // config/sync follows the refactor unless the project says otherwise (its files may come from elsewhere).
+    const follow = vscode.workspace.getConfiguration('strapiDevkit.configSync', vscode.Uri.file(root)).get<boolean>('followRefactors', true);
+    const sync = await followConfigSync(fs, project, outcome.edit, follow);
+    if (test?.dryRun) return sync.edit;
+    const caveats = [...outcome.warnings, ...dbWarnings(project), ...(sync.note ? [sync.note] : [])];
+    const edit = toVscodeWorkspaceEdit(sync.edit, { label, description: 'DevKit for Strapi' });
     if (caveats.length) {
       const go = await vscode.window.showWarningMessage(`${label}: read before applying`, { modal: true, detail: caveats.join('\n\n') }, 'Preview Changes');
       if (go !== 'Preview Changes') return undefined;

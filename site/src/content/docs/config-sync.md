@@ -98,8 +98,16 @@ and PostgreSQL) and on Strapi 4.26 with 1.2.6 (JavaScript, on SQLite).
   concerns — the actions of the roles' permissions, the subjects and fields of the
   admin roles, the content-manager views (the file and its key, the fields of the
   layouts and their settings; a label still equal to the old field name follows).
-  The plan says so before you apply it: the database follows once you import those
-  files, after Strapi has started with the new code.
+  They are in the same plan as the code — the Refactor Preview lists them, the
+  agent's plan names them — so they are committed with it, on its branch. The
+  database follows when you import them (DevKit's import loads Strapi with the new
+  code); nothing is imported without you, since the local database is shared by
+  every branch.
+  When `config/sync` is not yours to change in a project (exported from another
+  environment), turn **`strapiDevkit.configSync.followRefactors`** off: plans then
+  leave those files, and say which still use the old names — importing them would
+  restore the permissions and views under those names. An agent can choose per call
+  with `configSync: true` or `false`.
 
 ### What it runs, and what it refuses
 
@@ -134,7 +142,9 @@ output, and what to do.
 | `strapiDevkit.configSync.environment` | `development` | `NODE_ENV` of the load. |
 | `strapiDevkit.configSync.envPath` | the project's `.env` | The `.env` Strapi loads. |
 | `strapiDevkit.configSync.allowRemoteDatabase` | off | Load Strapi on a database that is not on this machine. |
+| `strapiDevkit.configSync.followRefactors` | on | Renames and moves also update the `config/sync` files they concern. Per project (it can go in `.vscode/settings.json`). |
 
 The bundled MCP server uses the same settings. A standalone one reads `DEVKIT_NODE`,
 `DEVKIT_CONFIG_SYNC_ENV`, `DEVKIT_CONFIG_SYNC_ENV_PATH`, `DEVKIT_ALLOW_REMOTE_DATABASE=1`
-and `DEVKIT_RUNTIME_TIMEOUT_S`.
+and `DEVKIT_RUNTIME_TIMEOUT_S`, and `DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS=0` to leave
+`config/sync` out of refactors by default.

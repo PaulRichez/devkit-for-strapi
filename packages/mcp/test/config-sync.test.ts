@@ -2,9 +2,20 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createEngine, MemoryFileSystem } from 'devkit-for-strapi-core';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { planRename } from 'devkit-for-strapi-pro';
 import { registerTools } from '../src/tools';
 
 type Handler = (args?: unknown) => Promise<CallToolResult>;
+
+/** The open-source build ships a stub of the Pro refactor engine; the real one runs the refactor tests too. */
+const HAS_PRO_ENGINE = await (async (): Promise<boolean> => {
+  try {
+    await planRename(new MemoryFileSystem({}), { index: { services: new Map(), controllers: new Map(), contentTypes: new Map(), policies: new Map(), middlewares: new Map(), components: new Map() } } as never, 'x', 'y');
+    return true;
+  } catch (e) {
+    return !/not included in the open-source build/.test(String(e));
+  }
+})();
 
 const ROOT = 'c:/cs';
 const SYNC = `${ROOT}/config/sync`;
@@ -102,6 +113,37 @@ describe('config_sync_status, and config-sync in project_info and list_routes', 
     };
     expect(await run({ [`${ROOT}/package.json`]: j({ dependencies: { '@strapi/strapi': '^5.0.0' } }) })).toMatchObject({ detected: false });
     expect(await run({ ...FILES, [`${ROOT}/config/plugins.js`]: "module.exports = { 'config-sync': { enabled: false } };" })).toMatchObject({ detected: true, disabled: true });
+  });
+
+  it.skipIf(!HAS_PRO_ENGINE)('a refactor updates the config/sync files it concerns — unless configSync: false, or the default says so — and the plan tells the agent', async () => {
+    const fs = new MemoryFileSystem(FILES);
+    const engine = createEngine(fs);
+    await engine.init([ROOT], { waitForInstalled: true });
+    await engine.whenReferencesReady();
+    const h = new Map<string, Handler>();
+    registerTools({ registerTool: (name: string, _c: unknown, cb: Handler) => h.set(name, cb) } as unknown as McpServer, engine, fs, Promise.resolve());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const plan = async (args: Record<string, unknown>): Promise<any> => JSON.parse(((await h.get('plan_rename_entity')!({ ref: 'api::article.article', newName: 'post', ...args })).content[0] as { text: string }).text);
+    // The files the plan edits or renames (not its warnings, which name them too).
+    const touched = (p: { textEdits: unknown[]; fileRenames: unknown[] }): string => JSON.stringify([p.textEdits, p.fileRenames]);
+    const role = 'user-role.public.json';
+
+    const followed = await plan({});
+    expect(touched(followed)).toContain(role);
+    expect(followed.warnings.join(' ')).toMatch(/config\/sync: this plan also updates 2 files .*user-role\.public\.json/);
+
+    const left = await plan({ configSync: false });
+    expect(touched(left)).not.toContain(role);
+    expect(touched(left)).toContain('schema.json');
+    expect(left.warnings.join(' ')).toMatch(/config\/sync: left as it is .*still use the old names \(.*user-role\.public\.json/);
+
+    process.env.DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS = '0';
+    try {
+      expect(touched(await plan({}))).not.toContain(role);
+      expect(touched(await plan({ configSync: true }))).toContain(role);
+    } finally {
+      delete process.env.DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS;
+    }
   });
 
   it('says plainly when config-sync is not used', async () => {

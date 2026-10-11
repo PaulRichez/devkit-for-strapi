@@ -32,7 +32,7 @@ through your AI agent.
   plugin's CLI does), and export or import entry by entry, in VS Code's diff editor
   and for your agent (`config_sync_diff`, `config_sync_export`, `config_sync_import`).
   Renames and moves update the `config/sync` files they concern (permissions,
-  content-manager views). Only on a local development database. See
+  content-manager views) — a setting leaves them alone. Only on a local development database. See
   [Config Sync](/config-sync/).
 - **Safe apply** — every change is a contractual plan, applied by an executor
   that is root-confined (symlink-resolved), refuses silent overwrites, verifies

@@ -59,7 +59,9 @@ export function runtimeSettings(): RuntimeOptions {
 /** The same settings, for the bundled MCP server (it reads them from its environment). */
 export function runtimeEnv(): Record<string, string> {
   const o = runtimeSettings();
+  const follow = vscode.workspace.getConfiguration('strapiDevkit.configSync').get<boolean>('followRefactors', true);
   return {
+    ...(follow ? {} : { DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS: '0' }),
     ...(o.nodePath ? { DEVKIT_NODE: o.nodePath } : {}),
     ...(o.env ? { DEVKIT_CONFIG_SYNC_ENV: o.env } : {}),
     ...(o.envPath ? { DEVKIT_CONFIG_SYNC_ENV_PATH: o.envPath } : {}),

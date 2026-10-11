@@ -87,8 +87,11 @@
   caused, commit it with the code.
 - Refactors follow: renaming or moving a content-type, a component, a controller or
   one of its actions, or renaming a field, also updates the `config/sync` files it
-  concerns — the roles' permissions, the admin roles, the content-manager views. The
-  plan says so, and to import them once Strapi has started with the new code.
+  concerns — the roles' permissions, the admin roles, the content-manager views — in
+  the same plan as the code, and the plan says which. Off per project with
+  `strapiDevkit.configSync.followRefactors` (a `config/sync` exported from another
+  environment): plans then leave those files and say which still use the old names.
+  An agent chooses per call with `configSync`. Nothing is imported without you.
 - Only in a trusted workspace, after your agreement, on a local development
   database. Refused before anything runs: a missing SQLite file, a Strapi 4 database
   under Strapi 5 code, an import in production, an export from an empty database.

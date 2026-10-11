@@ -96,7 +96,7 @@ transactional, and **self-verifying** for broken refs afterward.
 | Tool | Params | What it plans |
 |---|---|---|
 | `plan_rename_method` | `ref`, `method`, `newName` | Rename a service/controller method — declaration, every `strapi.service(...).method()` call-site, and (controllers) the route-handler action segment. |
-| `plan_rename_entity` | `ref`, `newName` | Rename a content-type / service / controller / policy / middleware / component — every call-site & route handler, plus file/folder renames. The plan's `warnings` list the UIDs Strapi also stores **in the database** (permissions, media links, components): the plan edits code and files only, so migrate those rows on a project that already has data. With config-sync, the plan also updates the sync files of those permissions and views, and a warning says to import them once Strapi has started with the new code. |
+| `plan_rename_entity` | `ref`, `newName` | Rename a content-type / service / controller / policy / middleware / component — every call-site & route handler, plus file/folder renames. The plan's `warnings` list the UIDs Strapi also stores **in the database** (permissions, media links, components): the plan edits code and files only, so migrate those rows on a project that already has data. With config-sync, the plan also updates the sync files of those permissions and views (see `configSync` below). |
 | `plan_move` | `ref`, `toNamespace` | Move an artifact, or a whole content-type resource (CT + service + controller + routes), to another namespace; repoints relation `target`s and `strapi.plugin(...)` chains. |
 | `plan_move_entities` | `refs[]`, `toNamespace` | Like `plan_move` for several refs to one destination, in one coherent pass. |
 | `plan_change_relation` | `uid`, `field`, `newTarget` | Retarget a relation field to another content-type (precise `schema.json` edit). Warns about a now-orphaned inverse. |
@@ -107,6 +107,16 @@ transactional, and **self-verifying** for broken refs afterward.
 | `apply_rename` | `ref`, `newName`, `method?` | ⚠️ **Writes.** Convenience: plan + apply a rename in one call. Prefer `plan_rename_*` + `apply_edits` to review first. |
 
 > Deprecated aliases (kept for transition): `change_relation` → `plan_change_relation`, `rename_attribute` → `plan_rename_attribute`.
+
+**`configSync`** — with strapi-plugin-config-sync, the renames and moves
+(`plan_rename_*`, `plan_move*`, `plan_rename_attribute`, `extract_to_plugin`,
+`apply_rename`) also update the `config/sync` files they concern: the roles'
+permissions, the admin roles, the content-manager views. Pass `configSync: false` to
+leave them (a project whose `config/sync` comes from another environment). The default
+is the user's `strapiDevkit.configSync.followRefactors` setting — on unless turned off
+(`DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS=0` for a standalone server). Either way a
+`warnings` entry says which sync files the plan updates, or leaves with the old names.
+Importing them is the user's call: the local database is shared by every branch.
 
 ## Addressing & guarantees
 

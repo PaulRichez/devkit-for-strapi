@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_EXCLUDED_CONFIG, detectConfigSync } from '../src/configSync/detect';
 import { configSyncLabel } from '../src/configSync/labels';
-import { configSyncPlanNote, syncFilesInPlan } from '../src/configSync/planNote';
+import { followConfigSync, syncFilesInPlan } from '../src/configSync/planNote';
 import { routeAccessForRoute, routeAccessInSync } from '../src/configSync/routeAccess';
 import { configSyncStatus } from '../src/configSync/status';
 import { escapeName, readSyncDir, unescapeName } from '../src/configSync/syncDir';
@@ -123,7 +123,7 @@ describe('config-sync, read from the files', () => {
     expect(await configSyncStatus(fs, project)).toBeUndefined();
   });
 
-  it("says when a refactor plan edits sync files: they reach the database only through an import", async () => {
+  it('a refactor plan keeps its sync files and says so, or leaves them and says which still use the old names', async () => {
     const { fs, project } = await load(FILES);
     const at = { line: 0, character: 0 };
     const code = { filePath: `${ROOT}/src/api/article/controllers/article.ts`, start: at, end: at, newText: '' };
@@ -131,10 +131,21 @@ describe('config-sync, read from the files', () => {
     const view = { from: `${SYNC}/core-store.plugin_content_manager_configuration_content_types##api##article.article.json`, to: `${SYNC}/core-store.x.json` };
     expect(syncFilesInPlan(SYNC, { textEdits: [code, role, role], fileRenames: [view] })).toEqual([role.filePath, view.from]);
     expect(syncFilesInPlan(`${ROOT}/config/syn`, { textEdits: [role], fileRenames: [] })).toEqual([]);
-    expect(await configSyncPlanNote(fs, project, { textEdits: [code], fileRenames: [] })).toBeUndefined();
-    const note = await configSyncPlanNote(fs, project, { textEdits: [role], fileRenames: [view] });
-    expect(note).toMatch(/^config\/sync: this plan also updates 2 files/);
-    expect(note).toContain('config_sync_import');
+    const plan = { textEdits: [code, role], fileRenames: [view], fileCreates: [{ filePath: `${ROOT}/x.ts`, content: '' }] };
+    // No sync file in the plan: nothing to say, whatever the setting.
+    expect(await followConfigSync(fs, project, { textEdits: [code], fileRenames: [] }, true)).toEqual({ edit: { textEdits: [code], fileRenames: [] } });
+    expect(await followConfigSync(fs, project, { textEdits: [code], fileRenames: [] }, false)).toEqual({ edit: { textEdits: [code], fileRenames: [] } });
+    // Following: the plan as planned, and the note names the files, the import, and how to turn it off.
+    const kept = await followConfigSync(fs, project, plan, true);
+    expect(kept.edit).toBe(plan);
+    expect(kept.note).toMatch(/^config\/sync: this plan also updates 2 files of the sync directory to the new names \(user-role\.public\.json, core-store\.plugin_content_manager/);
+    expect(kept.note).toContain('config_sync_import');
+    expect(kept.note).toContain('configSync: false');
+    // Not following: the sync files out, the rest of the plan (code, creates) as it was.
+    const left = await followConfigSync(fs, project, plan, false);
+    expect(left.edit).toEqual({ textEdits: [code], fileRenames: [], fileCreates: plan.fileCreates });
+    expect(left.note).toMatch(/^config\/sync: left as it is .* 2 files of the sync directory still use the old names/);
+    expect(left.note).toMatch(/restore the permissions and views under the old names/);
   });
 });
 

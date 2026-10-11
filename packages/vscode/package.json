@@ -350,6 +350,12 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Pro — also load Strapi on a database that is not on this machine. A load does what a start of `strapi develop` does to the database (schema sync, migrations): leave this off unless you are sure."
+        },
+        "strapiDevkit.configSync.followRefactors": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Pro — with strapi-plugin-config-sync, renames and moves also update the `config/sync` files they concern (roles' permissions, content-manager views), in the same plan as the code. Turn it off for a project whose `config/sync` is not yours to change (exported from another environment): plans then leave those files, and say which still use the old names. The bundled MCP server follows it; an agent can pass `configSync` on a call. Nothing is imported into the database without you."
         }
       }
     },

@@ -119,7 +119,7 @@ suite('DevKit panel', () => {
 
   // The Pro refactors, in dry-run (the plan is returned, nothing is opened or applied).
   // The open-source build ships a stub of the Pro engine: these run against the real one only.
-  type Plan = { textEdits: Array<{ filePath: string; newText: string }>; fileRenames: unknown[]; fileCreates?: Array<{ path: string }> };
+  type Plan = { textEdits: Array<{ filePath: string; newText: string }>; fileRenames: Array<{ from: string; to: string }>; fileCreates?: Array<{ path: string }> };
   const dryRun = async (ctx: Mocha.Context, command: string, node: unknown, args: Record<string, unknown>): Promise<Plan> => {
     const res = await vscode.commands.executeCommand<Plan | string>(command, node, { ...args, dryRun: true });
     if (typeof res === 'string' && /not included in the open-source build/.test(res)) ctx.skip();
@@ -133,6 +133,24 @@ suite('DevKit panel', () => {
     const edit = await dryRun(this, 'strapiDevkit.refactor.renameType', author, { newName: 'writer' });
     assert.ok(edit.textEdits.some((e) => e.newText.includes('writer')));
     assert.ok(edit.fileRenames.length > 0); // its folder and files
+  });
+
+  test('pro: a rename updates config/sync, unless strapiDevkit.configSync.followRefactors is off', async function () {
+    const m = views.model as AnyProvider;
+    const article = await child(m, await child(m, undefined, 'Content-types'), 'Article');
+    const syncFiles = (e: Plan): string[] =>
+      [...e.textEdits.map((t) => t.filePath), ...e.fileRenames.map((r) => r.from)].filter((f) => f.replace(/\\/g, '/').includes('/config/sync/'));
+    const followed = await dryRun(this, 'strapiDevkit.refactor.renameType', article, { newName: 'post' });
+    assert.ok(syncFiles(followed).some((f) => f.endsWith('user-role.public.json')), JSON.stringify(syncFiles(followed)));
+    const cfg = vscode.workspace.getConfiguration('strapiDevkit.configSync');
+    await cfg.update('followRefactors', false, vscode.ConfigurationTarget.Global);
+    try {
+      const left = await dryRun(this, 'strapiDevkit.refactor.renameType', article, { newName: 'post' });
+      assert.deepStrictEqual(syncFiles(left), []);
+      assert.ok(left.textEdits.some((e) => e.newText.includes('post')), 'the code is still renamed');
+    } finally {
+      await cfg.update('followRefactors', undefined, vscode.ConfigurationTarget.Global);
+    }
   });
 
   test('pro: rename a controller action from its route pipeline', async function () {
