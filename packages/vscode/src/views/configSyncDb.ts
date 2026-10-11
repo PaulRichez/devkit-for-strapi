@@ -187,7 +187,7 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
     }
     const r = await this.run(root, `exporting ${list.length} entr${list.length === 1 ? 'y' : 'ies'}`, (o) => configSyncExport(root, list.map((e) => e.key), o));
     this.settle(root, r);
-    if (r?.ok && !noPrompt) void vscode.window.showInformationMessage(`DevKit for Strapi: ${r.data.done.length} exported into ${relPath(paths.join(root, 'config/sync'))}. Commit them with the code that caused them.`);
+    if (r?.ok && !noPrompt) say(`DevKit for Strapi: ${r.data.done.length} exported into ${relPath(paths.join(root, 'config/sync'))}. Commit them with the code that caused them.`, r.warnings);
     return r;
   }
 
@@ -203,7 +203,7 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
     this.settle(root, r);
     if (r?.ok && !noPrompt) {
       const re = r.data.reexported.length ? ` ${r.data.reexported.length} written back in the database's form.` : '';
-      void vscode.window.showInformationMessage(`DevKit for Strapi: ${r.data.done.length} imported.${re}`);
+      say(`DevKit for Strapi: ${r.data.done.length} imported.${re}`, r.warnings);
     }
     return r;
   }
@@ -213,6 +213,13 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
     const s = this.state(root);
     return s?.kind === 'done' ? s.result.data.entries : [];
   }
+}
+
+/** The outcome of an export or an import, with what the plugin or DevKit warned about. */
+function say(message: string, warnings: string[]): void {
+  // A notification shows no detail: the warnings go in the message.
+  if (warnings.length) void vscode.window.showWarningMessage(`${message} ${warnings.join(' ')}`);
+  else void vscode.window.showInformationMessage(message);
 }
 
 /** One line for a failure: what happened and what to do. */

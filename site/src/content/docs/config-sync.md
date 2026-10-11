@@ -86,7 +86,9 @@ and PostgreSQL) and on Strapi 4.26 with 1.2.6 (JavaScript, on SQLite).
   confirmation says, for each entry, whether it is updated, created or deleted in
   the database. Afterwards, the entries still different are exported back: the
   database has just applied them, so what differs is its own form of them (a
-  generated `documentId`…), and the diff converges.
+  generated `documentId`…), and the diff converges. With config-sync's `soft` option,
+  the plugin leaves the entries already in the database as they are: DevKit says
+  which, and keeps their files.
 - **For your agent**: `config_sync_diff`, `config_sync_export`, `config_sync_import`.
   The loop: change the code, `config_sync_diff`, export the entries the change
   caused, commit them with the code. To change a role or a content-manager view:
@@ -107,11 +109,13 @@ migrations run. So:
 
 - it only runs in a **trusted workspace**, after you agree once per project;
 - it only loads Strapi on a **local development database** (localhost, a socket, a
-  SQLite file in the project) — unless you allow remote ones explicitly;
+  SQLite file in the project; a database URL such as `DATABASE_URL` is judged by the
+  host it points to) — unless you allow remote ones explicitly;
 - it **refuses**, before anything runs: a SQLite file that doesn't exist (Strapi would
   create a new, empty one), a Strapi 4 database under Strapi 5 code (DevKit never runs
-  the 4 → 5 migration, which can't be undone), an import with `NODE_ENV=production`,
-  and an export from a database with no Strapi table yet (it would write a fresh
+  the 4 → 5 migration, which can't be undone), an import when `NODE_ENV` is
+  `production` (for the load, where DevKit runs, or in the project's `.env`), and an
+  export from a database with no Strapi table yet (it would write a fresh
   install's defaults into `config/sync`);
 - it warns when a Strapi server already answers on the same SQLite database: both
   write to it. It works — checked with `strapi develop` running on Strapi 5.54: the
