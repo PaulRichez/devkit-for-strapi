@@ -85,11 +85,15 @@
 - MCP: `config_sync_diff`, `config_sync_export`, `config_sync_import`, and the loop
   in the server's instructions: change the code, diff, export what the change
   caused, commit it with the code.
+- Refactors follow: renaming or moving a content-type, a component, a controller or
+  one of its actions, or renaming a field, also updates the `config/sync` files it
+  concerns — the roles' permissions, the admin roles, the content-manager views. The
+  plan says so, and to import them once Strapi has started with the new code.
 - Only in a trusted workspace, after your agreement, on a local development
   database. Refused before anything runs: a missing SQLite file, a Strapi 4 database
   under Strapi 5 code, an import in production, an export from an empty database.
-- Checked against the plugin itself on Strapi 5.54 (JavaScript and TypeScript) and
-  4.26 (JavaScript), on SQLite.
+- Checked against the plugin itself on Strapi 5.54 (JavaScript and TypeScript, on
+  SQLite and PostgreSQL) and 4.26 (JavaScript, on SQLite).
 
 **Routes: what Strapi really does with names**
 
@@ -124,6 +128,10 @@
 
 **Fixes**
 
+- Renaming a content-type (Pro) left its `info.singularName` as it was: Strapi then
+  refused to start ("The key of the content-type should be the same as its
+  singularName"). The rename now updates it; `pluralName` and the table stay, so the
+  REST routes and the data don't move.
 - Renaming a controller action (Pro) failed when a service shared its ref — the
   standard layout (`createCoreService` next to `createCoreController`).
 - A short route handler pushed into a plugin from `src/extensions` was reported

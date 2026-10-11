@@ -122,8 +122,9 @@ One licence unlocks **safe, propagated refactors** in both surfaces:
   (Mermaid)**, PNG or SVG.
 - **Config Sync through your Strapi** — the real diff between `config/sync` and the
   database, from config-sync itself (your project's Strapi, loaded the way the
-  plugin's CLI does), in VS Code's diff editor; export and import entry by entry. On
-  a local development database only, in a trusted workspace.
+  plugin's CLI does), in VS Code's diff editor; export and import entry by entry.
+  Renames and moves update the `config/sync` files they concern. On a local
+  development database only, in a trusted workspace.
 - **For your AI agent** — `plan_*` refactors (rename, move / extract-to-plugin, schema
   edits) returned as a **reviewable plan**, plus a verified, root-confined, transactional
   **apply**. Both the plan *and* its apply are licensed. `get_model_diagram` gives it

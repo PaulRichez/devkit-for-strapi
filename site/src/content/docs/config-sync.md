@@ -71,8 +71,8 @@ config-sync can't read is also an error in the file. Other views link to it:
 With Pro, DevKit asks **config-sync itself**: it loads your project's own Strapi the
 way the plugin's CLI does — no server, no port, no admin account — and calls the
 plugin. The answers are the plugin's, whatever the versions of Strapi and config-sync.
-Checked on Strapi 5.54 with config-sync 3.2.0 (JavaScript and TypeScript) and on
-Strapi 4.26 with 1.2.6 (JavaScript), on SQLite.
+Checked on Strapi 5.54 with config-sync 3.2.0 (JavaScript and TypeScript, on SQLite
+and PostgreSQL) and on Strapi 4.26 with 1.2.6 (JavaScript, on SQLite).
 
 - **Compare with the database**: the diff config-sync's admin page shows — each
   entry *different*, *only in the database* or *only in config/sync*, with what
@@ -91,6 +91,13 @@ Strapi 4.26 with 1.2.6 (JavaScript), on SQLite.
   The loop: change the code, `config_sync_diff`, export the entries the change
   caused, commit them with the code. To change a role or a content-manager view:
   edit its file, import it, and the plugin writes it back in its own form.
+- **Refactors follow**: renaming or moving a content-type, a component, a controller
+  or one of its actions, or renaming a field, also updates the `config/sync` files it
+  concerns — the actions of the roles' permissions, the subjects and fields of the
+  admin roles, the content-manager views (the file and its key, the fields of the
+  layouts and their settings; a label still equal to the old field name follows).
+  The plan says so before you apply it: the database follows once you import those
+  files, after Strapi has started with the new code.
 
 ### What it runs, and what it refuses
 
@@ -106,7 +113,9 @@ migrations run. So:
   the 4 → 5 migration, which can't be undone), an import with `NODE_ENV=production`,
   and an export from a database with no Strapi table yet (it would write a fresh
   install's defaults into `config/sync`);
-- it warns when a Strapi server already answers on the same SQLite database.
+- it warns when a Strapi server already answers on the same SQLite database: both
+  write to it. It works — checked with `strapi develop` running on Strapi 5.54: the
+  diff is right, and the server applies an imported permission at once.
 
 When a load fails, DevKit says at which step (compiling, loading the code, checking
 the database, starting Strapi), with Strapi's or the plugin's own message, its last
