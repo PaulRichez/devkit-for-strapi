@@ -15,6 +15,7 @@
  */
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
+import { performance } from 'node:perf_hooks';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 

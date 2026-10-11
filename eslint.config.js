@@ -11,6 +11,7 @@ export default tseslint.config(
       '**/coverage/**',
       '**/.vscode-test/**',
       '**/.astro/**',
+      '.release/**',
       'packages/test-fixtures/**',
     ],
   },
