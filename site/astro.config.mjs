@@ -85,6 +85,7 @@ export default defineConfig({
           ],
         },
         { label: 'FAQ', link: '/faq/' },
+        { label: 'Changelog', link: '/changelog/' },
       ],
     }),
   ],

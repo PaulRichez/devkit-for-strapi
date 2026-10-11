@@ -20,3 +20,5 @@ private/
 # Keep the intentional fake node_modules used by discovery/pruning tests.
 !packages/test-fixtures/fixtures/**/node_modules/
 !packages/test-fixtures/fixtures/**/node_modules/**
+# Generated at build time from packages/vscode/CHANGELOG.md (site/scripts/changelog.mjs)
+site/src/content/docs/changelog.md

@@ -5,8 +5,8 @@
   "type": "module",
   "description": "Marketing landing + documentation for DevKit for Strapi (Astro + Starlight).",
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
+    "dev": "node scripts/changelog.mjs && astro dev",
+    "build": "node scripts/changelog.mjs && astro build",
     "preview": "astro preview",
     "astro": "astro"
   },
