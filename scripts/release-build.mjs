@@ -184,6 +184,12 @@ run('pnpm install --no-frozen-lockfile', RELEASE_DIR);
 step(6, 'Building all packages…');
 run('pnpm -r build', RELEASE_DIR);
 
+// esbuild doesn't type-check: a drift between the stub's API, which the surfaces compile
+// against, and the real engine's (a field one declares and the other never returns) would
+// ship as a crash. Type-check the surfaces against the overlaid engine.
+step('6b', 'Type-checking against the engine being shipped…');
+run('pnpm -r typecheck', RELEASE_DIR);
+
 // ---------------------------------------------------------------------------
 // 7. Verify what actually got compiled in, before anything is packaged.
 // ---------------------------------------------------------------------------
@@ -207,6 +213,14 @@ for (const bundle of bundles) {
   }
   log(`  ✓ ${name} — ${stubbed ? 'free tier (stub)' : 'Pro engine'}`);
 }
+// The licence's dev overrides must be compiled out (esbuild defines): with any of
+// them readable from the environment, the Pro gate could be bypassed.
+for (const bundle of [...bundles, join(RELEASE_DIR, 'packages', 'vscode', 'dist', 'mcp.js')]) {
+  const text = readFileSync(bundle, 'utf8');
+  const live = ['DEVKIT_DEV', 'DEVKIT_POLAR_ORG_ID', 'DEVKIT_LICENSE_CACHE'].filter((v) => text.includes(`env.${v}`));
+  if (live.length) die(`${bundle.replace(RELEASE_DIR, '')} still reads ${live.join(', ')} from the environment. Aborting.`);
+}
+log('  ✓ the licence dev overrides are compiled out');
 
 // ---------------------------------------------------------------------------
 // 8. Package the artifacts.

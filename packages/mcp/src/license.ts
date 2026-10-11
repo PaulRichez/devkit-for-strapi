@@ -22,7 +22,8 @@ const POLAR_API = 'https://api.polar.sh';
 
 /**
  * Our Polar organization id — public (identifies the seller org, not a secret),
- * so it ships baked in. Overridable via `DEVKIT_POLAR_ORG_ID` for a sandbox org.
+ * so it ships baked in. Overridable via `DEVKIT_POLAR_ORG_ID` for a sandbox org — in dev
+ * builds only: a published build replaces it with `undefined` (esbuild.mjs).
  */
 const POLAR_ORG_ID = '6bb206eb-2492-4be2-b074-292f5468faa9';
 
@@ -76,7 +77,7 @@ export function fileCache(path: string): LicenseCache {
   };
 }
 
-/** Cache location — overridable via `DEVKIT_LICENSE_CACHE` (tests, custom homes). */
+/** Cache location — overridable via `DEVKIT_LICENSE_CACHE` in tests and dev builds (a published build replaces it with `undefined`). */
 function cacheFile(): string {
   return process.env.DEVKIT_LICENSE_CACHE || join(homedir(), '.devkit-for-strapi', 'license.json');
 }

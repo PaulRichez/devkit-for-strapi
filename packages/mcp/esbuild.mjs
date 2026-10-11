@@ -11,11 +11,20 @@ const watch = process.argv.includes('--watch');
 // at 0.1.3), which made every client — and every bug report — name the wrong version.
 const pkg = JSON.parse(readFileSync(resolve(here, 'package.json'), 'utf8'));
 
-// Neutralise the DEVKIT_DEV dogfood override in the published bin so it can't be
-// flipped on via an env var. A --watch dev build keeps it live (local dogfood).
+/** The licence overrides a published build must not read (see below). */
+export const RELEASE_DEFINES = {
+  'process.env.DEVKIT_DEV': '"0"',
+  'process.env.DEVKIT_POLAR_ORG_ID': 'undefined',
+  'process.env.DEVKIT_LICENSE_CACHE': 'undefined',
+};
+
+// Neutralise the licence's dev overrides in the published bin so none can be set
+// through an env var: the DEVKIT_DEV dogfood key, another Polar organisation (a
+// $0 product of one's own would validate), another licence cache file. A --watch
+// dev build keeps them live (local dogfood, a sandbox org).
 const define = {
   __DEVKIT_MCP_VERSION__: JSON.stringify(pkg.version),
-  ...(watch ? {} : { 'process.env.DEVKIT_DEV': '"0"' }),
+  ...(watch ? {} : RELEASE_DEFINES),
 };
 
 // Bundle core + the MCP SDK into a single Node file. CJS (`.cjs`) — `typescript`

@@ -10,10 +10,14 @@ const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
 const tests = process.argv.includes('--tests');
 
-// Neutralise the DEVKIT_DEV dogfood override in production bundles so it can't be
-// flipped on via an env var by a user. Dev/F5 and --tests keep it live (the
-// integration test relies on it to exercise the licensed rename path).
-const define = production ? { 'process.env.DEVKIT_DEV': '"0"' } : {};
+// Neutralise the licence's dev overrides in production bundles (the extension and
+// its bundled MCP server) so none can be flipped on via an env var by a user: the
+// DEVKIT_DEV dogfood key, another Polar organisation, another licence cache file.
+// Dev/F5 and --tests keep them live (the integration test relies on DEVKIT_DEV to
+// exercise the licensed paths).
+const define = production
+  ? { 'process.env.DEVKIT_DEV': '"0"', 'process.env.DEVKIT_POLAR_ORG_ID': 'undefined', 'process.env.DEVKIT_LICENSE_CACHE': 'undefined' }
+  : {};
 
 /** Copy branding assets into the extension package so vsce can bundle them. */
 function copyAssets() {
