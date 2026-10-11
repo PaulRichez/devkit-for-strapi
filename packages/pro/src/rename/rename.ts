@@ -39,7 +39,7 @@ export function computeRename(
   _offset: number,
   _text: string,
   _newName: string,
-): Promise<WorkspaceEdit | null> {
+): Promise<WorkspaceEdit | undefined> {
   throw new Error(PRO_ONLY);
 }
 
@@ -51,6 +51,6 @@ export function planRename(
   _newName: string,
   _method?: string,
   _owner?: 'service' | 'controller',
-): Promise<WorkspaceEdit | null> {
+): Promise<WorkspaceEdit | undefined> {
   throw new Error(PRO_ONLY);
 }

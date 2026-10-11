@@ -160,7 +160,7 @@ export function registerRefactorCommands(
     return v?.trim() || undefined;
   };
 
-  const editOf = (e: WorkspaceEdit | null, fallback: string): PlanOutcome =>
+  const editOf = (e: WorkspaceEdit | undefined, fallback: string): PlanOutcome =>
     e ? { edit: e, errors: [], warnings: e.warnings ?? [] } : { errors: [fallback], warnings: [] };
 
   const schemaOutcome = (p: { ok: boolean; errors: string[]; warnings: string[]; textEdits: WorkspaceEdit['textEdits']; fileRenames: WorkspaceEdit['fileRenames'] }): PlanOutcome =>
