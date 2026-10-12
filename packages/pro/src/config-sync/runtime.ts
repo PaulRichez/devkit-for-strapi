@@ -20,6 +20,8 @@ export interface ConfigSyncDbEntry {
   db: unknown;
   /** What differs, in a few words. */
   summary: string[];
+  /** Every difference, one per line (an admin role's permissions can make it long). */
+  differences: string[];
 }
 
 export interface ConfigSyncDiffData {

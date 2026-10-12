@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.1
+
+**Config Sync (Pro): diffs that stay readable on big projects**
+
+- The summary of an entry says what changed inside an item, not only that it changed:
+  a role's permission is named by its action and subject, and the field added to it
+  or removed from it is named
+  (`permissions[plugin::content-manager.explorer.create · api::article.article].properties.fields tags`).
+  Before, a permission with one field changed showed up both as "only in the file" and
+  as "only in the database", named by its action alone.
+- The documentIds that differ between the files and the database (a database made
+  apart from the files) are counted on one line, after the rest, instead of one line
+  each.
+- For your agent: `config_sync_diff` with `key` returns every difference, and the two
+  sides in full only when they fit in one answer. An admin role with hundreds of
+  permissions used to make a result larger than Claude Code accepts from a tool.
+  `type` narrows the list to one type, and a first diff with hundreds of entries lists
+  the first ones with the count of each type. `config_sync_status` with `key` leaves
+  out a file too large to return, and says so.
+
 ## 0.2.0
 
 **Installed plugins are verified, not skipped**

@@ -4,6 +4,7 @@ import {
   CONFIG_SYNC_PACKAGE,
   configSyncLabel,
   configSyncStatus,
+  type ConfigSyncStaticStatus,
   followConfigSync,
   type PipelineStep,
   routeAccessForRoute,
@@ -44,6 +45,7 @@ import {
   configSyncDiff,
   configSyncExport,
   configSyncImport,
+  type ConfigSyncDbEntry,
   type ConfigSyncWriteData,
   type RuntimeFailure,
   type RuntimeOptions,
@@ -72,6 +74,29 @@ import { VERSION } from './version';
 const json = (data: unknown): CallToolResult => ({
   content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
 });
+
+/** Characters, as `json` sends it. Claude Code refuses a tool result over 25,000 tokens: answers stay well under. */
+const sizeOf = (v: unknown): number => JSON.stringify(v, null, 2)?.length ?? 0;
+const ANSWER_MAX = 40_000;
+const DIFFERENCES_MAX = 24_000;
+
+/** The lines that fit in `max` characters (a very long one clipped), and whether that's all of them. */
+function fitLines(lines: string[], max: number): { lines: string[]; complete: boolean } {
+  const out: string[] = [];
+  let used = 0;
+  let complete = true;
+  for (const [i, l] of lines.entries()) {
+    const line = l.length > 4000 ? `${l.slice(0, 3999)}…` : l;
+    if (line !== l) complete = false;
+    if (used + line.length > max) {
+      out.push(`… ${lines.length - i} more, not shown: too long for one answer`);
+      return { lines: out, complete: false };
+    }
+    out.push(line);
+    used += line.length + 4;
+  }
+  return { lines: out, complete };
+}
 
 /** Human-readable text for a thrown value (for structured apply-failure reasons). */
 /** Most routes `list_routes` explains at once (`pipeline: true`). */
@@ -758,7 +783,7 @@ export function registerTools(
           label: label(entry.key),
           file: entry.path,
           status: entry.status,
-          ...(entry.content !== undefined ? { content: entry.content } : {}),
+          ...(entry.content === undefined ? {} : sizeOf(entry.content) <= ANSWER_MAX ? { content: entry.content } : { content: `Not included: ${sizeOf(entry.content)} characters, too many for one answer — read the file itself.` }),
           ...partial,
         });
       }
@@ -813,7 +838,11 @@ export function registerTools(
       ...(r.warnings.length ? { warnings: r.warnings } : {}),
     });
   /** Run a config-sync command on a project using the plugin (the stub build throws: said plainly). */
-  const runConfigSync = async <T>(args: { from?: string; project?: string }, run: (root: string) => Promise<RuntimeResult<T>>, ok: (r: RuntimeSuccess<T>, project: StrapiProject) => CallToolResult): Promise<CallToolResult> => {
+  const runConfigSync = async <T>(
+    args: { from?: string; project?: string },
+    run: (root: string) => Promise<RuntimeResult<T>>,
+    ok: (r: RuntimeSuccess<T>, project: StrapiProject, status: ConfigSyncStaticStatus) => CallToolResult,
+  ): Promise<CallToolResult> => {
     await ready;
     const p = pick(engine, args, roots());
     if ('result' in p) return p.result;
@@ -827,11 +856,38 @@ export function registerTools(
     } catch (e) {
       return json({ ok: false, message: e instanceof Error ? e.message : String(e) });
     }
-    return r.ok ? ok(r, p.project) : runtimeFailure(r);
+    return r.ok ? ok(r, p.project, status) : runtimeFailure(r);
   };
   const entryLabel = (project: StrapiProject, key: string): string => {
     const dot = key.indexOf('.');
     return configSyncLabel(project, key.slice(0, dot), key.slice(dot + 1)).label;
+  };
+  /**
+   * The entries that differ, within one answer's size (a first diff on an empty database can
+   * be hundreds): when they don't fit, the first ones with one line of summary, and how many
+   * of each type there are — said so.
+   */
+  const entryList = (project: StrapiProject, entries: ConfigSyncDbEntry[]): { entries: unknown[]; shortened?: string; byType?: Record<string, number> } => {
+    const full = entries.map((e) => ({ key: e.key, label: entryLabel(project, e.key), state: e.state, summary: e.summary }));
+    if (sizeOf(full) <= ANSWER_MAX) return { entries: full };
+    const byType: Record<string, number> = {};
+    for (const e of entries) {
+      const type = e.key.slice(0, e.key.indexOf('.'));
+      byType[type] = (byType[type] ?? 0) + 1;
+    }
+    const out: unknown[] = [];
+    let used = sizeOf(byType) + 400;
+    for (const e of full) {
+      const short = { ...e, summary: e.summary.slice(0, 1) };
+      used += sizeOf(short);
+      if (used > ANSWER_MAX) break;
+      out.push(short);
+    }
+    return {
+      entries: out,
+      shortened: `${out.length} of ${entries.length} listed, with the first line of their summary, to fit one answer: config_sync_diff with \`type\` lists one type, with \`key\` one entry and every difference.`,
+      byType,
+    };
   };
   const RUNS_PROJECT =
     "It runs the project's code: Strapi is loaded the way config-sync's own CLI does (no server, no port, no admin account), and a load does what a start of `strapi develop` does to the database (schema sync, pending migrations) — so only on a local development database: a remote one, a Strapi 4 database under Strapi 5 code, or a missing SQLite file are refused before Strapi's bootstrap (where it writes to the database).";
@@ -841,25 +897,45 @@ export function registerTools(
     'config_sync_diff',
     {
       title: 'config-sync: the real diff between config/sync and the database',
-      description: `The diff config-sync's admin page shows, from the real plugin: each entry that differs between config/sync and the database — \`different\`, \`only-in-db\`, \`only-in-sync-dir\` — with what differs in a few words. It includes what a start of Strapi changes on its own (a new field in a content-manager view, the super-admin's permissions…): after changing a schema, a controller or a route, these are the entries to export and commit with the code. With \`key\`, one entry with both sides in full. ${RUNS_PROJECT} Takes a few seconds.`,
-      inputSchema: { key: z.string().max(400).optional().describe('One entry, `<type>.<name>`, for both sides in full.'), env: envArg, ...selector },
+      description: `The diff config-sync's admin page shows, from the real plugin: each entry that differs between config/sync and the database — \`different\`, \`only-in-db\`, \`only-in-sync-dir\` — with what differs in a few words. It includes what a start of Strapi changes on its own (a new field in a content-manager view, the super-admin's permissions…): after changing a schema, a controller or a route, these are the entries to export and commit with the code. With \`key\`, one entry: every difference, and both sides in full when they fit in one answer. ${RUNS_PROJECT} Takes a few seconds.`,
+      inputSchema: {
+        key: z.string().max(400).optional().describe('One entry, `<type>.<name>`: every difference, and both sides when they fit.'),
+        type: z.string().max(200).optional().describe('Only the entries of one type (`admin-role`, `user-role`, `core-store`, `plugin_content_manager_configuration`…).'),
+        env: envArg,
+        ...selector,
+      },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
     async (args) =>
       runConfigSync(
         args,
         (root) => configSyncDiff(root, runtimeOptions(args)),
-        (r, project) => {
+        (r, project, status) => {
           if (args.key) {
             const e = r.data.entries.find((x) => x.key === args.key);
-            return json(e ? { key: e.key, label: entryLabel(project, e.key), state: e.state, summary: e.summary, file: e.file, db: e.db, target: r.target } : { key: args.key, state: 'same', message: 'config/sync and the database agree on this entry (or it exists in neither).', target: r.target });
+            if (!e) return json({ key: args.key, state: 'same', message: 'config/sync and the database agree on this entry (or it exists in neither).', target: r.target });
+            // An admin role's permissions can be thousands of lines: every difference fits
+            // (or says it doesn't), the two sides only when they fit too.
+            const fit = fitLines(e.differences ?? e.summary, DIFFERENCES_MAX);
+            const path = status.files.find((f) => f.key === e.key)?.path;
+            const sides = sizeOf({ file: e.file, db: e.db });
+            return json({
+              key: e.key,
+              label: entryLabel(project, e.key),
+              state: e.state,
+              differences: fit.lines,
+              ...(path ? { path } : {}),
+              ...(sides + sizeOf(fit.lines) <= ANSWER_MAX
+                ? { file: e.file, db: e.db }
+                : { sides: `Not included: the two sides are ${sides} characters, too many for one answer. ${fit.complete ? 'The differences above are all of them' : 'The differences above are the first ones'}${path ? `; the file side is ${path}` : ''}.` }),
+              target: r.target,
+            });
           }
           return json({
             target: r.target,
             versions: r.versions,
             ms: r.timings.total,
-            differences: r.data.entries.length,
-            entries: r.data.entries.map((e) => ({ key: e.key, label: entryLabel(project, e.key), state: e.state, summary: e.summary })),
+            ...((entries) => ({ differences: entries.length, ...entryList(project, entries) }))(args.type ? r.data.entries.filter((e) => e.key.startsWith(`${args.type}.`)) : r.data.entries),
             ...(r.warnings.length ? { warnings: r.warnings } : {}),
           });
         },
@@ -871,7 +947,7 @@ export function registerTools(
       done: r.data.done,
       ...(r.data.skipped.length ? { skipped: r.data.skipped, skippedWhy: 'not different: nothing to do' } : {}),
       ...(r.data.reexported.length ? { reexported: r.data.reexported, reexportedWhy: "imported, then written back in the database's own form (a generated documentId…)" } : {}),
-      stillDifferent: r.data.entries.map((e) => ({ key: e.key, label: entryLabel(project, e.key), state: e.state, summary: e.summary })),
+      ...(({ entries, ...rest }) => ({ stillDifferent: entries, ...rest }))(entryList(project, r.data.entries)),
       target: r.target,
       ...(r.warnings.length ? { warnings: r.warnings } : {}),
     });
