@@ -41,12 +41,20 @@ function entityKeysOf(project: StrapiProject, uid: string): string[] {
   return keys;
 }
 
+/** A UID written as a plain value in a file (see {@link resyncWeakLiterals}). */
+export interface WeakLiteral {
+  uid: string;
+  loc: ReferenceLocation;
+}
+
+/** The references of one file: its keyed call-sites, and its weak literals (keyed at query time). */
+interface FileReferences {
+  refs: Array<{ key: string; loc: ReferenceLocation }>;
+  literals: WeakLiteral[];
+}
+
 /** Collect this file's references as line/character locations (no editor needed later). */
-function collectFileReferences(
-  project: StrapiProject,
-  filePath: string,
-  text: string,
-): Array<{ key: string; loc: ReferenceLocation }> {
+function collectFileReferences(project: StrapiProject, filePath: string, text: string): FileReferences {
   const starts = lineStarts(text);
   /** The trimmed source line at a char offset (so callers needn't re-read the file). */
   const snippetAt = (offset: number): string => {
@@ -72,16 +80,13 @@ function collectFileReferences(
     if (ctx.apiStyle) loc.via = ctx.apiStyle;
     out.push({ key, loc });
   }
-  // A plain value equal to a known UID (a registry map, a config entry): a weak
-  // reference (`via: 'literal'`) — counted, never rewritten by a refactor.
-  for (const lit of collectUnclassifiedUidLiterals(filePath, text)) {
-    for (const key of entityKeysOf(project, lit.text)) {
-      out.push({
-        key,
-        loc: { filePath, start: positionAt(starts, lit.start), end: positionAt(starts, lit.end), via: 'literal', snippet: snippetAt(lit.start) },
-      });
-    }
-  }
+  // A plain value that looks like a UID (a registry map, a config entry): a weak
+  // reference (`via: 'literal'`) — counted, never rewritten by a refactor. Kept
+  // apart and keyed by what the index holds now, so it follows definition changes.
+  const literals: WeakLiteral[] = collectUnclassifiedUidLiterals(filePath, text).map((lit) => ({
+    uid: lit.text,
+    loc: { filePath, start: positionAt(starts, lit.start), end: positionAt(starts, lit.end), via: 'literal', snippet: snippetAt(lit.start) },
+  }));
   // Method calls on a resolved service/controller (`…service('x').method()`).
   for (const m of collectMemberReferences(filePath, text)) {
     out.push({
@@ -119,7 +124,7 @@ function collectFileReferences(
   for (const u of collectRelationFieldUsages(filePath, text, (uid) => relationFieldsOf(project, uid))) {
     out.push({
       key: `relation-field:${u.uid}.${u.field}`,
-      loc: { filePath, start: positionAt(starts, u.start), end: positionAt(starts, u.end), via: 'relation-field', snippet: snippetAt(u.start) },
+      loc: { filePath, start: positionAt(starts, u.start), end: positionAt(starts, u.end), via: 'relation-field', snippet: snippetAt(u.start), ...(u.shorthand ? { shorthand: true } : {}) },
     });
   }
   // Calls DevKit can't read the UID of: what may complete a result (see `unresolvedCallsOf`).
@@ -128,8 +133,36 @@ function collectFileReferences(
     if (ctx.apiStyle) loc.via = ctx.apiStyle;
     out.push({ key: `${UNRESOLVED_PREFIX}${ctx.kind}`, loc });
   }
-  if (isArchivedMigration(project, filePath)) for (const r of out) r.loc.archived = true;
-  return out;
+  if (isArchivedMigration(project, filePath)) {
+    for (const r of out) r.loc.archived = true;
+    for (const l of literals) l.loc.archived = true;
+  }
+  return { refs: out, literals };
+}
+
+/** Add `loc` under `key`. */
+function addRef(refs: Map<string, ReferenceLocation[]>, key: string, loc: ReferenceLocation): void {
+  const arr = refs.get(key);
+  if (arr) arr.push(loc);
+  else refs.set(key, [loc]);
+}
+
+/**
+ * Re-key every weak literal of the project (`via: 'literal'`) by what the index
+ * holds now: a UID that became an entity counts for it, one whose entity is gone
+ * counts for nothing — the same answer a full build gives. Called after each batch
+ * of changes, since a definition change doesn't re-read the files that name it.
+ */
+export function resyncWeakLiterals(project: StrapiProject): void {
+  for (const [key, arr] of project.references) {
+    if (!arr.some((l) => l.via === 'literal')) continue;
+    const kept = arr.filter((l) => l.via !== 'literal');
+    if (kept.length) project.references.set(key, kept);
+    else project.references.delete(key);
+  }
+  for (const literals of project.weakLiterals?.values() ?? []) {
+    for (const { uid, loc } of literals) for (const key of entityKeysOf(project, uid)) addRef(project.references, key, loc);
+  }
 }
 
 /**
@@ -257,6 +290,7 @@ export async function buildReferenceIndex(
   project: StrapiProject,
 ): Promise<Map<string, ReferenceLocation[]>> {
   const refs = new Map<string, ReferenceLocation[]>();
+  const literals = new Map<string, WeakLiteral[]>();
   // Walk src/ (where definitions live) plus the root config/ — the middleware
   // stack in config/middlewares references middlewares from outside src/ — and
   // the migrations Strapi runs (database/migrations; its subfolders as archived).
@@ -276,19 +310,23 @@ export async function buildReferenceIndex(
       continue;
     }
     if (text.length > MAX_PARSE_CHARS) continue; // skip a pathologically huge file (DoS guard)
-    for (const { key, loc } of collectFileReferences(project, filePath, text)) {
-      const arr = refs.get(key);
-      if (arr) arr.push(loc);
-      else refs.set(key, [loc]);
-    }
+    const { refs: fileRefs, literals: fileLiterals } = collectFileReferences(project, filePath, text);
+    for (const { key, loc } of fileRefs) addRef(refs, key, loc);
+    if (fileLiterals.length) literals.set(normalize(filePath), fileLiterals);
+  }
+  // The weak literals, keyed by the index as it is now (re-keyed by `resyncWeakLiterals`).
+  project.weakLiterals = literals;
+  for (const fileLiterals of literals.values()) {
+    for (const { uid, loc } of fileLiterals) for (const key of entityKeysOf(project, uid)) addRef(refs, key, loc);
   }
   return refs;
 }
 
-/** Drop every reference contributed by `filePath` from the index. */
+/** Drop every reference contributed by `filePath` from the index (and, given the project, its weak literals). */
 export function removeReferencesForFile(
   references: Map<string, ReferenceLocation[]>,
   filePath: string,
+  project?: StrapiProject,
 ): void {
   const f = normalize(filePath);
   for (const [key, arr] of references) {
@@ -296,6 +334,7 @@ export function removeReferencesForFile(
     if (kept.length) references.set(key, kept);
     else references.delete(key);
   }
+  project?.weakLiterals?.delete(f);
 }
 
 /**
@@ -307,12 +346,11 @@ export function updateReferencesForFile(
   filePath: string,
   text: string,
 ): void {
-  removeReferencesForFile(project.references, filePath);
-  for (const { key, loc } of collectFileReferences(project, normalize(filePath), text)) {
-    const arr = project.references.get(key);
-    if (arr) arr.push(loc);
-    else project.references.set(key, [loc]);
-  }
+  removeReferencesForFile(project.references, filePath, project);
+  const { refs, literals } = collectFileReferences(project, normalize(filePath), text);
+  for (const { key, loc } of refs) addRef(project.references, key, loc);
+  if (literals.length) (project.weakLiterals ??= new Map()).set(normalize(filePath), literals);
+  for (const { uid, loc } of literals) for (const key of entityKeysOf(project, uid)) addRef(project.references, key, loc);
 }
 
 export interface DefinitionAnchor {

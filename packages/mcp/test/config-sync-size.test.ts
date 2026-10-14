@@ -5,10 +5,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { registerTools } from '../src/tools';
 
 // The real diff loads Strapi: replaced by a fixed result, to check what reaches the agent.
-const fake = vi.hoisted(() => ({ entries: [] as unknown[], directions: undefined as Map<string, unknown> | undefined }));
+const fake = vi.hoisted(() => ({ entries: [] as unknown[], directions: undefined as Map<string, unknown> | undefined, warnings: [] as string[] }));
 vi.mock('devkit-for-strapi-pro', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  configSyncDiff: async () => ({ ok: true, data: { entries: fake.entries }, target: { env: 'development', client: 'postgres', local: true }, versions: {}, timings: { total: 1 }, warnings: [] }),
+  configSyncDiff: async () => ({ ok: true, data: { entries: fake.entries }, target: { env: 'development', client: 'postgres', local: true }, versions: {}, timings: { total: 1 }, warnings: fake.warnings }),
   // The real one reads the sync files' git history; the open-source stub throws (no direction then).
   configSyncDirections: async () => { if (!fake.directions) throw new Error('stub'); return fake.directions; },
 }));
@@ -123,5 +123,18 @@ describe('config_sync_diff says which way each difference likely goes (feedback 
     fake.entries = [small];
     const { data } = await diff();
     expect((data.entries as Array<Record<string, unknown>>)[0]!.likelyDirection).toBeUndefined();
+  });
+});
+
+describe('config_sync_diff with key keeps the run warnings', () => {
+  it('for an entry that differs, and for one that is the same', async () => {
+    fake.entries = [small];
+    fake.warnings = ['Node 25 is outside the range Strapi declares'];
+    try {
+      expect((await diff({ key: 'user-role.public' })).data.warnings).toEqual(fake.warnings);
+      expect((await diff({ key: 'user-role.nope' })).data).toMatchObject({ state: 'same', warnings: fake.warnings });
+    } finally {
+      fake.warnings = [];
+    }
   });
 });

@@ -33,9 +33,17 @@ function artifactKindsOf(kind: StatusKind): ArtifactKind[] {
   return [kind];
 }
 
-/** Is `ref` registered as `kind` in the project's index? */
+/**
+ * Is `ref` registered as `kind` in the project's index? An artifact whose name is
+ * only the folder convention's guess (`unconfirmed`: a registry built by a helper
+ * DevKit can't follow) doesn't count — navigable, but never said valid.
+ */
 function exists(project: StrapiProject, kind: StatusKind, ref: string): boolean {
   const idx = project.index;
+  const confirmed = (m: Map<string, { unconfirmed?: boolean }>): boolean => {
+    const a = m.get(ref);
+    return a !== undefined && !a.unconfirmed;
+  };
   switch (kind) {
     case 'component':
       return idx.components.has(ref);
@@ -44,15 +52,15 @@ function exists(project: StrapiProject, kind: StatusKind, ref: string): boolean 
       return ref.includes('::') ? hasContentType(idx, ref) : idx.components.has(ref);
     // Strapi generates the core service/controller of every content-type.
     case 'service':
-      return idx.services.has(ref) || hasContentType(idx, ref);
+      return confirmed(idx.services) || hasContentType(idx, ref);
     case 'controller':
-      return idx.controllers.has(ref) || hasContentType(idx, ref);
+      return confirmed(idx.controllers) || hasContentType(idx, ref);
     case 'method':
-      return idx.controllers.has(ref) || idx.services.has(ref) || hasContentType(idx, ref);
+      return confirmed(idx.controllers) || confirmed(idx.services) || hasContentType(idx, ref);
     case 'policy':
-      return idx.policies.has(ref);
+      return confirmed(idx.policies);
     case 'middleware':
-      return idx.middlewares.has(ref);
+      return confirmed(idx.middlewares);
   }
 }
 

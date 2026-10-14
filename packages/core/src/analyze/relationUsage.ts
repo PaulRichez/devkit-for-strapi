@@ -21,6 +21,8 @@ export interface RelationUsage {
   /** Char offsets of the field token (identifier key, or string content). */
   start: number;
   end: number;
+  /** A shorthand property (`{ user }`): the token is also the value's name — a rename writes `owner: user`. */
+  shorthand?: boolean;
 }
 
 /** A data-access call carrying a content-type UID and an options object. */
@@ -122,10 +124,10 @@ export function collectRelationFieldUsages(filePath: string, text: string, relat
   const out: RelationUsage[] = [];
 
   /** Record `field` when it is a relation of `uid`; its target (to descend into), if any. */
-  const record = (uid: string, field: string, start: number, end: number): string | undefined => {
+  const record = (uid: string, field: string, start: number, end: number, shorthand = false): string | undefined => {
     const relations = relationsOf(uid);
     if (!relations?.has(field)) return undefined;
-    out.push({ uid, field, start, end });
+    out.push(shorthand ? { uid, field, start, end, shorthand } : { uid, field, start, end });
     return relations.get(field);
   };
 
@@ -151,7 +153,7 @@ export function collectRelationFieldUsages(filePath: string, text: string, relat
         if (!ts.isPropertyAssignment(p) && !ts.isShorthandPropertyAssignment(p)) continue;
         const tok = keyToken(p.name, sf);
         if (!tok) continue;
-        const target = record(uid, tok.field, tok.start, tok.end);
+        const target = record(uid, tok.field, tok.start, tok.end, ts.isShorthandPropertyAssignment(p));
         // `a: { populate: … , filters: … }` → the same options on the relation's target.
         if (target && ts.isPropertyAssignment(p) && ts.isObjectLiteralExpression(p.initializer)) {
           const nested = optionValue(p.initializer, 'populate');
@@ -179,7 +181,7 @@ export function collectRelationFieldUsages(filePath: string, text: string, relat
         if (ts.isPropertyAssignment(p)) scanFilters(uid, p.initializer, depth + 1);
         continue;
       }
-      const target = record(uid, tok.field, tok.start, tok.end);
+      const target = record(uid, tok.field, tok.start, tok.end, ts.isShorthandPropertyAssignment(p));
       if (target && ts.isPropertyAssignment(p)) scanFilters(target, p.initializer, depth + 1);
     }
   };

@@ -68,12 +68,18 @@ describe('local plugins', () => {
     const fs = new MemoryFileSystem({
       [`${ROOT}/package.json`]: JSON.stringify({ dependencies: { '@strapi/strapi': '4.25.0' } }),
       [`${ROOT}/src/plugins/legacy/server/index.js`]: `module.exports = { services: require('./services') };`,
+      // `require('./services')` needs the folder's index (Node), which registers `report`.
+      [`${ROOT}/src/plugins/legacy/server/services/index.js`]: `module.exports = { report: require('./report') };`,
       [`${ROOT}/src/plugins/legacy/server/services/report.js`]: `module.exports = () => ({ run() {} });`,
       [`${ROOT}/src/plugins/legacy/server/src/notes.md.js`]: `// unrelated`,
     });
     const engine = createEngine(fs);
     await engine.init([ROOT]);
     expect(validateRef(engine.allProjects()[0]!, 'plugin::legacy.report').status).toBe('valid');
+    // Without that index the registry can't be read: the name is only the folder's guess — never said valid.
+    fs.delete(`${ROOT}/src/plugins/legacy/server/services/index.js`);
+    await engine.onFilesChanged([], [`${ROOT}/src/plugins/legacy/server/services/index.js`]);
+    expect(validateRef(engine.allProjects()[0]!, 'plugin::legacy.report').status).toBe('external');
   });
 
   it('stays silent on a content-type aggregator it cannot read exhaustively', async () => {

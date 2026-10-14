@@ -967,7 +967,9 @@ export function registerTools(
             .catch(() => undefined);
           if (args.key) {
             const e = r.data.entries.find((x) => x.key === args.key);
-            if (!e) return json({ key: args.key, state: 'same', message: 'config/sync and the database agree on this entry (or it exists in neither).', target: r.target });
+            // The warnings too: a once-per-session one (the Node version) would be lost otherwise.
+            const warned = r.warnings.length ? { warnings: r.warnings } : {};
+            if (!e) return json({ key: args.key, state: 'same', message: 'config/sync and the database agree on this entry (or it exists in neither).', target: r.target, ...warned });
             // An admin role's permissions can be thousands of lines: every difference fits
             // (or says it doesn't), the two sides only when they fit too.
             const fit = fitLines(e.differences ?? e.summary, DIFFERENCES_MAX);
@@ -985,6 +987,7 @@ export function registerTools(
                 ? { file: e.file, db: e.db }
                 : { sides: `Not included: the two sides are ${sides} characters, too many for one answer. ${fit.complete ? 'The differences above are all of them' : 'The differences above are the first ones'}${path ? `; the file side is ${path}` : ''}.` }),
               target: r.target,
+              ...warned,
             });
           }
           return json({

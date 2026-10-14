@@ -233,6 +233,13 @@ function* entityRefKeys(project: StrapiProject): Iterable<string> {
   yield* project.index.middlewares.keys();
 }
 
+/** True when `ref`, resolved as `kind`, is an artifact whose name is only the folder convention's guess. */
+function isUnconfirmed(project: StrapiProject, ref: string, kind: string): boolean {
+  const idx = project.index;
+  const map = kind === 'service' ? idx.services : kind === 'controller' ? idx.controllers : kind === 'policy' ? idx.policies : kind === 'middleware' ? idx.middlewares : undefined;
+  return map?.get(ref)?.unconfirmed === true;
+}
+
 /** Every kind {@link validateRef} checks a ref without a kind against. */
 const ANY_KIND: StatusKind[] = ['content-type', 'component', 'service', 'controller', 'policy', 'middleware', 'method'];
 
@@ -267,9 +274,13 @@ export function validateRef(project: StrapiProject, address: string, kind?: Stat
     // (`src/extensions/…` → e.g. plugin::users-permissions.user) IS indexed even
     // though its plugin isn't local — it must answer `valid`, not `external`.
     const targets = resolveRef(project, address);
-    if (targets.length) {
-      return { status: 'valid', kinds: [...new Set(targets.map((t) => t.kind))] };
+    // A name only the folder convention guessed (`unconfirmed`) is navigable, but
+    // never said valid: Strapi may register it under another key.
+    const confirmed = targets.filter((t) => !isUnconfirmed(project, ref, t.kind));
+    if (confirmed.length) {
+      return { status: 'valid', kinds: [...new Set(confirmed.map((t) => t.kind))] };
     }
+    if (targets.length) return { status: 'external', kinds: [] };
     const entity = method ? ref : (parseHandlerRef(ref)?.controllerRef ?? ref);
     if (ANY_KIND.some((k) => isUnverifiable(project, k, k === 'method' ? entity : ref))) return { status: 'external', kinds: [] };
   }

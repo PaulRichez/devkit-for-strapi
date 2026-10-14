@@ -31,6 +31,7 @@ import {
   canonicalKey,
   definitionsInFile,
   removeReferencesForFile,
+  resyncWeakLiterals,
   updateReferencesForFile,
 } from './reference/references';
 import { resolveDefinition, resolveMember } from './resolve/resolver';
@@ -342,10 +343,13 @@ class Engine implements StrapiEngine {
         try {
           updateReferencesForFile(project, f, await this.fs.readFile(f));
         } catch {
-          removeReferencesForFile(project.references, f);
+          removeReferencesForFile(project.references, f, project);
         }
       }
-      if (this.dirtyDuringBuild.size) this.referencesListener?.();
+      if (this.dirtyDuringBuild.size) {
+        for (const project of this.projects) resyncWeakLiterals(project);
+        this.referencesListener?.();
+      }
     } finally {
       if (token === this.rescanToken) this.buildingRefs = false;
     }
@@ -598,12 +602,15 @@ class Engine implements StrapiEngine {
     // Update the definition index incrementally — only the touched files, no
     // full src/ walk. Each file is removed (via the reverse index) + re-indexed
     // alone (1 read + 1 parse). O(1) per file instead of O(all definitions).
+    const pluginsDone = new Map<StrapiProject, Set<string>>();
     for (const p of [...changedN, ...deletedN]) {
       const project = this.projectForFile(p);
       if (!project) continue;
       if (affectsRoutes(project, p)) this.forgetRoutes(project);
+      let done = pluginsDone.get(project);
+      if (!done) pluginsDone.set(project, (done = new Set()));
       try {
-        await updateIndexForFile(this.fs, project, p);
+        await updateIndexForFile(this.fs, project, p, done);
       } catch {
         // Keep the previous index on a transient read failure; next save retries.
       }
@@ -663,13 +670,22 @@ class Engine implements StrapiEngine {
       try {
         updateReferencesForFile(project, p, await this.fs.readFile(p));
       } catch {
-        removeReferencesForFile(project.references, p);
+        removeReferencesForFile(project.references, p, project);
       }
     }
     for (const p of deletedN) {
       if (this.buildingRefs) this.dirtyDuringBuild.add(p);
       const project = this.projectForFile(p);
-      if (project) removeReferencesForFile(project.references, p);
+      if (project) removeReferencesForFile(project.references, p, project);
+    }
+    // A definition added or removed doesn't re-read the files that name it as a plain value.
+    const refreshed = new Set<StrapiProject>();
+    for (const p of [...changedN, ...deletedN]) {
+      const project = this.projectForFile(p);
+      if (project && !refreshed.has(project)) {
+        refreshed.add(project);
+        resyncWeakLiterals(project);
+      }
     }
   }
 

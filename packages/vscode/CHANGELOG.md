@@ -46,9 +46,13 @@
 - Pro: `config_sync_diff` gives each difference its likely direction (import, export
   or unknown) and why, from the file's git history; the Node version warning is said
   once per session.
-- Pro: `create_plugin` enables the plugin in an existing `config/plugins`, and its
-  loader registers content-types and routes; it never loads test files, a README or
-  a sourcemap.
+- Pro: `create_plugin` enables the plugin in an existing `config/plugins` (never
+  one whose entries come from a spread or a condition: it says what to add), and its
+  loader registers content-types and routes, unwraps compiled TypeScript modules, and
+  never loads test files, a README or a sourcemap. `extract_to_plugin` says when the
+  routes it moves change URL: a plugin's routes are served under its name.
+- Pro: `plan_rename_attribute` keeps the value of a shorthand key: `filters: { user }`
+  becomes `filters: { owner: user }`, not a reference to a variable that doesn't exist.
 - Pro: `get_model_diagram` can leave out custom fields (`hideCustomFields`).
 
 ## 0.2.1

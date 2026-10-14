@@ -13,7 +13,7 @@
  * - an object with keys it couldn't see (a helper call spread into it) → the keys
  *   it sees are names, and the collection is **open**: a name DevKit doesn't see
  *   there is unverifiable, never reported;
- * - no object at all: a `readdir`-based auto-loader (the one DevKit scaffolds)
+ * - no object at all: DevKit's scaffolded folder loader (`loadDir('services')`)
  *   keys files by the folder convention, which DevKit follows; any other loader
  *   is unknown → folder convention, but **open** and the names unconfirmed.
  *
@@ -63,8 +63,21 @@ const COLLECTIONS: ReadonlyArray<readonly [ArtifactKind, string]> = [
 
 /** Wall-clock budget for reading one local plugin's registry. */
 const BUDGET_MS = 3_000;
-/** A loader that lists its folders at boot (`fs.readdirSync`) — DevKit's scaffolded auto-loader and its kin. */
+/** A loader that lists its folders at boot (`fs.readdirSync`). */
 const READDIR_LOADER = /\breaddir(Sync)?\b/;
+/** The folder loader DevKit scaffolds (since its first version): `function loadDir(dir)`. */
+const LOAD_DIR_FUNCTION = /\bfunction\s+loadDir\s*\(/;
+
+/**
+ * True when the collection `key` is built by DevKit's scaffolded folder loader
+ * (`<key>: loadDir('<key>')`, with a `loadDir` that lists its folder), whose names
+ * follow the folder convention. Any other loader is unknown: a `readdir` somewhere
+ * in the plugin (a seed at bootstrap) says nothing about how a collection is keyed.
+ */
+function isScaffoldedLoader(texts: string[], key: string): boolean {
+  const call = new RegExp(`\\b${key}\\s*:\\s*loadDir\\(\\s*['"\`]${key}['"\`]\\s*\\)`);
+  return texts.some((t) => LOAD_DIR_FUNCTION.test(t) && READDIR_LOADER.test(t) && call.test(t));
+}
 
 function everyKind(read: CollectionRead): Record<ArtifactKind, CollectionRead> {
   return { service: read, controller: read, policy: read, middleware: read };
@@ -104,13 +117,12 @@ export async function readLocalPluginRegistry(fs: FileSystem, srcDir: string, pl
   } catch {
     return { entry, collections: everyKind({ mode: 'convention', open: true }) };
   }
-  const folderLoader = (): boolean => ev.parsedFiles().some((sf) => READDIR_LOADER.test(sf.text));
-  const unknownLoader = (): CollectionRead => ({ mode: 'convention', open: !folderLoader() });
+  const unknownLoader = (key: string): CollectionRead => ({ mode: 'convention', open: !isScaffoldedLoader(ev.parsedFiles().map((sf) => sf.text), key) });
 
   const collections = {} as Record<ArtifactKind, CollectionRead>;
   for (const [kind, key] of COLLECTIONS) {
     if (server.k !== 'obj') {
-      collections[kind] = unknownLoader();
+      collections[kind] = unknownLoader(key);
       continue;
     }
     if (!server.props.has(key)) {
@@ -121,7 +133,7 @@ export async function readLocalPluginRegistry(fs: FileSystem, srcDir: string, pl
     let v = await ev.getProp(server, key);
     if (isCallable(v)) v = await ev.call(v, [UNKNOWN('{ strapi }')]);
     if (v.k !== 'obj') {
-      collections[kind] = unknownLoader();
+      collections[kind] = unknownLoader(key);
       continue;
     }
     collections[kind] = { mode: 'keys', entries: await entriesOf(ev, v, entry), open: v.open };

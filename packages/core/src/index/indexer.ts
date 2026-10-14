@@ -577,6 +577,8 @@ export async function updateIndexForFile(
   fs: FileSystem,
   project: { srcDir: string; index: StrapiIndex },
   filePath: string,
+  /** The plugins already re-read in this batch of changes (each is re-read once per batch). */
+  pluginsDone?: Set<string>,
 ): Promise<void> {
   const norm = normalize(filePath);
   const index = project.index;
@@ -584,9 +586,13 @@ export async function updateIndexForFile(
 
   // A local plugin's code file can change what the plugin registers (an index, a
   // spread sub-index, a file under an auto-loader): its artifacts are re-read as a
-  // whole, exactly as buildIndex reads them.
+  // whole, exactly as buildIndex reads them — once per batch (a checkout touches
+  // many files of a plugin), and never for its admin panel's code.
   const plugin = pluginNameOfPath(norm, srcNorm);
-  if (plugin && isCodeFile(norm.slice(norm.lastIndexOf('/') + 1))) {
+  const inAdmin = plugin !== undefined && norm.startsWith(`${join(srcNorm, 'plugins', plugin)}/admin/`);
+  if (plugin && !inAdmin && isCodeFile(norm.slice(norm.lastIndexOf('/') + 1))) {
+    if (pluginsDone?.has(plugin)) return;
+    pluginsDone?.add(plugin);
     await reindexPluginArtifacts(fs, project, plugin);
     if (await fs.exists(join(srcNorm, 'plugins', plugin))) index.pluginNames.add(plugin);
     else index.pluginNames.delete(plugin);

@@ -29,7 +29,7 @@ export {
   type ConfigSyncWriteData,
   type ConfigSyncWriteOptions,
 } from './config-sync/runtime';
-export { configSyncDirections, type DirectionEntry, type EntryDirection, type LikelyDirection } from './config-sync/direction';
+export { configSyncDirections, decideDirection, readSyncHistory, type DirectionEntry, type EntryDirection, type FileHistory, type FileVersion, type LikelyDirection } from './config-sync/direction';
 export type { DatabaseTarget, RuntimeErrorKind, RuntimeFailure, RuntimeOptions, RuntimeResult, RuntimeStep, RuntimeSuccess, RuntimeTimings } from './runtime/types';
 export { runtimeHint } from './runtime/hints';
 export * from './license';

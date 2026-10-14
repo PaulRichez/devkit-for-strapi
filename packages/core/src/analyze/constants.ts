@@ -137,5 +137,6 @@ export function constantResolver(sf: ts.SourceFile): ConstantResolver {
 
 /** Cheap gate: a file without a `const X = '…'` (or `"…"`, `` `…` ``) has no string constant. */
 export function mayDeclareStringConstants(text: string): boolean {
-  return /\bconst\s+[\w$]+\s*=\s*['"`]/.test(text);
+  // `const X = '…'`, with or without a type annotation (`const X: string = '…'`).
+  return /\bconst\s+[\w$]+\s*(?::[^=;\n]+)?=\s*['"`]/.test(text);
 }

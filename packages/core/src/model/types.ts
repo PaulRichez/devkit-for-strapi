@@ -204,6 +204,12 @@ export interface StrapiProject {
   index: StrapiIndex;
   /** Reverse index: canonical target key → every call-site that references it. */
   references: Map<string, ReferenceLocation[]>;
+  /**
+   * Per file, the UIDs written as plain values (a registry map, a config entry):
+   * their weak references are keyed from these by the index as it is now
+   * (`reference/references.ts#resyncWeakLiterals`).
+   */
+  weakLiterals?: Map<string, import('../reference/references').WeakLiteral[]>;
   /** Installed plugins read from `node_modules` (absent when Strapi isn't installed). */
   installed?: import('../plugins/installed').InstalledPluginsResult;
   /** Freshness fingerprint of {@link installed} (see `plugins/merge.ts#installedStamp`). */
@@ -335,6 +341,11 @@ export interface ReferenceLocation {
    * files at its root only): listed, but it doesn't make its target used.
    */
   archived?: boolean;
+  /**
+   * The reference is a shorthand property key (`filters: { user }`): its token is
+   * also a variable's name, so a rename must keep the value (`owner: user`).
+   */
+  shorthand?: boolean;
 }
 
 export interface CodeLensEntry {
