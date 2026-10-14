@@ -14,7 +14,10 @@ import { buildArtifactRef } from '../model/uid';
 import { analyzeArtifact, definitionAnchorOffset } from './actions';
 import { indexCodeContentTypes } from './codeContentTypes';
 import { parseComponentFile } from './components';
+import { isGlobalArtifactFile, isTestPath, normalizeApiName } from './loaderNames';
+import { layoutDir, type PluginLayout, pluginLayoutOf } from './pluginLayout';
 import { parseSchemaFile } from './schema';
+import { readLocalPluginRegistry } from '../plugins/localRegistry';
 
 const CODE_EXT = ['.ts', '.js', '.tsx', '.jsx', '.mts', '.cts', '.mjs', '.cjs'];
 
@@ -44,7 +47,7 @@ async function listFiles(
   }
 }
 
-/** Code files under `dir`, **recursively**, as POSIX paths relative to `dir`. */
+/** Code files under `dir`, **recursively**, as POSIX paths relative to `dir` (test files and mocks left out). */
 async function listCodeFilesRec(fs: FileSystem, dir: string): Promise<string[]> {
   const out: string[] = [];
   const walk = async (d: string, prefix: string): Promise<void> => {
@@ -56,6 +59,7 @@ async function listCodeFilesRec(fs: FileSystem, dir: string): Promise<string[]> 
     }
     for (const e of entries) {
       const rel = prefix ? `${prefix}/${e.name}` : e.name;
+      if (isTestPath(rel)) continue;
       if (e.type === FileType.Directory) await walk(join(d, e.name), rel);
       else if (e.type === FileType.File && isCodeFile(e.name)) out.push(rel);
     }
@@ -65,15 +69,33 @@ async function listCodeFilesRec(fs: FileSystem, dir: string): Promise<string[]> 
 }
 
 /**
- * Artifact name from a path relative to its kind dir — Strapi loads services etc.
- * recursively, keying nested files by their dotted path (`error/catch.js` →
- * `error.catch`). A trailing `index` denotes the folder's default (`error/index.js`
- * → `error`); the top-level `index` aggregator yields `undefined` (skipped).
+ * Artifact name of a plugin file by the **folder convention** — the rule of the
+ * loader DevKit scaffolds, and the fallback when a plugin's registry can't be
+ * read: nested files are keyed by their dotted path (`error/catch.js` →
+ * `error.catch`), a trailing `index` denotes the folder (`error/index.js` →
+ * `error`), the top-level `index` aggregator yields `undefined` (skipped).
  */
-function artifactName(relPath: string): string | undefined {
+export function conventionName(relPath: string): string | undefined {
+  if (isTestPath(relPath)) return undefined;
   const segs = stripExt(relPath).split('/');
   if (segs[segs.length - 1] === 'index') segs.pop();
   return segs.length ? segs.join('.') : undefined;
+}
+
+/**
+ * The name Strapi registers a project file under (see `loaderNames.ts`), from
+ * its path relative to the kind folder — `undefined` when Strapi doesn't load
+ * it as an artifact: a file in a subfolder of an API or of `src/{policies,middlewares}`,
+ * a global file that isn't `.js`/`.ts`, a test file, the `index` aggregator.
+ * A plugin's files follow the folder convention (its registry, when read, overrides it).
+ */
+export function artifactName(scope: ArtifactScope, relPath: string): string | undefined {
+  if (scope === 'plugin') return conventionName(relPath);
+  if (relPath.includes('/') || isTestPath(relPath)) return undefined; // Strapi never loads a subfolder of these
+  const base = stripExt(relPath);
+  if (base === 'index') return undefined;
+  if (scope === 'global') return isGlobalArtifactFile(relPath) ? base : undefined;
+  return normalizeApiName(base);
 }
 
 interface ArtifactOwner {
@@ -116,37 +138,49 @@ function recordDef(
   else index.fileDefs.set(norm, [entry]);
 }
 
+/**
+ * Read an artifact's file to anchor UI on its definition line; services and
+ * controllers also get their navigable methods (both from one AST parse).
+ */
+async function describeArtifact(fs: FileSystem, artifact: CodeArtifact): Promise<void> {
+  try {
+    const text = await fs.readFile(artifact.filePath);
+    if (artifact.kind === 'controller' || artifact.kind === 'service') {
+      const info = analyzeArtifact(artifact.filePath, text);
+      artifact.defOffset = info.anchorOffset;
+      artifact.actions = info.methods;
+      if (info.hasSpread) artifact.hasSpread = true;
+    } else {
+      artifact.defOffset = definitionAnchorOffset(artifact.filePath, text);
+    }
+  } catch {
+    if (artifact.kind === 'controller' || artifact.kind === 'service') artifact.actions = [];
+  }
+}
+
 async function indexArtifactDir(
   fs: FileSystem,
   dir: string,
   kind: ArtifactKind,
   owner: ArtifactOwner,
   index: StrapiIndex,
+  /** The names come from the folder convention without a loader that follows it (see `CodeArtifact.unconfirmed`). */
+  unconfirmed = false,
 ): Promise<void> {
   const map = mapForKind(index, kind);
-  for (const file of await listCodeFilesRec(fs, dir)) {
-    const name = artifactName(file);
-    if (name === undefined) continue; // index aggregator, not an artifact
+  // Only a plugin's own loader can reach into subfolders; an API's or the global
+  // folders are read flat by Strapi (see artifactName).
+  const files = owner.scope === 'plugin' ? await listCodeFilesRec(fs, dir) : await listFiles(fs, dir, isCodeFile);
+  for (const file of files) {
+    const name = artifactName(owner.scope, file);
+    if (name === undefined) continue;
     const filePath = join(dir, file);
     const ref = buildArtifactRef(owner.scope, name, owner);
     const artifact: CodeArtifact = { ref, kind, filePath, scope: owner.scope, name };
     if (owner.apiName) artifact.apiName = owner.apiName;
     if (owner.pluginName) artifact.pluginName = owner.pluginName;
-    // Read the file to anchor UI on the definition line; services/controllers
-    // also expose navigable methods (both derived from one AST parse).
-    try {
-      const text = await fs.readFile(filePath);
-      if (kind === 'controller' || kind === 'service') {
-        const info = analyzeArtifact(filePath, text);
-        artifact.defOffset = info.anchorOffset;
-        artifact.actions = info.methods;
-        if (info.hasSpread) artifact.hasSpread = true;
-      } else {
-        artifact.defOffset = definitionAnchorOffset(filePath, text);
-      }
-    } catch {
-      if (kind === 'controller' || kind === 'service') artifact.actions = [];
-    }
+    if (unconfirmed) artifact.unconfirmed = true;
+    await describeArtifact(fs, artifact);
     map.set(ref, artifact);
     recordDef(index, filePath, mapNameForKind(kind), ref);
   }
@@ -163,7 +197,8 @@ async function indexContentTypeDir(
     if (!(await fs.exists(schemaPath))) continue;
     const ctDef = parseSchemaFile(await fs.readFile(schemaPath), {
       schemaPath,
-      ctName: ct,
+      // An API's content-type folders are keyed like its other files (normalizeName).
+      ctName: owner.source === 'api' ? normalizeApiName(ct) : ct,
       source: owner.source,
       apiName: owner.apiName,
       ...(owner.pluginName ? { pluginName: owner.pluginName } : {}),
@@ -177,8 +212,10 @@ async function indexContentTypeDir(
 
 async function indexApis(fs: FileSystem, srcDir: string, index: StrapiIndex): Promise<void> {
   const apiDir = join(srcDir, 'api');
-  for (const apiName of await listDirs(fs, apiDir)) {
-    const apiPath = join(apiDir, apiName);
+  for (const folder of await listDirs(fs, apiDir)) {
+    if (folder.startsWith('.')) continue; // Strapi skips dot folders
+    const apiPath = join(apiDir, folder);
+    const apiName = normalizeApiName(folder);
     await indexContentTypeDir(fs, join(apiPath, 'content-types'), { source: 'api', apiName }, index);
     const owner: ArtifactOwner = { scope: 'api', apiName };
     await indexArtifactDir(fs, join(apiPath, 'services'), 'service', owner, index);
@@ -230,30 +267,7 @@ async function indexGlobals(fs: FileSystem, srcDir: string, index: StrapiIndex):
   await indexArtifactDir(fs, join(srcDir, 'middlewares'), 'middleware', owner, index);
 }
 
-/** Where a local plugin keeps its server code, mirroring the layouts Strapi supports. */
-export type PluginLayout = 'root' | 'server' | 'server/src';
-
-/**
- * The effective server layout of `src/plugins/<name>`: `server/src` (the Strapi 5
- * plugin SDK scaffold, `npx @strapi/sdk-plugin init`), else `server/` (the v4
- * layout), else the plugin root. The first that exists shadows the others.
- */
-export async function pluginLayoutOf(fs: FileSystem, srcDir: string, pluginName: string): Promise<PluginLayout> {
-  const base = join(srcDir, 'plugins', pluginName);
-  // The v5 SDK keeps sources in server/src and has no server/index.*; a v4 plugin's
-  // server/index.* wins even if some unrelated server/src folder exists.
-  if (await fs.exists(join(base, 'server', 'src'))) {
-    let v4Entry = false;
-    for (const n of ['index.js', 'index.ts', 'index.mjs', 'index.cjs']) if (await fs.exists(join(base, 'server', n))) v4Entry = true;
-    if (!v4Entry) return 'server/src';
-  }
-  if (await fs.exists(join(base, 'server'))) return 'server';
-  return 'root';
-}
-
-function layoutDir(base: string, layout: PluginLayout): string {
-  return layout === 'root' ? base : join(base, layout);
-}
+export { type PluginLayout, pluginLayoutOf } from './pluginLayout';
 
 async function indexPlugins(fs: FileSystem, srcDir: string, index: StrapiIndex): Promise<void> {
   const pluginsDir = join(srcDir, 'plugins');
@@ -269,12 +283,115 @@ async function indexPlugins(fs: FileSystem, srcDir: string, index: StrapiIndex):
     );
     // Content-types declared in code (`content-types/index.ts`), after the schema.json folders.
     await indexCodeContentTypes(fs, join(serverDir, 'content-types'), pluginName, index);
-    const owner: ArtifactOwner = { scope: 'plugin', pluginName };
-    await indexArtifactDir(fs, join(serverDir, 'services'), 'service', owner, index);
-    await indexArtifactDir(fs, join(serverDir, 'controllers'), 'controller', owner, index);
-    await indexArtifactDir(fs, join(serverDir, 'policies'), 'policy', owner, index);
-    await indexArtifactDir(fs, join(serverDir, 'middlewares'), 'middleware', owner, index);
+    await indexPluginArtifacts(fs, srcDir, pluginName, serverDir, index);
   }
+}
+
+const PLUGIN_KIND_DIRS: ReadonlyArray<readonly [ArtifactKind, string]> = [
+  ['service', 'services'],
+  ['controller', 'controllers'],
+  ['policy', 'policies'],
+  ['middleware', 'middlewares'],
+];
+
+/**
+ * A local plugin's services/controllers/policies/middlewares, named as Strapi
+ * registers them: the keys of its server entry's collections when DevKit reads
+ * them (`plugins/localRegistry.ts`), else the folder convention. In an *open*
+ * collection, the files no key accounts for keep their folder-convention name,
+ * `unconfirmed` (navigable, never reported unused).
+ */
+async function indexPluginArtifacts(
+  fs: FileSystem,
+  srcDir: string,
+  pluginName: string,
+  serverDir: string,
+  index: StrapiIndex,
+): Promise<void> {
+  const registry = await readLocalPluginRegistry(fs, srcDir, pluginName);
+  const owner: ArtifactOwner = { scope: 'plugin', pluginName };
+  for (const [kind, dirName] of PLUGIN_KIND_DIRS) {
+    const read = registry.collections[kind];
+    const dir = join(serverDir, dirName);
+    if (read.open) {
+      index.openCollections ??= new Map();
+      const kinds = index.openCollections.get(pluginName) ?? new Set<ArtifactKind>();
+      kinds.add(kind);
+      index.openCollections.set(pluginName, kinds);
+    }
+    if (read.mode === 'convention') {
+      await indexArtifactDir(fs, dir, kind, owner, index, read.open);
+      continue;
+    }
+    const map = mapForKind(index, kind);
+    for (const e of read.entries) {
+      const ref = buildArtifactRef('plugin', e.name, owner);
+      const artifact: CodeArtifact = { ref, kind, filePath: e.filePath ?? e.keyFile, scope: 'plugin', name: e.name, pluginName };
+      if (e.filePath) {
+        await describeArtifact(fs, artifact);
+      } else {
+        // Defined inline in the index: its methods aren't read (never a false "unknown action").
+        artifact.defOffset = e.keyPos;
+        if (kind === 'service' || kind === 'controller') {
+          artifact.actions = [];
+          artifact.hasSpread = true;
+        }
+      }
+      map.set(ref, artifact);
+      recordDef(index, artifact.filePath, mapNameForKind(kind), ref);
+    }
+    if (!read.open) continue;
+    const covered = new Set(read.entries.map((e) => e.filePath).filter((f): f is string => f !== undefined));
+    for (const file of await listCodeFilesRec(fs, dir)) {
+      const filePath = join(dir, file);
+      const name = conventionName(file);
+      if (name === undefined || covered.has(normalize(filePath))) continue;
+      const ref = buildArtifactRef('plugin', name, owner);
+      if (map.has(ref)) continue; // a key the plugin really registers wins
+      const artifact: CodeArtifact = { ref, kind, filePath, scope: 'plugin', name, pluginName, unconfirmed: true };
+      await describeArtifact(fs, artifact);
+      map.set(ref, artifact);
+      recordDef(index, filePath, mapNameForKind(kind), ref);
+    }
+  }
+}
+
+/** Drop one definition entry from the reverse index (`fileDefs`). */
+function dropFileDef(index: StrapiIndex, filePath: string, map: FileDefEntry['map'], key: string): void {
+  const norm = normalize(filePath);
+  const kept = (index.fileDefs.get(norm) ?? []).filter((d) => d.map !== map || d.key !== key);
+  if (kept.length) index.fileDefs.set(norm, kept);
+  else index.fileDefs.delete(norm);
+}
+
+/**
+ * Re-index every artifact of one local plugin — what {@link indexPluginArtifacts}
+ * gives in a full build, so the incremental index keeps parity with it: the
+ * plugin's registry can change with any of its files (an index, a spread
+ * sub-index, a new file under an auto-loader). Built aside, then swapped in
+ * synchronously (no reader sees the plugin half-updated).
+ */
+async function reindexPluginArtifacts(fs: FileSystem, project: { srcDir: string; index: StrapiIndex }, pluginName: string): Promise<void> {
+  const srcDir = normalize(project.srcDir);
+  const base = join(srcDir, 'plugins', pluginName);
+  const fresh = emptyIndex();
+  if (await fs.exists(base)) {
+    await indexPluginArtifacts(fs, srcDir, pluginName, layoutDir(base, await pluginLayoutOf(fs, srcDir, pluginName)), fresh);
+  }
+  const index = project.index;
+  for (const mapName of ['services', 'controllers', 'policies', 'middlewares'] as const) {
+    const map = index[mapName];
+    for (const [key, a] of map) {
+      if (a.installed || a.scope !== 'plugin' || a.pluginName !== pluginName) continue;
+      map.delete(key);
+      dropFileDef(index, a.filePath, mapName, key);
+    }
+    for (const [key, a] of fresh[mapName]) map.set(key, a);
+  }
+  for (const [file, defs] of fresh.fileDefs) index.fileDefs.set(file, [...(index.fileDefs.get(file) ?? []), ...defs]);
+  index.openCollections?.delete(pluginName);
+  const open = fresh.openCollections?.get(pluginName);
+  if (open) (index.openCollections ??= new Map()).set(pluginName, open);
 }
 
 /** Re-read the code-defined content-types of one local plugin (after an edit under its content-types dir). */
@@ -339,10 +456,10 @@ function classifyDefinitionFile(filePath: string, project: { srcDir: string }): 
   }
 
   // src/api/<api>/content-types/<ct>/schema.json
-  const apiCtMatch = rel.match(/^api\/([^/]+)\/content-types\/([^/]+)\/schema\.json$/);
+  const apiCtMatch = rel.match(/^api\/([^/.][^/]*)\/content-types\/([^/]+)\/schema\.json$/);
   if (apiCtMatch) {
-    const [, apiName, ctName] = apiCtMatch;
-    return { kind: 'content-type', source: 'api', apiName: apiName!, ctName: ctName! };
+    const [, apiFolder, ctFolder] = apiCtMatch;
+    return { kind: 'content-type', source: 'api', apiName: normalizeApiName(apiFolder!), ctName: normalizeApiName(ctFolder!) };
   }
 
   // src/plugins/<plugin>/(server/(src/)?)?content-types/<ct>/schema.json
@@ -362,24 +479,16 @@ function classifyDefinitionFile(filePath: string, project: { srcDir: string }): 
   // src/api/<api>/{services,controllers,policies,middlewares}/<file>  — the file must be a
   // real code file (same gate as buildIndex's listCodeFilesRec: a `.d.ts`, `.md`, `.json`,
   // etc. under a services/ dir is NOT an artifact and must never become a phantom definition).
-  const apiArtMatch = rel.match(/^api\/([^/]+)\/(services|controllers|policies|middlewares)\/(.+)$/);
+  const apiArtMatch = rel.match(/^api\/([^/.][^/]*)\/(services|controllers|policies|middlewares)\/(.+)$/);
   if (apiArtMatch) {
-    const [, apiName, kindDir, relPath] = apiArtMatch;
+    const [, apiFolder, kindDir, relPath] = apiArtMatch;
     const artifactKind = artifactKindOfDir(kindDir!);
     if (artifactKind && isArtifactCodeFile(relPath!)) {
-      return { kind: 'artifact', artifactKind, owner: { scope: 'api', apiName: apiName! }, relPath: relPath! };
+      return { kind: 'artifact', artifactKind, owner: { scope: 'api', apiName: normalizeApiName(apiFolder!) }, relPath: relPath! };
     }
   }
 
-  // src/plugins/<plugin>/(server/(src/)?)?{services,controllers,policies,middlewares}/<file>
-  const pluginArtMatch = rel.match(/^plugins\/([^/]+)\/(server\/(?:src\/)?)?(services|controllers|policies|middlewares)\/(.+)$/);
-  if (pluginArtMatch) {
-    const [, pluginName, serverSeg, kindDir, relPath] = pluginArtMatch;
-    const artifactKind = artifactKindOfDir(kindDir!);
-    if (artifactKind && isArtifactCodeFile(relPath!)) {
-      return { kind: 'artifact', artifactKind, owner: { scope: 'plugin', pluginName: pluginName! }, relPath: relPath!, pluginLayout: layoutOfSeg(serverSeg) };
-    }
-  }
+  // A local plugin's artifacts are re-indexed per plugin (see updateIndexForFile).
 
   // src/{policies,middlewares}/<file>  (global)
   const globalArtMatch = rel.match(/^(policies|middlewares)\/(.+)$/);
@@ -473,6 +582,17 @@ export async function updateIndexForFile(
   const index = project.index;
   const srcNorm = normalize(project.srcDir);
 
+  // A local plugin's code file can change what the plugin registers (an index, a
+  // spread sub-index, a file under an auto-loader): its artifacts are re-read as a
+  // whole, exactly as buildIndex reads them.
+  const plugin = pluginNameOfPath(norm, srcNorm);
+  if (plugin && isCodeFile(norm.slice(norm.lastIndexOf('/') + 1))) {
+    await reindexPluginArtifacts(fs, project, plugin);
+    if (await fs.exists(join(srcNorm, 'plugins', plugin))) index.pluginNames.add(plugin);
+    else index.pluginNames.delete(plugin);
+    return;
+  }
+
   // 1. Classify the file by path (synchronous, no IO).
   let def = classifyDefinitionFile(filePath, project);
 
@@ -514,7 +634,7 @@ export async function updateIndexForFile(
         // already captured it (`relPath`); recomputing it here with `lastIndexOf`
         // would break when the kind-dir name recurs in a subfolder
         // (`services/services/bar.js` → wrong ref `x.bar` instead of `x.services.bar`).
-        const name = artifactName(def.relPath);
+        const name = artifactName(def.owner.scope, def.relPath);
         if (name) {
           const ref = buildArtifactRef(def.owner.scope, name, def.owner);
           const artifact: CodeArtifact = { ref, kind: def.artifactKind, filePath: norm, scope: def.owner.scope, name };

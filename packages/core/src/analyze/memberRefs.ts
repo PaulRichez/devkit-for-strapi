@@ -1,15 +1,19 @@
 import ts from 'typescript';
+import { type ConstantResolver, constantResolver, mayDeclareStringConstants } from './constants';
 import { isStrapi, pluginNameOf } from './patterns';
 import { parseSource } from './parse';
 
-/** The service/controller ref a `strapi.service('ref')` / `.controller('ref')` call targets. */
-function refOfServiceCall(call: ts.CallExpression): string | undefined {
+/**
+ * The service/controller ref a `strapi.service('ref')` / `.controller('ref')` call
+ * targets — the argument a literal, or a string constant in scope.
+ */
+function refOfServiceCall(call: ts.CallExpression, constants?: ConstantResolver): string | undefined {
   const callee = call.expression;
   if (!ts.isPropertyAccessExpression(callee)) return undefined;
   const method = callee.name.text;
   if (method !== 'service' && method !== 'controller') return undefined;
   const arg = call.arguments[0];
-  const lit = arg && ts.isStringLiteralLike(arg) ? arg.text : undefined;
+  const lit = arg && ts.isStringLiteralLike(arg) ? arg.text : arg && ts.isIdentifier(arg) ? constants?.resolve(arg)?.text : undefined;
   if (!lit) return undefined;
   const obj = callee.expression;
   const plugin = pluginNameOf(obj);
@@ -54,6 +58,7 @@ function isThisBindingFunction(node: ts.Node): boolean {
 export function collectMemberReferences(filePath: string, text: string): MemberRefLocation[] {
   if (filePath.endsWith('.json') || !/strapi/.test(text)) return [];
   const sf = parseSource(filePath, text);
+  const constants = mayDeclareStringConstants(text) ? constantResolver(sf) : undefined;
   const out: MemberRefLocation[] = [];
   // Stack of block scopes; a binding lives in the innermost open scope, a use
   // resolves against the scope chain (innermost first → shadowing works).
@@ -77,12 +82,12 @@ export function collectMemberReferences(filePath: string, text: string): MemberR
       node.initializer &&
       ts.isCallExpression(node.initializer)
     ) {
-      const ref = refOfServiceCall(node.initializer);
+      const ref = refOfServiceCall(node.initializer, constants);
       if (ref && scopes.length) scopes[scopes.length - 1]!.set(node.name.text, ref);
     }
     if (ts.isPropertyAccessExpression(node)) {
       if (ts.isCallExpression(node.expression)) {
-        const ref = refOfServiceCall(node.expression);
+        const ref = refOfServiceCall(node.expression, constants);
         if (ref) push(ref, node.name, 'member');
       } else if (ts.isIdentifier(node.expression)) {
         const ref = resolve(node.expression.text);

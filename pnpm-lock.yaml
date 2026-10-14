@@ -39,6 +39,9 @@ importers:
       devkit-for-strapi-test-fixtures:
         specifier: workspace:*
         version: link:../test-fixtures
+      lodash:
+        specifier: 4.18.1
+        version: 4.18.1
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@24.13.2)(lightningcss@1.32.0)

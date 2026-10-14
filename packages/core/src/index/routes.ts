@@ -17,7 +17,8 @@ import { CORE_ACTIONS } from '../model/constants';
 import { INLINE_ENTRY, type RouteAuth, type RouteInfo, type StrapiProject, UNREAD_ENTRY } from '../model/types';
 import { StaticEvaluator } from '../plugins/evaluate';
 import { type PluginRoute, readApiPrefix, readPluginRoutes } from '../plugins/installed';
-import { pluginLayoutOf } from './indexer';
+import { localPluginEntry } from './pluginLayout';
+import { normalizeApiName } from './loaderNames';
 import { withTimeout } from '../util/timeout';
 
 interface RouteConfig {
@@ -279,26 +280,6 @@ function fromPluginRoute(r: PluginRoute, origin: 'local-plugin' | 'installed-plu
   return route;
 }
 
-const ENTRY_NAMES = ['index.ts', 'index.js', 'index.mts', 'index.mjs', 'index.cts', 'index.cjs'];
-
-/** The source entry of a local plugin's server (source first: it is what the developer edits). */
-async function localPluginEntry(fs: FileSystem, srcDir: string, name: string): Promise<string | undefined> {
-  const base = join(srcDir, 'plugins', name);
-  const layout = await pluginLayoutOf(fs, srcDir, name);
-  const dirs = layout === 'root' ? [base] : [join(base, layout)];
-  for (const d of dirs) {
-    for (const n of ENTRY_NAMES) {
-      const p = join(d, n);
-      if ((await fs.stat(p))?.type === FileType.File) return p;
-    }
-  }
-  for (const n of ['strapi-server.ts', 'strapi-server.js', 'strapi-server.mjs', 'strapi-server.cjs']) {
-    const p = join(base, n);
-    if ((await fs.stat(p))?.type === FileType.File) return p;
-  }
-  return undefined;
-}
-
 export interface ListRoutesOptions {
   /** Include routes declared by local and installed plugins (default true). */
   plugins?: boolean;
@@ -381,7 +362,7 @@ export async function listRoutes(fs: FileSystem, project: StrapiProject, opts: L
       const file = join(routesDir, f.name);
       try {
         for (const r of routesOfFile(file, await fs.readFile(file), project)) {
-          r.owner = `api::${api.name}`;
+          r.owner = `api::${normalizeApiName(api.name)}`;
           r.type = 'content-api';
           r.origin = 'project';
           if (prefix !== undefined) r.fullPath = mountPath(prefix, r.path);

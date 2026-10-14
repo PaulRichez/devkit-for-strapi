@@ -244,10 +244,10 @@ export function registerRefactorCommands(
         async (p) => {
           const scaffold = create ? await planCreatePlugin(fs, p, name) : undefined;
           if (scaffold && !scaffold.ok) return { errors: scaffold.errors, warnings: scaffold.warnings };
-          const move = await planMove(fs, p, [{ ref: uid, toNamespace: ns }], create ? { allowNewNamespace: true } : undefined);
+          const move = await planMove(fs, p, [{ ref: uid, toNamespace: ns }], create ? { allowNewNamespace: true, destinationLoadsFolders: true } : undefined);
           const warnings = [...(scaffold?.warnings ?? []), ...move.warnings];
           if (!move.ok) return { errors: move.errors, warnings };
-          return { edit: { textEdits: move.textEdits, fileRenames: move.fileRenames, ...(scaffold ? { fileCreates: scaffold.fileCreates } : {}) }, errors: [], warnings };
+          return { edit: { textEdits: [...(scaffold?.textEdits ?? []), ...move.textEdits], fileRenames: move.fileRenames, ...(scaffold ? { fileCreates: scaffold.fileCreates } : {}) }, errors: [], warnings };
         },
         () => storedUidWarnings({ uids: [{ kind: 'content-type', from: uid, to: movedUid(uid, ns) }] }),
         test,
@@ -294,7 +294,7 @@ export function registerRefactorCommands(
         `Create plugin ${name}`,
         async (project) => {
           const s = await planCreatePlugin(fs, project, name);
-          return s.ok ? { edit: { textEdits: [], fileRenames: [], fileCreates: s.fileCreates }, errors: [], warnings: s.warnings } : { errors: s.errors, warnings: s.warnings };
+          return s.ok ? { edit: { textEdits: s.textEdits, fileRenames: [], fileCreates: s.fileCreates }, errors: [], warnings: s.warnings } : { errors: s.errors, warnings: s.warnings };
         },
         () => [],
         test,

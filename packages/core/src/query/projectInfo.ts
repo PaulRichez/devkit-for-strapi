@@ -14,6 +14,7 @@ import { StaticEvaluator } from '../plugins/evaluate';
 import { readApiPrefix } from '../plugins/installed';
 import { isVerifiablePlugin } from '../plugins/merge';
 import { configSyncStatus, type ConfigSyncStaticStatus } from '../configSync/status';
+import { isEntityKey } from '../reference/references';
 import { listBrokenRefs, validateRef } from './refQuery';
 
 export interface PluginInfo {
@@ -177,7 +178,7 @@ export async function projectInfo(
   let unverifiedPluginRefs = 0;
   const seen = new Set<string>();
   for (const [key, locations] of project.references) {
-    if (!locations.length || key.startsWith('relation-field:') || key.startsWith('plugin:')) continue;
+    if (!locations.length || !isEntityKey(key) || key.startsWith('relation-field:') || key.startsWith('plugin:')) continue;
     const ref = key.slice(key.indexOf(':') + 1).split('#')[0]!;
     if (seen.has(ref) || isFrameworkRef(ref)) continue;
     seen.add(ref);

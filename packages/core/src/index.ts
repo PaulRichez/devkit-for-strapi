@@ -21,6 +21,9 @@ export { extractControllerActions } from './index/actions';
 export { discoverProjectRoots, isStrapiPackageJson } from './workspace/discovery';
 export { detectVersion, parseMajor } from './workspace/version';
 export { analyzeAt, collectReferences } from './analyze/callSite';
+export { isKebabCase, normalizeApiName } from './index/loaderNames';
+export { readLocalPluginRegistry, type CollectionRead, type LocalPluginRegistry, type RegistryEntry } from './plugins/localRegistry';
+export { isUnverifiable, loaderNameOf, refStatus, type RefStatus, type StatusKind } from './validate/refStatus';
 export { analyzeMemberAt, type MemberAccessRef } from './analyze/member';
 export { collectMemberReferences, collectThisMemberReferences } from './analyze/memberRefs';
 export { pluginNameOf } from './analyze/patterns';
@@ -38,6 +41,8 @@ export {
   canonicalKey,
   definitionsInFile,
   type DefinitionAnchor,
+  isArchivedMigration,
+  isEntityKey,
   removeReferencesForFile,
   scopedKey,
   updateReferencesForFile,
@@ -65,6 +70,7 @@ export {
   referencesOf,
   relationUsagesOf,
   resolveRef,
+  unresolvedCallsOf,
   validateRef,
   type ArtifactSummary,
   type BrokenRef,

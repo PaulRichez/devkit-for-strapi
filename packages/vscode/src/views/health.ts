@@ -160,7 +160,7 @@ export class HealthProvider extends CachedTree<Node> {
           /* the summary line is a bonus */
         }
         report.broken = listBrokenRefs(project).map((b) => {
-          const v = validateRef(project, b.ref);
+          const v = validateRef(project, b.ref, b.kind);
           return v.didYouMean ? { ...b, didYouMean: v.didYouMean } : b;
         });
         report.unused = listUnused(project);
@@ -206,14 +206,20 @@ export class HealthProvider extends CachedTree<Node> {
             return r.configSync.map((file) => ({ kind: 'syncFile', id: `${element.id}|${file.key}`, root: r.root, file }));
         }
         return [];
-      case 'broken':
-        return element.ref.locations.map((loc, i) => ({
+      case 'broken': {
+        const own: Node[] = element.ref.locations.map((loc, i) => ({
           kind: 'location',
           id: `${element.id}|${i}`,
           root: r.root,
           loc,
           ...(element.ref.didYouMean ? { replace: { from: element.ref.ref, to: element.ref.didYouMean } } : {}),
         }));
+        // Calls to the broken entity's methods: their range is the method name, never replaced with the ref.
+        const calls: Node[] = (element.ref.methods ?? []).flatMap((m) =>
+          m.locations.map((loc, i) => ({ kind: 'location' as const, id: `${element.id}|${m.name}|${i}`, root: r.root, loc })),
+        );
+        return [...own, ...calls];
+      }
       case 'unusedKind':
         return element.items.map((item) => ({ kind: 'unused', id: `${element.id}|${item.ref}`, root: r.root, item }));
       default:

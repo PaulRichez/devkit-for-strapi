@@ -18,6 +18,12 @@ export interface MoveSpec {
 export interface MoveOptions {
   /** Allow a destination namespace with no existing artifacts yet (extract_to_plugin). */
   allowNewNamespace?: boolean;
+  /**
+   * The destination plugin's server entry registers its content-types and routes by
+   * folder (the loader `create_plugin` generates, in the same plan): a moved
+   * content-type needs no registration by hand, so the plan doesn't ask to check it.
+   */
+  destinationLoadsFolders?: boolean;
 }
 
 /** The move plan (or its errors). */

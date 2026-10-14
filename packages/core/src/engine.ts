@@ -490,10 +490,10 @@ class Engine implements StrapiEngine {
     return this.diskCheck;
   }
 
-  /** What a project's disk snapshot covers: src/, config/, local plugins resolved elsewhere, package.json. */
+  /** What a project's disk snapshot covers: src/, config/, database/migrations, local plugins resolved elsewhere, package.json. */
   private snapshotDirs(project: { srcDir: string; root: string; rewrites?: ProjectRewrites }): string[] {
     const others = (project.rewrites?.dirs ?? []).filter((d) => d !== project.srcDir && !isPathInside(project.srcDir, d));
-    return [project.srcDir, join(project.root, 'config'), ...others];
+    return [project.srcDir, join(project.root, 'config'), join(project.root, 'database', 'migrations'), ...others];
   }
 
   /** Re-index what changed on disk since each project's last snapshot (git checkout, manual edits…). */

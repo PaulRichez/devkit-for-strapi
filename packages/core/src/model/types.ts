@@ -37,6 +37,8 @@ export interface AttributeInfo {
   hidden?: boolean;
   /** An enumeration's values. */
   enum?: string[];
+  /** A `customField`'s registered name (`plugin::color-picker.color`). */
+  customField?: string;
 }
 
 export type ContentTypeSource = 'api' | 'plugin';
@@ -125,6 +127,13 @@ export interface CodeArtifact {
   defOffset?: number;
   /** True when read from an installed plugin in `node_modules` (see {@link ContentType.installed}). */
   installed?: boolean;
+  /**
+   * True when the name is inferred from the folder convention because the local
+   * plugin's registry could not be read (an object built by a helper, a loader
+   * DevKit doesn't recognise): Strapi may register the file under another name,
+   * or not at all — so it is never reported unused.
+   */
+  unconfirmed?: boolean;
 }
 
 export interface StrapiIndex {
@@ -156,6 +165,12 @@ export interface StrapiIndex {
   codeContentTypes?: Map<string, ContentType>;
   /** Local plugins whose content-type list could not be read exhaustively (refs into them stay silent). */
   partialContentTypePlugins?: Set<string>;
+  /**
+   * Local plugins whose services/controllers/policies/middlewares registry could
+   * not be read exhaustively, by kind (see `plugins/localRegistry.ts`): a ref to a
+   * name DevKit doesn't see there is unverifiable — never reported unknown/broken.
+   */
+  openCollections?: Map<string, Set<ArtifactKind>>;
   /**
    * Strapi's built-in middlewares (`strapi::<name>` → definition), present only
    * when read exhaustively from the installed Strapi — then `strapi::` names in
@@ -261,6 +276,12 @@ export interface ReferenceContext {
   apiStyle?: ApiStyle;
   /** false for template/variable/concatenation → no completion, no navigation. */
   isLiteral: boolean;
+  /**
+   * The string initialises a `const` the code passes to a Strapi call
+   * (`const X = 'api::x.y'; strapi.db.query(X)`): validated, renamed and moved
+   * here, its references counted at the call sites.
+   */
+  constant?: boolean;
 }
 
 export interface TargetLocation {
@@ -309,6 +330,11 @@ export interface ReferenceLocation {
   via?: string;
   /** The trimmed source line the reference sits on (so callers needn't re-read the file). */
   snippet?: string;
+  /**
+   * In a subfolder of `database/migrations`, which Strapi never runs (it runs the
+   * files at its root only): listed, but it doesn't make its target used.
+   */
+  archived?: boolean;
 }
 
 export interface CodeLensEntry {

@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased
+
+**Names as Strapi's loaders register them**
+
+- An API's services, controllers, policies and middlewares are known under the name
+  Strapi gives them: kebab-cased (`middlewares/hasAccess.js` is `api::foo.has-access`,
+  `services/foo_bar.js` is `api::foo.foo-bar`), the same rule as Strapi's own, checked
+  against lodash. The raw file name is now unknown, and the suggestion points at the
+  registered name — never the other way round.
+- A file in a subfolder of an API's `services/` (or `controllers/`, `policies/`,
+  `middlewares/`, or of `src/policies` and `src/middlewares`) is not an artifact:
+  Strapi never loads it, so a call to it is reported, and it is no longer listed unused.
+- A local plugin's services and controllers are named by the keys its server entry
+  exports (`{ myController: require('./my-controller') }`, a spread sub-index), read
+  statically like an installed plugin's. When the index is built by a helper DevKit
+  can't follow, what it sees is checked and the rest is never reported; a folder
+  auto-loader keeps the folder convention. Test files (`__tests__`, `*.test.*`) are
+  never artifacts.
+- The editor, `validate_reference` and `list_broken_refs` share one verdict: a
+  component UID in a content-type call is never a broken ref, and a broken service's
+  method calls are grouped under it.
+
+**References found where they were missed**
+
+- A route's middleware or policy in object form, `{ name: 'api::x.y', config }`.
+- A UID passed through a `const` in the same file: counted at each call, validated
+  and renamed at the literal.
+- A UID written as a plain value (a registry map, a `config/plugins` entry): a weak
+  reference — counted, so the target isn't listed unused, never rewritten by a
+  refactor, and a rename or a move says where they are.
+- The migrations Strapi runs (`database/migrations`); a subfolder's migrations are
+  archived — listed, but they make nothing used, and nothing they call is broken.
+- Nested `populate` and `filters` (`populate: { a: { populate: { b } } }`,
+  `populate: ['a.b']`, `filters: { a: { b: … } }`, `$and`/`$or`, `where`), each level
+  through the relation's target — and `entityService.findOne/update/delete`, whose
+  options are the third argument.
+- `coverage` lists these forms, and those still not indexed (`indexed: false`);
+  `find_references` and `list_unused` give the calls whose UID DevKit can't read.
+
+**Config Sync and refactors**
+
+- `config_sync_status` warns when `importOnBootstrap` is on: on a database shared
+  between branches, a start overwrites what the other branches set.
+- Pro: `config_sync_diff` gives each difference its likely direction (import, export
+  or unknown) and why, from the file's git history; the Node version warning is said
+  once per session.
+- Pro: `create_plugin` enables the plugin in an existing `config/plugins`, and its
+  loader registers content-types and routes; it never loads test files, a README or
+  a sourcemap.
+- Pro: `get_model_diagram` can leave out custom fields (`hideCustomFields`).
+
 ## 0.2.1
 
 **Config Sync (Pro): diffs that stay readable on big projects**

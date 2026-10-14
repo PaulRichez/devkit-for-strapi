@@ -20,12 +20,15 @@ const files: Record<string, string> = {
     '{"kind":"singleType","info":{"singularName":"homepage","pluralName":"homepages"},"attributes":{}}',
   [`${R}/src/api/homepage/routes/homepage.js`]:
     "const { createCoreRouter } = require('@strapi/strapi').factories;\nmodule.exports = createCoreRouter('api::homepage.homepage');\n",
-  // A nested controller (controllers/nested/deep.js → name `nested.deep`).
+  // A nested plugin controller (server/controllers/nested/deep.js → name `nested.deep`
+  // by the folder convention: a plugin's own loader may reach into subfolders).
+  [`${R}/src/plugins/thing/server/controllers/nested/deep.js`]: 'module.exports = { run(ctx) { return 1; } };\n',
+  [`${R}/src/plugins/thing/server/routes/index.js`]:
+    "module.exports = [{ method: 'GET', path: '/deep', handler: 'plugin::thing.nested.deep.run' }];\n",
+  // The same layout in an API: Strapi's API loader never reads a subfolder.
   [`${R}/src/api/thing/content-types/thing/schema.json`]:
     '{"kind":"collectionType","info":{"singularName":"thing","pluralName":"things"},"attributes":{}}',
   [`${R}/src/api/thing/controllers/nested/deep.js`]: 'module.exports = { run(ctx) { return 1; } };\n',
-  [`${R}/src/api/thing/routes/thing.js`]:
-    "module.exports = { routes: [{ method: 'GET', path: '/deep', handler: 'api::thing.nested.deep.run' }] };\n",
   // A plugin route using the built-in admin policy + short-form handler.
   [`${R}/src/plugins/mine/server/controllers/settings.js`]: 'module.exports = { find(ctx) { return 1; } };\n',
   [`${R}/src/plugins/mine/server/routes/index.js`]:
@@ -100,36 +103,43 @@ describe('golden-rules audit: no false positives on valid Strapi (core)', () => 
 
   // #23 — nested controller route handler: valid, resolves, no corrupting quickfix.
   it('#23 does not flag a route handler pointing at a nested (dotted) controller', async () => {
-    const f = `${R}/src/api/thing/routes/thing.js`;
+    const f = `${R}/src/plugins/thing/server/routes/index.js`;
     expect(await engine.validateFile(f, files[f]!)).toEqual([]);
   });
 
   it('#23 resolves a nested-controller handler to the controller action', async () => {
-    const f = `${R}/src/api/thing/routes/thing.js`;
+    const f = `${R}/src/plugins/thing/server/routes/index.js`;
     const code = files[f]!;
-    const off = code.indexOf('api::thing.nested.deep.run') + 2;
+    const off = code.indexOf('plugin::thing.nested.deep.run') + 2;
     const targets = await engine.getDefinitions(f, off, code);
-    expect(targets[0]?.filePath).toBe(`${R}/src/api/thing/controllers/nested/deep.js`);
+    expect(targets[0]?.filePath).toBe(`${R}/src/plugins/thing/server/controllers/nested/deep.js`);
   });
 
   it('#23 a quickfix on a nested controller keeps the action segment (no truncation)', async () => {
-    // Typo the action; the suggestion must be `api::thing.nested.deep.<action>`, never
+    // Typo the action; the suggestion must be `plugin::thing.nested.deep.<action>`, never
     // a truncated ref that drops `.deep` (which would corrupt the route on apply).
-    const code = `module.exports = { routes: [{ handler: 'api::thing.nested.deep.runn' }] };`;
-    const [d] = await engine.validateFile(`${R}/src/api/thing/routes/x.js`, code);
+    const code = `module.exports = [{ handler: 'plugin::thing.nested.deep.runn' }];`;
+    const [d] = await engine.validateFile(`${R}/src/plugins/thing/server/routes/x.js`, code);
     expect(d?.code).toBe('devkit-for-strapi.unknown-action');
     const fix = d?.quickFixes?.[0]?.replacement;
-    if (fix) expect(fix).toBe('api::thing.nested.deep.run');
+    if (fix) expect(fix).toBe('plugin::thing.nested.deep.run');
   });
 
   it('#23 (MCP side) resolve/find_references/list_broken_refs agree on a nested-controller handler', () => {
-    // resolve('api::thing.nested.deep.run') → the nested controller file (not `nested`+action `deep`).
-    const targets = resolveRef(project, 'api::thing.nested.deep.run');
-    expect(targets[0]?.filePath).toBe(`${R}/src/api/thing/controllers/nested/deep.js`);
+    // resolve('plugin::thing.nested.deep.run') → the nested controller file (not `nested`+action `deep`).
+    const targets = resolveRef(project, 'plugin::thing.nested.deep.run');
+    expect(targets[0]?.filePath).toBe(`${R}/src/plugins/thing/server/controllers/nested/deep.js`);
     // The route handler is indexed under the nested method key…
-    expect(referencesOf(project, 'api::thing.nested.deep.run').length).toBeGreaterThanOrEqual(1);
-    // …and never reported broken (the entity behind the method key is `api::thing.nested.deep`).
+    expect(referencesOf(project, 'plugin::thing.nested.deep.run').length).toBeGreaterThanOrEqual(1);
+    // …and never reported broken (the entity behind the method key is `plugin::thing.nested.deep`).
     expect(listBrokenRefs(project)).toEqual([]);
+  });
+
+  it('an API controller in a subfolder is not registered by Strapi: unknown, not a definition', async () => {
+    expect(validateRef(project, 'api::thing.nested.deep').status).toBe('unknown');
+    const code = `strapi.controller('api::thing.nested.deep');`;
+    const [d] = await engine.validateFile(`${R}/src/x.js`, code);
+    expect(d?.code).toBe('devkit-for-strapi.unknown-controller');
   });
 
   it('completion parity: db.query suggests components; service() suggests schema-only CTs', async () => {

@@ -44,8 +44,8 @@ export function propNameText(name: ts.PropertyName): string | undefined {
   return undefined;
 }
 
-function classifyCall(call: ts.CallExpression, lit: ts.StringLiteralLike): ClassifiedRef | undefined {
-  const argIndex = call.arguments.indexOf(lit);
+function classifyCall(call: ts.CallExpression, arg: ts.Expression): ClassifiedRef | undefined {
+  const argIndex = call.arguments.indexOf(arg);
   if (argIndex < 0) return undefined;
 
   const callee = call.expression;
@@ -119,41 +119,73 @@ function classifyCall(call: ts.CallExpression, lit: ts.StringLiteralLike): Class
   }
 }
 
+/** A route's `policies: [...]` / `middlewares: [...]` list → what its entries reference. */
+function scopedListKind(list: ts.ArrayLiteralExpression): ClassifiedRef | undefined {
+  if (!ts.isPropertyAssignment(list.parent)) return undefined;
+  const key = propNameText(list.parent.name);
+  if (key === 'policies') return { kind: 'policy-ref', apiStyle: 'route' };
+  if (key === 'middlewares') return { kind: 'middleware-ref', apiStyle: 'route' };
+  return undefined;
+}
+
+/** Registry map access: `strapi.services['api::x.x']`, `strapi.contentTypes[…]`, … */
+function classifyRegistryAccess(access: ts.ElementAccessExpression): ClassifiedRef | undefined {
+  const obj = access.expression;
+  if (!ts.isPropertyAccessExpression(obj) || !isStrapi(obj.expression)) return undefined;
+  switch (obj.name.text) {
+    case 'services':
+      return { kind: 'service-ref', apiStyle: 'service' };
+    case 'controllers':
+      return { kind: 'controller-ref', apiStyle: 'controller' };
+    case 'contentTypes':
+      return { kind: 'content-type-uid' };
+    case 'policies':
+      return { kind: 'policy-ref', apiStyle: 'service' };
+    case 'middlewares':
+      return { kind: 'middleware-ref', apiStyle: 'service' };
+    case 'components':
+      return { kind: 'component-uid' };
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * What a call argument or a registry index references, by the Strapi call or
+ * access it sits in (`strapi.db.query(x)`, `strapi.services[x]`) — whatever the
+ * expression: a literal, or an identifier naming a string constant.
+ */
+export function classifyArgument(node: ts.Expression): ClassifiedRef | undefined {
+  const parent = node.parent;
+  if (ts.isCallExpression(parent)) return classifyCall(parent, node);
+  if (ts.isElementAccessExpression(parent) && parent.argumentExpression === node) return classifyRegistryAccess(parent);
+  return undefined;
+}
+
 /** Classify a string literal inside a `.ts/.js` file. */
 export function classifyCodeLiteral(lit: ts.StringLiteralLike): ClassifiedRef | undefined {
   const parent = lit.parent;
-  if (ts.isCallExpression(parent)) return classifyCall(parent, lit);
+  const asArgument = classifyArgument(lit);
+  if (asArgument) return asArgument;
 
   if (ts.isPropertyAssignment(parent) && parent.initializer === lit) {
-    if (propNameText(parent.name) === 'handler') return { kind: 'controller-action', apiStyle: 'route' };
-  }
-
-  if (ts.isArrayLiteralExpression(parent) && ts.isPropertyAssignment(parent.parent)) {
-    const key = propNameText(parent.parent.name);
-    if (key === 'policies') return { kind: 'policy-ref', apiStyle: 'route' };
-    if (key === 'middlewares') return { kind: 'middleware-ref', apiStyle: 'route' };
-  }
-
-  // Registry map access: strapi.services['api::x.x'], strapi.contentTypes['…'], …
-  if (ts.isElementAccessExpression(parent) && parent.argumentExpression === lit) {
-    const obj = parent.expression;
-    if (ts.isPropertyAccessExpression(obj) && isStrapi(obj.expression)) {
-      switch (obj.name.text) {
-        case 'services':
-          return { kind: 'service-ref', apiStyle: 'service' };
-        case 'controllers':
-          return { kind: 'controller-ref', apiStyle: 'controller' };
-        case 'contentTypes':
-          return { kind: 'content-type-uid' };
-        case 'policies':
-          return { kind: 'policy-ref', apiStyle: 'service' };
-        case 'middlewares':
-          return { kind: 'middleware-ref', apiStyle: 'service' };
-        case 'components':
-          return { kind: 'component-uid' };
+    const key = propNameText(parent.name);
+    if (key === 'handler') return { kind: 'controller-action', apiStyle: 'route' };
+    // The object form of a route's policy/middleware: `{ name: 'api::x.y', config: {…} }`.
+    if (key === 'name') {
+      const entry = parent.parent;
+      if (ts.isArrayLiteralExpression(entry.parent)) {
+        const list = scopedListKind(entry.parent);
+        if (list) return list;
       }
     }
   }
+
+  if (ts.isArrayLiteralExpression(parent)) {
+    const list = scopedListKind(parent);
+    if (list) return list;
+  }
+
   return undefined;
 }
 

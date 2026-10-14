@@ -286,23 +286,34 @@ describe('updateIndexForFile — incremental definition index', () => {
     expect(index.fileDefs.has(polPath)).toBe(false);
   });
 
-  it('nested artifact: services/error/catch.js → service error.catch', async () => {
+  it('nested plugin artifact: services/error/catch.js → service error.catch', async () => {
     const nestedFiles: Record<string, string> = {
       [`${R}/package.json`]: '{"dependencies":{"@strapi/strapi":"^4.0.0"}}',
-      [`${R}/src/api/blog/content-types/blog/schema.json`]:
-        '{"kind":"collectionType","info":{"singularName":"blog"},"attributes":{}}',
-      [`${R}/src/api/blog/services/error/catch.js`]: 'module.exports = { async run() { return 1; } };\n',
+      [`${R}/src/plugins/blog/server/services/error/catch.js`]: 'module.exports = { async run() { return 1; } };\n',
     };
     const fs = new MemoryFileSystem(nestedFiles);
     const index = await buildIndex(fs, `${R}/src`);
-    expect(index.services.has('api::blog.error.catch')).toBe(true);
+    expect(index.services.has('plugin::blog.error.catch')).toBe(true);
 
     // Modify the nested service.
-    const svcPath = `${R}/src/api/blog/services/error/catch.js`;
+    const svcPath = `${R}/src/plugins/blog/server/services/error/catch.js`;
     fs.writeFile(svcPath, 'module.exports = { async run() { return 1; }, async stop() { return 0; } };\n');
     await updateIndexForFile(fs, { srcDir: `${R}/src`, index }, svcPath);
-    const updated = index.services.get('api::blog.error.catch')!;
+    const updated = index.services.get('plugin::blog.error.catch')!;
     expect(updated.actions?.map((a) => a.name).sort()).toEqual(['run', 'stop']);
+  });
+
+  it("an API subfolder is not an artifact (Strapi's API loader reads its folders flat), incrementally too", async () => {
+    const nested = `${R}/src/api/blog/services/error/catch.js`;
+    const fs = new MemoryFileSystem({
+      [`${R}/package.json`]: '{"dependencies":{"@strapi/strapi":"^4.0.0"}}',
+      [nested]: 'module.exports = { async run() { return 1; } };\n',
+    });
+    const index = await buildIndex(fs, `${R}/src`);
+    expect(index.services.has('api::blog.error.catch')).toBe(false);
+    fs.writeFile(nested, 'module.exports = { async run() { return 2; } };\n');
+    await updateIndexForFile(fs, { srcDir: `${R}/src`, index }, nested);
+    expect(index.services.size).toBe(0);
   });
 
   it('malformed schema: a corrupted schema.json is skipped (old entry removed, no crash)', async () => {
@@ -353,21 +364,19 @@ describe('updateIndexForFile — audit regressions (no divergence from buildInde
   };
 
   it('A: a subfolder named like the kind dir keeps its dotted ref (no lastIndexOf overlap)', async () => {
-    const bar = `${SRC}/api/foo/services/services/bar.js`;
+    const bar = `${SRC}/plugins/foo/server/services/services/bar.js`;
     const files = {
       [`${R}/package.json`]: '{"dependencies":{"@strapi/strapi":"^4.0.0"}}',
-      [`${SRC}/api/foo/content-types/foo/schema.json`]:
-        '{"kind":"collectionType","info":{"singularName":"foo"},"attributes":{}}',
       [bar]: 'module.exports = { run() { return 1; } };\n',
     };
     // Modify path: buildIndex, then re-index the file incrementally.
     const fs = new MemoryFileSystem(files);
     const index = await buildIndex(fs, SRC);
-    expect(index.services.has('api::foo.services.bar')).toBe(true);
+    expect(index.services.has('plugin::foo.services.bar')).toBe(true);
     fs.writeFile(bar, 'module.exports = { run() { return 2; } };\n');
     await updateIndexForFile(fs, { srcDir: SRC, index }, bar);
-    expect(index.services.has('api::foo.services.bar')).toBe(true); // real ref preserved
-    expect(index.services.has('api::foo.bar')).toBe(false); // no phantom
+    expect(index.services.has('plugin::foo.services.bar')).toBe(true); // real ref preserved
+    expect(index.services.has('plugin::foo.bar')).toBe(false); // no phantom
   });
 
   it('B: a stray top-level plugin dir is ignored when server/ exists (precedence)', async () => {

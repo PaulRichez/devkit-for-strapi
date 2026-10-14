@@ -2,7 +2,7 @@
  * OPEN-SOURCE STUB — the Pro plugin-scaffold engine is NOT in this public build.
  * Get Pro: https://devkit-for-strapi.paulrichez.fr/pro/
  */
-import type { FileSystem, StrapiProject } from 'devkit-for-strapi-core';
+import type { FileSystem, StrapiProject, TextEditOp } from 'devkit-for-strapi-core';
 
 const PRO_ONLY =
   'The DevKit for Strapi Pro refactor engine is not included in the open-source build — get it at https://devkit-for-strapi.paulrichez.fr/pro/';
@@ -13,6 +13,8 @@ export interface ScaffoldPlan {
   errors: string[];
   warnings: string[];
   fileCreates: { path: string; content: string }[];
+  /** The entry enabling the plugin, inserted in an existing `config/plugins`. */
+  textEdits: TextEditOp[];
 }
 
 /** Pro-only in this build. */

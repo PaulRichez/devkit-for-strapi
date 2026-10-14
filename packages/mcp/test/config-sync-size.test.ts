@@ -5,10 +5,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { registerTools } from '../src/tools';
 
 // The real diff loads Strapi: replaced by a fixed result, to check what reaches the agent.
-const fake = vi.hoisted(() => ({ entries: [] as unknown[] }));
+const fake = vi.hoisted(() => ({ entries: [] as unknown[], directions: undefined as Map<string, unknown> | undefined }));
 vi.mock('devkit-for-strapi-pro', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   configSyncDiff: async () => ({ ok: true, data: { entries: fake.entries }, target: { env: 'development', client: 'postgres', local: true }, versions: {}, timings: { total: 1 }, warnings: [] }),
+  // The real one reads the sync files' git history; the open-source stub throws (no direction then).
+  configSyncDirections: async () => { if (!fake.directions) throw new Error('stub'); return fake.directions; },
 }));
 
 type Handler = (args?: unknown) => Promise<CallToolResult>;
@@ -100,5 +102,26 @@ describe('config_sync_diff stays within one answer on a big project', () => {
     expect(data.differences).toBe(2);
     expect(data).not.toHaveProperty('shortened');
     expect((data.entries as { summary: string[] }[])[0]!.summary).toEqual(editor.summary);
+  });
+});
+
+describe('config_sync_diff says which way each difference likely goes (feedback v2 #12)', () => {
+  it('each entry carries its likely direction and why; with `key`, the commit the database matches', async () => {
+    fake.entries = [small];
+    fake.directions = new Map([['user-role.public', { likelyDirection: 'import', why: 'The database holds a past version of the file (commit 0123abcd): the file here is newer.', dbMatches: { ref: 'history', commit: '0123abcd'.padEnd(40, '0') } }]]);
+    try {
+      const list = await diff();
+      expect((list.data.entries as unknown[])[0]).toMatchObject({ key: 'user-role.public', likelyDirection: 'import', why: expect.stringContaining('past version') });
+      const one = await diff({ key: 'user-role.public' });
+      expect(one.data).toMatchObject({ likelyDirection: 'import', dbMatches: { ref: 'history' } });
+    } finally {
+      fake.directions = undefined;
+    }
+  });
+
+  it('without the engine (or git), the diff is given all the same, without a direction', async () => {
+    fake.entries = [small];
+    const { data } = await diff();
+    expect((data.entries as Array<Record<string, unknown>>)[0]!.likelyDirection).toBeUndefined();
   });
 });

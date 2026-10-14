@@ -332,4 +332,26 @@ describe('the data-model diagram (shared by the editor, its exports and the MCP)
     expect(mermaid).toContain('string title "required"');
     expect(mermaid).toContain('api_article_article }o--o| api_author_author : "author / articles"');
   });
+
+  it('leaves out custom fields on request — all of them, or by name (feedback v2 #16)', async () => {
+    const separator = { type: 'customField', customField: 'plugin::layout.separator', options: { style: 'blank' } };
+    const engine = createEngine(
+      new MemoryFileSystem({
+        ...FILES,
+        [`${ROOT}/src/api/article/content-types/article/schema.json`]: JSON.stringify({
+          kind: 'collectionType',
+          info: { singularName: 'article', pluralName: 'articles', displayName: 'Article' },
+          attributes: { title: { type: 'string' }, separator_top: separator, blank_1: separator, color: { type: 'customField', customField: 'plugin::color-picker.color' } },
+        }),
+      }),
+    );
+    await engine.init([ROOT]);
+    const data = diagramOf(engine.allProjects()[0]!);
+    const article = (opts: Parameters<typeof toMermaid>[1]): string => toMermaid(data, opts).mermaid;
+    // None by default: a custom field has a column like any other.
+    expect(article({})).toContain('blank_1');
+    expect(article({ hideCustomFields: ['plugin::layout.separator'] })).not.toMatch(/separator_top|blank_1/);
+    expect(article({ hideCustomFields: ['plugin::layout.separator'] })).toContain('color');
+    expect(article({ hideCustomFields: true })).not.toMatch(/separator_top|blank_1|customField color/);
+  });
 });

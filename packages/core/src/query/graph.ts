@@ -9,7 +9,7 @@
 import { normalize } from '../fs/paths';
 import type { ArtifactKind, StrapiProject } from '../model/types';
 import { parseRef } from '../model/uid';
-import { definitionsInFile } from '../reference/references';
+import { definitionsInFile, isEntityKey } from '../reference/references';
 import { referencesOf, type TargetKind } from './refQuery';
 
 export interface RefSummary {
@@ -124,7 +124,7 @@ export function dependencies(project: StrapiProject, ref: string, opts?: GraphOp
     const files = filesOfEntity(project, cur);
     if (!files.size) continue;
     for (const [key, locs] of project.references) {
-      if (!locs.some((l) => files.has(l.filePath))) continue;
+      if (!isEntityKey(key) || !locs.some((l) => files.has(l.filePath))) continue;
       const target = keyToRef(key);
       if (target === cur) continue;
       result.add(target);

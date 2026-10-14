@@ -8,11 +8,12 @@ import type {
 } from '../model/types';
 import { isFrameworkRef, parseComponentUid, parseEntityRef, parseHandlerRef, parseRef } from '../model/uid';
 import { isVerifiablePlugin } from '../plugins/merge';
-import { contentTypeUids, hasContentType, hasPartialContentTypes } from '../index/codeContentTypes';
+import { contentTypeUids, hasContentType } from '../index/codeContentTypes';
 import { autoCrudActions, CORE_ACTION_SET } from '../model/constants';
 import { closest } from '../util/levenshtein';
 import { owningApiName, owningPluginName, qualifyRouteHandler } from '../resolve/owner';
 import { lookupStrapiName, whyNotFound } from '../resolve/strapiNames';
+import { isUnverifiable, loaderNameOf, refStatus } from './refStatus';
 
 export const DiagnosticCode = {
   UnknownContentType: 'devkit-for-strapi.unknown-content-type',
@@ -70,14 +71,14 @@ function validateEntityRef(
   ref: ReferenceContext,
   map: RefIndex,
   code: string,
-  label: string,
+  label: 'content-type' | 'service' | 'controller',
 ): DiagnosticEntry | undefined {
   // Plugin sub-accessor (`strapi.plugin('a').controller('b')`): a bare name
   // qualified by a plugin. Verify only when the plugin is local.
   if (ref.pluginName && !ref.text.includes('::')) {
     if (!isLocalPlugin(project, ref.pluginName)) return undefined;
     const full = `plugin::${ref.pluginName}.${ref.text}`;
-    if (map.has(full)) return undefined;
+    if (refStatus(project, label, full) !== 'unknown') return undefined;
     const inPlugin = [...map.keys()].filter((k) => k.startsWith(`plugin::${ref.pluginName}.`));
     const suggestion = closest(full, inPlugin);
     return diag(
@@ -98,17 +99,10 @@ function validateEntityRef(
   if (!parsed || parsed.namespace === 'global') {
     return diag(ref, `Malformed ${label} reference '${ref.text}'.`, DiagnosticCode.Malformed, 'error');
   }
-  // External (installed) plugins aren't in the workspace — we can't verify them.
-  if (parsed.namespace === 'plugin' && !isLocalPlugin(project, parsed.scope)) return undefined;
-  if (map.has(ref.text)) return undefined;
-  // A local plugin whose code-defined content-type list couldn't be read exhaustively.
-  if (parsed.namespace === 'plugin' && hasPartialContentTypes(project.index, parsed.scope)) return undefined;
-  // A service/controller ref naming a real content-type is valid even with no
-  // service/controller *file*: Strapi auto-generates the core service/controller
-  // for every content-type. (For a content-type ref, `map` IS contentTypes, so
-  // this is a redundant-but-safe no-op.)
-  if (hasContentType(project.index, ref.text)) return undefined;
-  const suggestion = closest(ref.text, map.keys());
+  // The shared verdict (refStatus): an external plugin, a registry DevKit couldn't
+  // read whole, a content-type's generated service/controller are never flagged.
+  if (refStatus(project, label, ref.text) !== 'unknown') return undefined;
+  const suggestion = loaderNameOf(ref.text, map) ?? closest(ref.text, map.keys());
   return diag(ref, `Unknown ${label} '${ref.text}'.`, code, 'error', suggestion);
 }
 
@@ -142,7 +136,7 @@ function validateContentType(project: StrapiProject, ref: ReferenceContext): Dia
 function validatePluginService(project: StrapiProject, ref: ReferenceContext): DiagnosticEntry | undefined {
   if (!ref.pluginName || !isLocalPlugin(project, ref.pluginName)) return undefined;
   const full = `plugin::${ref.pluginName}.${ref.text}`;
-  if (project.index.services.has(full)) return undefined;
+  if (refStatus(project, 'service', full) !== 'unknown') return undefined;
   const pluginServices = [...project.index.services.keys()].filter((k) =>
     k.startsWith(`plugin::${ref.pluginName}.`),
   );
@@ -172,7 +166,7 @@ function validateScoped(
   filePath: string,
   map: Map<string, CodeArtifact>,
   code: string,
-  label: string,
+  label: 'policy' | 'middleware',
 ): DiagnosticEntry | undefined {
   const text = ref.text;
   // `strapi::<name>` middlewares: verifiable when Strapi's own registry was read
@@ -190,7 +184,7 @@ function validateScoped(
   if (ref.pluginName && !text.includes('::')) {
     if (!isLocalPlugin(project, ref.pluginName)) return undefined;
     const full = `plugin::${ref.pluginName}.${text}`;
-    if (map.has(full)) return undefined;
+    if (refStatus(project, label, full) !== 'unknown') return undefined;
     const inPlugin = [...map.keys()].filter((k) => k.startsWith(`plugin::${ref.pluginName}.`));
     const suggestion = closest(full, inPlugin);
     return diag(
@@ -205,9 +199,8 @@ function validateScoped(
   if (text.includes('::')) {
     const parsed = parseRef(text);
     if (!parsed) return diag(ref, `Malformed ${label} reference '${text}'.`, DiagnosticCode.Malformed, 'error');
-    if (parsed.namespace === 'plugin' && !isLocalPlugin(project, parsed.scope)) return undefined;
-    if (map.has(text)) return undefined;
-    const suggestion = closest(text, map.keys());
+    if (refStatus(project, label, text) !== 'unknown') return undefined;
+    const suggestion = loaderNameOf(text, map) ?? closest(text, map.keys());
     return diag(ref, `Unknown ${label} '${text}'.`, code, 'error', suggestion);
   }
   // Bare name: resolvable within the owning API, the owning plugin, or globally.
@@ -235,7 +228,9 @@ function validateScoped(
   if (plugin) candidates.push(`plugin::${plugin}.${text}`);
   candidates.push(`global::${text}`);
   if (candidates.some((c) => map.has(c))) return undefined;
-  const suggestion = closest(candidates[0]!, map.keys());
+  // The owning plugin may register the name in a way DevKit couldn't read.
+  if (plugin && isUnverifiable(project, label, `plugin::${plugin}.${text}`)) return undefined;
+  const suggestion = loaderNameOf(candidates[0]!, map) ?? closest(candidates[0]!, map.keys());
   return diag(ref, `Unknown ${label} '${text}'.`, code, 'error', suggestion);
 }
 
@@ -287,6 +282,7 @@ function validateControllerAction(
         sug ? `${controllerRef}.${sug}` : undefined,
       );
     }
+    if (isUnverifiable(project, 'controller', controllerRef)) return undefined;
     const suggestion = closest(controllerRef, project.index.controllers.keys());
     return diag(
       ref,

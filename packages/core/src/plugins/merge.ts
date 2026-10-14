@@ -12,7 +12,7 @@
 import type { FileSystem } from '../fs/FileSystem';
 import { dirname, join } from '../fs/paths';
 import { pathsStamp } from '../fs/stamp';
-import type { CodeArtifact, StrapiIndex } from '../model/types';
+import type { ArtifactKind, CodeArtifact, StrapiIndex } from '../model/types';
 import type { InstalledPluginsResult } from './installed';
 import { type PluginRewrites, unionRewrites } from './rewrites';
 
@@ -21,6 +21,15 @@ export function isVerifiablePlugin(index: StrapiIndex, name: string): boolean {
   const rw = index.rewrittenPlugins;
   if (rw && (rw.has(name) || rw.has('*'))) return false; // rewritten at runtime by some code
   return index.pluginNames.has(name) || (index.verifiedPlugins?.has(name) ?? false);
+}
+
+/**
+ * True when local plugin `name` may register `kind`s DevKit couldn't see (its
+ * registry is built by a helper or an unrecognised loader): a name missing from
+ * the index there is unverifiable, never "unknown".
+ */
+export function isOpenCollection(index: StrapiIndex, name: string, kind: ArtifactKind): boolean {
+  return index.openCollections?.get(name)?.has(kind) ?? false;
 }
 
 function artifactMap(index: StrapiIndex, a: CodeArtifact): Map<string, CodeArtifact> {

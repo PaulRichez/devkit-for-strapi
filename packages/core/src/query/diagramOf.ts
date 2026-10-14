@@ -11,7 +11,13 @@ export function diagramOf(project: StrapiProject, projects: readonly StrapiProje
   const attrs = (fields: ModelField[]): DiagramData['nodes'][number]['attrs'] =>
     fields
       .filter((f) => !LINK_TYPES.has(f.type))
-      .map((f) => ({ name: f.name, type: f.type === 'enumeration' ? 'enum' : f.type, ...(f.required ? { required: true } : {}), ...(f.unique ? { unique: true } : {}) }));
+      .map((f) => ({
+        name: f.name,
+        type: f.type === 'enumeration' ? 'enum' : f.type,
+        ...(f.required ? { required: true } : {}),
+        ...(f.unique ? { unique: true } : {}),
+        ...(f.customField ? { customField: f.customField } : {}),
+      }));
   const nodes: DiagramData['nodes'] = [
     ...m.contentTypes.map((c) => ({
       id: c.uid,

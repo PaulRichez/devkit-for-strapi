@@ -19,6 +19,8 @@ export interface DiagramAttr {
   unique?: boolean;
   /** Added by Strapi itself (createdAt, …). */
   native?: boolean;
+  /** A `customField`'s registered name. */
+  customField?: string;
 }
 
 export interface DiagramNode {
@@ -72,6 +74,12 @@ export interface DiagramOptions {
   strapiFields?: boolean;
   /** Only these types and the types they link to (UIDs). */
   focus?: string[];
+  /**
+   * Leave out custom fields: `true` every one, or those registered under these names
+   * (`plugin::layout.separator`) — a layout field (a separator, a
+   * blank) has a column all the same, so none is left out by default.
+   */
+  hideCustomFields?: boolean | string[];
 }
 
 /** One line per association, with its cardinalities. */
@@ -121,9 +129,14 @@ export function diagramView(data: DiagramData, opts: DiagramOptions = {}): { nod
   return { nodes, edges: [...edges.filter((e) => ids.has(e.from) && ids.has(e.to)), ...extra] };
 }
 
-/** What an entity lists: its fields that aren't links, then (with `strapiFields`) the ones Strapi adds. */
-export function diagramRows(n: DiagramNode, version: number, strapiFields?: boolean): DiagramAttr[] {
-  const rows: DiagramAttr[] = [...n.attrs];
+/**
+ * What an entity lists: its fields that aren't links (but the custom fields
+ * `hideCustomFields` leaves out), then (with `strapiFields`) the ones Strapi adds.
+ */
+export function diagramRows(n: DiagramNode, version: number, strapiFields?: boolean, hideCustomFields?: DiagramOptions['hideCustomFields']): DiagramAttr[] {
+  const hidden = (a: DiagramAttr): boolean =>
+    a.customField !== undefined && (hideCustomFields === true || (Array.isArray(hideCustomFields) && hideCustomFields.includes(a.customField)));
+  const rows: DiagramAttr[] = n.attrs.filter((a) => !hidden(a));
   if (strapiFields && n.kind !== 'component' && n.origin !== 'strapi') {
     rows.push({ name: 'createdAt', type: 'datetime', native: true }, { name: 'updatedAt', type: 'datetime', native: true });
     if (version >= 5 || n.draftAndPublish) rows.push({ name: 'publishedAt', type: 'datetime', native: true });
@@ -208,7 +221,7 @@ export function toMermaid(data: DiagramData, opts: DiagramOptions = {}): { merma
   const links = diagramLinks(view.edges);
   const lines = ['erDiagram'];
   for (const n of view.nodes) {
-    const rows = diagramRows(n, data.version, opts.strapiFields);
+    const rows = diagramRows(n, data.version, opts.strapiFields, opts.hideCustomFields);
     const head = `  ${mermaidId(n.id)}["${n.label.replace(/"/g, "'")}"]`;
     if (!rows.length) {
       lines.push(head);

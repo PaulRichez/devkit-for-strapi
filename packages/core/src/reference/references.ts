@@ -1,4 +1,5 @@
-import { collectReferences } from '../analyze/callSite';
+import { collectConstantCallSites, collectReferences, collectUnclassifiedUidLiterals, collectUnresolvedCalls } from '../analyze/callSite';
+import { hasContentType } from '../index/codeContentTypes';
 import { collectMemberReferences, collectThisMemberReferences } from '../analyze/memberRefs';
 import { MAX_PARSE_CHARS } from '../analyze/parse';
 import { collectRelationFieldUsages } from '../analyze/relationUsage';
@@ -19,13 +20,25 @@ function artifactDefinedInFile(project: StrapiProject, filePath: string): CodeAr
   return undefined;
 }
 
-/** Relation field names of a content-type — the guardrail for relation-field usage detection. */
-function relationFieldsOf(project: StrapiProject, uid: string): Set<string> | undefined {
+/** Relation fields of a content-type and their targets — the guardrail for relation-field usage detection. */
+function relationFieldsOf(project: StrapiProject, uid: string): Map<string, string | undefined> | undefined {
   const ct = project.index.contentTypes.get(uid);
   if (!ct) return undefined;
-  const out = new Set<string>();
-  for (const a of Object.values(ct.attributes)) if (a.type === 'relation') out.add(a.name);
+  const out = new Map<string, string | undefined>();
+  for (const a of Object.values(ct.attributes)) if (a.type === 'relation') out.set(a.name, a.target);
   return out;
+}
+
+/** The reference keys of every entity registered under exactly `uid` (a content-type, a service, …). */
+function entityKeysOf(project: StrapiProject, uid: string): string[] {
+  const idx = project.index;
+  const keys: string[] = [];
+  if (hasContentType(idx, uid)) keys.push(`ct:${uid}`);
+  if (idx.services.has(uid)) keys.push(`service:${uid}`);
+  if (idx.controllers.has(uid)) keys.push(`controller:${uid}`);
+  if (idx.policies.has(uid)) keys.push(`policy:${uid}`);
+  if (idx.middlewares.has(uid)) keys.push(`middleware:${uid}`);
+  return keys;
 }
 
 /** Collect this file's references as line/character locations (no editor needed later). */
@@ -43,7 +56,10 @@ function collectFileReferences(
     return text.slice(from, to).replace(/\r?\n$/, '').trim();
   };
   const out: Array<{ key: string; loc: ReferenceLocation }> = [];
-  for (const ctx of collectReferences(filePath, text)) {
+  // The magic strings, and the string constants at their call sites — a constant's
+  // declaration is not a use (`const X = 'api::x.y'` counts where X is passed).
+  const contexts = [...collectReferences(filePath, text).filter((ctx) => !ctx.constant), ...collectConstantCallSites(filePath, text)];
+  for (const ctx of contexts) {
     const key = canonicalKey(project, ctx, filePath);
     if (!key) continue;
     const loc: ReferenceLocation = {
@@ -55,6 +71,16 @@ function collectFileReferences(
     // Category of the call-site, so insights can break the count down later.
     if (ctx.apiStyle) loc.via = ctx.apiStyle;
     out.push({ key, loc });
+  }
+  // A plain value equal to a known UID (a registry map, a config entry): a weak
+  // reference (`via: 'literal'`) — counted, never rewritten by a refactor.
+  for (const lit of collectUnclassifiedUidLiterals(filePath, text)) {
+    for (const key of entityKeysOf(project, lit.text)) {
+      out.push({
+        key,
+        loc: { filePath, start: positionAt(starts, lit.start), end: positionAt(starts, lit.end), via: 'literal', snippet: snippetAt(lit.start) },
+      });
+    }
   }
   // Method calls on a resolved service/controller (`…service('x').method()`).
   for (const m of collectMemberReferences(filePath, text)) {
@@ -96,7 +122,38 @@ function collectFileReferences(
       loc: { filePath, start: positionAt(starts, u.start), end: positionAt(starts, u.end), via: 'relation-field', snippet: snippetAt(u.start) },
     });
   }
+  // Calls DevKit can't read the UID of: what may complete a result (see `unresolvedCallsOf`).
+  for (const ctx of collectUnresolvedCalls(filePath, text)) {
+    const loc: ReferenceLocation = { filePath, start: positionAt(starts, ctx.range.start), end: positionAt(starts, ctx.range.end), snippet: snippetAt(ctx.range.start) };
+    if (ctx.apiStyle) loc.via = ctx.apiStyle;
+    out.push({ key: `${UNRESOLVED_PREFIX}${ctx.kind}`, loc });
+  }
+  if (isArchivedMigration(project, filePath)) for (const r of out) r.loc.archived = true;
   return out;
+}
+
+/**
+ * Key prefix of the Strapi calls whose UID DevKit can't read, by reference kind
+ * (`unresolved:service-ref`) — not a reference to an entity: consumers walking
+ * every key skip them ({@link isEntityKey}).
+ */
+export const UNRESOLVED_PREFIX = 'unresolved:';
+
+/** True for a reference key that points at an entity (not a call whose UID is unknown). */
+export function isEntityKey(key: string): boolean {
+  return !key.startsWith(UNRESOLVED_PREFIX);
+}
+
+/** Strapi's migrations folder: it runs the `.js` files at its root, never a subfolder. */
+function migrationsDir(project: StrapiProject): string {
+  return join(project.root, 'database', 'migrations');
+}
+
+/** True for a file in a subfolder of `database/migrations` — kept, but never run by Strapi. */
+export function isArchivedMigration(project: StrapiProject, filePath: string): boolean {
+  const dir = migrationsDir(project) + '/';
+  const f = normalize(filePath);
+  return f.toLowerCase().startsWith(dir.toLowerCase()) && f.slice(dir.length).includes('/');
 }
 
 const PRUNE = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.cache', '.next', '.turbo', 'coverage']);
@@ -201,11 +258,13 @@ export async function buildReferenceIndex(
 ): Promise<Map<string, ReferenceLocation[]>> {
   const refs = new Map<string, ReferenceLocation[]>();
   // Walk src/ (where definitions live) plus the root config/ — the middleware
-  // stack in config/middlewares references middlewares from outside src/.
+  // stack in config/middlewares references middlewares from outside src/ — and
+  // the migrations Strapi runs (database/migrations; its subfolders as archived).
   const seen = new Set<string>();
   const files = [
     ...(await walkSourceFiles(fs, project.srcDir)),
     ...(await walkSourceFiles(fs, join(project.root, 'config'))),
+    ...(await walkSourceFiles(fs, migrationsDir(project))),
   ];
   for (const filePath of files) {
     if (seen.has(filePath)) continue;

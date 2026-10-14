@@ -35,14 +35,17 @@ import {
   referencesOf,
   relationUsagesOf,
   resolveRef,
+  unresolvedCallsOf,
   selectProject,
   type StrapiEngine,
   type StrapiProject,
+  type TargetKind,
   validateRef,
   type WorkspaceEdit,
 } from 'devkit-for-strapi-core';
 import {
   configSyncDiff,
+  configSyncDirections,
   configSyncExport,
   configSyncImport,
   type ConfigSyncDbEntry,
@@ -61,6 +64,7 @@ import {
   proRequired,
   proToolNames,
   verifyFingerprints,
+  type EntryDirection,
   type MoveSpec,
   type PlannedEdit,
   type SchemaEditPlan,
@@ -128,7 +132,21 @@ export function withFreshness(engine: StrapiEngine, res: CallToolResult): CallTo
 
 /** One reference as a compact, token-cheap line: `path:line:col [via]  snippet` (1-based). */
 const compactRef = (r: ReferenceLocation): string =>
-  `${r.filePath}:${r.start.line + 1}:${r.start.character + 1}${r.via ? ` [${r.via}]` : ''}${r.snippet ? `  ${r.snippet}` : ''}`;
+  `${r.filePath}:${r.start.line + 1}:${r.start.character + 1}${r.via ? ` [${r.via}]` : ''}${r.archived ? ' (archived migration, never run)' : ''}${r.snippet ? `  ${r.snippet}` : ''}`;
+
+/**
+ * The Strapi calls whose UID DevKit can't read that could reach `kinds` — said
+ * with a result they may complete (a few of them, and how many in all).
+ */
+const unresolvedNote = (project: StrapiProject, kinds: Array<TargetKind | 'method'>): { total: number; note: string; sample: string[] } | undefined => {
+  const calls = unresolvedCallsOf(project, kinds);
+  if (!calls.length) return undefined;
+  return {
+    total: calls.length,
+    note: 'Strapi calls whose UID DevKit cannot read (a parameter, a let, a template, an import): they may reach this too — check them.',
+    sample: calls.slice(0, 5).map(compactRef),
+  };
+};
 
 /** A bare name has no `::`/`.` — renames change the last segment only, never the namespace. */
 const RENAME_HINT =
@@ -527,6 +545,12 @@ export function registerTools(
         media: z.boolean().optional().describe("Media fields → the upload plugin's File (default true)."),
         strapiFields: z.boolean().optional().describe('The fields Strapi adds to every content-type (default false).'),
         focus: z.array(z.string()).optional().describe('Only these UIDs and the types they link to.'),
+        hideCustomFields: z
+          .union([z.boolean(), z.array(z.string())])
+          .optional()
+          .describe(
+            'Leave out custom fields: true for all, or the custom-field names to leave out (e.g. a layout plugin\'s separators, listed under `customFields` in the answer). None by default: a custom field has a column like any other.',
+          ),
       },
     },
     async (args) => {
@@ -539,9 +563,14 @@ export function registerTools(
         ...(args.media !== undefined ? { media: args.media } : {}),
         ...(args.strapiFields !== undefined ? { strapiFields: args.strapiFields } : {}),
         ...(args.focus?.length ? { focus: args.focus } : {}),
+        ...(args.hideCustomFields !== undefined ? { hideCustomFields: args.hideCustomFields } : {}),
       };
-      const d = toMermaid(diagramOf(p.project), opts);
-      return json({ format: 'mermaid', entities: d.entities, links: d.links, mermaid: d.mermaid });
+      const data = diagramOf(p.project);
+      const d = toMermaid(data, opts);
+      // The custom fields the diagram can leave out, by name (how many fields use each).
+      const customFields: Record<string, number> = {};
+      for (const n of data.nodes) for (const a of n.attrs) if (a.customField) customFields[a.customField] = (customFields[a.customField] ?? 0) + 1;
+      return json({ format: 'mermaid', entities: d.entities, links: d.links, ...(Object.keys(customFields).length ? { customFields } : {}), mermaid: d.mermaid });
     },
   );
 
@@ -589,13 +618,20 @@ export function registerTools(
     {
       title: 'Validate a Strapi reference',
       description:
-        'Check whether a Strapi reference is real in the project. Returns valid | unknown (+ didYouMean) | external: a plugin DevKit cannot verify — not installed, not read completely (code that only runs in Strapi), rewritten at boot by the project, or still being read just after startup; project_info says which and why. Installed plugins DevKit reads completely are checked like your own code. Call this before writing a magic string.',
-      inputSchema: { ref: z.string().describe(REF_HELP), ...selector },
+        'Check whether a Strapi reference is real in the project. Returns valid | unknown (+ didYouMean) | external: a plugin DevKit cannot verify — not installed, not read completely (code that only runs in Strapi), rewritten at boot by the project, registered by a helper DevKit cannot follow, or still being read just after startup; project_info says which and why. Installed plugins DevKit reads completely are checked like your own code. Names are checked as Strapi registers them (an API file `hasAccess.js` is `has-access`; a plugin artifact is the key its index exports). `kind` checks one kind only — the verdict list_broken_refs and the editor use. Call this before writing a magic string.',
+      inputSchema: {
+        ref: z.string().describe(REF_HELP),
+        kind: z
+          .enum(['content-type', 'component', 'service', 'controller', 'policy', 'middleware', 'method'])
+          .optional()
+          .describe('Check the ref as this kind only (`method`: the service/controller a handler or a method call goes through).'),
+        ...selector,
+      },
     },
     async (args) => {
       await ready;
       const p = pick(engine, args, roots());
-      return 'result' in p ? p.result : json({ ref: args.ref, ...validateRef(p.project, args.ref) });
+      return 'result' in p ? p.result : json({ ref: args.ref, ...validateRef(p.project, args.ref, args.kind) });
     },
   );
 
@@ -604,7 +640,7 @@ export function registerTools(
     {
       title: 'Find references to a Strapi entity',
       description:
-        'List every call-site that references a UID / service / controller / handler (or `ref#method`) in the project\'s own code (src/ and config/; node_modules and build output are not searched). Returns the total first, then a page of references. Compact by default (`path:line:col [via]  snippet`, 1-based) — pass `compact: false` for full objects. Pass `refs` to query several at once. See coverage for the call forms indexed.',
+        'List every call-site that references a UID / service / controller / handler (or `ref#method`) in the project\'s own code (src/, config/ and database/migrations; node_modules and build output are not searched) — a UID passed through a `const` counts at the call, a UID written as a plain value (a registry map, a config entry) counts as `[literal]`, a migration in a subfolder (never run) is marked archived. Returns the total first, then a page of references; `unresolvedCalls` lists the Strapi calls whose UID DevKit cannot read that may reach it too. Compact by default (`path:line:col [via]  snippet`, 1-based) — pass `compact: false` for full objects. Pass `refs` to query several at once. See coverage for the call forms indexed.',
       inputSchema: {
         ref: z.string().optional().describe(REF_HELP),
         refs: z.array(z.string()).optional().describe('Several refs to query in one call (batch).'),
@@ -624,6 +660,8 @@ export function registerTools(
       const one = (ref: string) => {
         const all = referencesOf(p.project, ref);
         const page = all.slice(offset, offset + limit);
+        const kinds: Array<TargetKind | 'method'> = ref.includes('#') ? ['method'] : resolveRef(p.project, ref).map((t) => t.kind);
+        const unresolved = unresolvedNote(p.project, kinds);
         return {
           ref,
           total: all.length,
@@ -631,6 +669,7 @@ export function registerTools(
           limit,
           truncated: offset + page.length < all.length,
           references: args.compact === false ? page : page.map(compactRef),
+          ...(unresolved ? { unresolvedCalls: unresolved } : {}),
         };
       };
       if (args.refs) return json({ results: args.refs.map(one) });
@@ -707,7 +746,10 @@ export function registerTools(
       await ready;
       await engine.whenReferencesReady();
       const p = pick(engine, args, roots());
-      return 'result' in p ? p.result : json({ unused: listUnused(p.project, { kinds: args.kinds, file: args.file }) });
+      if ('result' in p) return p.result;
+      const unused = listUnused(p.project, { kinds: args.kinds, file: args.file });
+      const unresolved = unused.length ? unresolvedNote(p.project, [...new Set(unused.map((u) => (u.kind === 'method' ? 'method' : u.kind)))]) : undefined;
+      return json({ unused, ...(unresolved ? { unresolvedCalls: unresolved } : {}) });
     },
   );
 
@@ -742,6 +784,7 @@ export function registerTools(
         kind: b.kind,
         total: b.locations.length,
         locations: b.locations.map(compactRef),
+        ...(b.methods ? { methods: b.methods.map((m) => ({ name: m.name, locations: m.locations.map(compactRef) })) } : {}),
       }));
       return json({ broken });
     },
@@ -841,7 +884,7 @@ export function registerTools(
   const runConfigSync = async <T>(
     args: { from?: string; project?: string },
     run: (root: string) => Promise<RuntimeResult<T>>,
-    ok: (r: RuntimeSuccess<T>, project: StrapiProject, status: ConfigSyncStaticStatus) => CallToolResult,
+    ok: (r: RuntimeSuccess<T>, project: StrapiProject, status: ConfigSyncStaticStatus) => CallToolResult | Promise<CallToolResult>,
   ): Promise<CallToolResult> => {
     await ready;
     const p = pick(engine, args, roots());
@@ -867,8 +910,15 @@ export function registerTools(
    * be hundreds): when they don't fit, the first ones with one line of summary, and how many
    * of each type there are — said so.
    */
-  const entryList = (project: StrapiProject, entries: ConfigSyncDbEntry[]): { entries: unknown[]; shortened?: string; byType?: Record<string, number> } => {
-    const full = entries.map((e) => ({ key: e.key, label: entryLabel(project, e.key), state: e.state, summary: e.summary }));
+  const entryList = (
+    project: StrapiProject,
+    entries: ConfigSyncDbEntry[],
+    directions?: Map<string, EntryDirection>,
+  ): { entries: unknown[]; shortened?: string; byType?: Record<string, number> } => {
+    const full = entries.map((e) => {
+      const d = directions?.get(e.key);
+      return { key: e.key, label: entryLabel(project, e.key), state: e.state, ...(d ? { likelyDirection: d.likelyDirection, why: d.why } : {}), summary: e.summary };
+    });
     if (sizeOf(full) <= ANSWER_MAX) return { entries: full };
     const byType: Record<string, number> = {};
     for (const e of entries) {
@@ -897,7 +947,7 @@ export function registerTools(
     'config_sync_diff',
     {
       title: 'config-sync: the real diff between config/sync and the database',
-      description: `The diff config-sync's admin page shows, from the real plugin: each entry that differs between config/sync and the database — \`different\`, \`only-in-db\`, \`only-in-sync-dir\` — with what differs in a few words. It includes what a start of Strapi changes on its own (a new field in a content-manager view, the super-admin's permissions…): after changing a schema, a controller or a route, these are the entries to export and commit with the code. With \`key\`, one entry: every difference, and both sides in full when they fit in one answer. ${RUNS_PROJECT} Takes a few seconds.`,
+      description: `The diff config-sync's admin page shows, from the real plugin: each entry that differs between config/sync and the database — \`different\`, \`only-in-db\`, \`only-in-sync-dir\` — with what differs in a few words, and its \`likelyDirection\` (import | export | unknown) told from the file's git history: the database holding a past version of the file or another branch's → import; something git never had → export (changed in the admin); \`why\` gives the evidence (\`dbMatches\` the commit, with \`key\`). It includes what a start of Strapi changes on its own (a new field in a content-manager view, the super-admin's permissions…): after changing a schema, a controller or a route, these are the entries to export and commit with the code. With \`key\`, one entry: every difference, and both sides in full when they fit in one answer. ${RUNS_PROJECT} Takes a few seconds.`,
       inputSchema: {
         key: z.string().max(400).optional().describe('One entry, `<type>.<name>`: every difference, and both sides when they fit.'),
         type: z.string().max(200).optional().describe('Only the entries of one type (`admin-role`, `user-role`, `core-store`, `plugin_content_manager_configuration`…).'),
@@ -910,7 +960,11 @@ export function registerTools(
       runConfigSync(
         args,
         (root) => configSyncDiff(root, runtimeOptions(args)),
-        (r, project, status) => {
+        async (r, project, status) => {
+          // Which way each difference goes, from the files' git history (never fails the diff).
+          const directions = await Promise.resolve()
+            .then(() => configSyncDirections(project.root, status.detection.syncDirPath, args.key ? r.data.entries.filter((e) => e.key === args.key) : r.data.entries))
+            .catch(() => undefined);
           if (args.key) {
             const e = r.data.entries.find((x) => x.key === args.key);
             if (!e) return json({ key: args.key, state: 'same', message: 'config/sync and the database agree on this entry (or it exists in neither).', target: r.target });
@@ -919,10 +973,12 @@ export function registerTools(
             const fit = fitLines(e.differences ?? e.summary, DIFFERENCES_MAX);
             const path = status.files.find((f) => f.key === e.key)?.path;
             const sides = sizeOf({ file: e.file, db: e.db });
+            const direction = directions?.get(e.key);
             return json({
               key: e.key,
               label: entryLabel(project, e.key),
               state: e.state,
+              ...(direction ?? {}),
               differences: fit.lines,
               ...(path ? { path } : {}),
               ...(sides + sizeOf(fit.lines) <= ANSWER_MAX
@@ -935,7 +991,7 @@ export function registerTools(
             target: r.target,
             versions: r.versions,
             ms: r.timings.total,
-            ...((entries) => ({ differences: entries.length, ...entryList(project, entries) }))(args.type ? r.data.entries.filter((e) => e.key.startsWith(`${args.type}.`)) : r.data.entries),
+            ...((entries) => ({ differences: entries.length, ...entryList(project, entries, directions) }))(args.type ? r.data.entries.filter((e) => e.key.startsWith(`${args.type}.`)) : r.data.entries),
             ...(r.warnings.length ? { warnings: r.warnings } : {}),
           });
         },
@@ -984,7 +1040,7 @@ export function registerTools(
     {
       title: 'Find relation-field usages',
       description:
-        "Find where a content-type's relation fields are used by name in queries (populate/filters). Pass `field` for one relation, omit it for all. Indispensable before retargeting or removing a relation. Only real relation fields are matched (top-level populate/filters; nested populate trees not yet — see coverage).",
+        "Find where a content-type's relation fields are used by name in queries (populate / filters / where), nested levels included (`populate: { a: { populate: { b } } }`, `populate: ['a.b']`, `filters: { a: { b: … } }`, each level through the relation's target). Pass `field` for one relation, omit it for all. Indispensable before retargeting or removing a relation. Only real relation fields are matched — see coverage.",
       inputSchema: {
         uid: z.string().describe('A content-type UID, e.g. api::article.article'),
         field: z.string().optional().describe('A relation field name; omit for all relations.'),
@@ -1176,7 +1232,7 @@ export function registerTools(
     {
       title: 'Scaffold a new local plugin (dry-run)',
       description:
-        'Plan the files for a new local Strapi plugin (`src/plugins/<name>/package.json` + `strapi-server.js`, and `config/plugins` if missing). Dry-run (+ `planId`, + `warnings` to verify the server entry for your Strapi version); apply with `apply_edits`. Use extract_to_plugin to scaffold AND move artifacts in one plan.',
+        'Plan the files for a new local Strapi plugin (`src/plugins/<name>/package.json` + a `strapi-server.js` that registers its content-types, routes, services, controllers, policies and middlewares by folder), and enable it in `config/plugins` (created if missing, an entry inserted when its export is a literal object, else a warning says what to add). Dry-run (+ `planId`, + `warnings` to verify the server entry for your Strapi version); apply with `apply_edits`. Use extract_to_plugin to scaffold AND move artifacts in one plan.',
       inputSchema: {
         name: z.string().describe('Plugin name, kebab-case, e.g. billing.'),
         ...selector,
@@ -1188,7 +1244,7 @@ export function registerTools(
       if ('result' in p) return p.result;
       const scaffold = await planCreatePlugin(fs, p.project, args.name);
       if (!scaffold.ok) return json({ created: false, errors: scaffold.errors });
-      const planned = await planEdit(fs, { textEdits: [], fileRenames: [], fileCreates: scaffold.fileCreates });
+      const planned = await planEdit(fs, { textEdits: scaffold.textEdits, fileRenames: [], fileCreates: scaffold.fileCreates });
       rememberPlan(planned);
       return json({ ...planned, warnings: scaffold.warnings });
     },
@@ -1218,7 +1274,8 @@ export function registerTools(
         fs,
         p.project,
         args.refs.map((ref) => ({ ref, toNamespace: `plugin::${args.name}` })),
-        { allowNewNamespace: true },
+        // The scaffolded loader registers content-types and routes by folder.
+        { allowNewNamespace: true, destinationLoadsFolders: true },
       );
       const warnings = [
         ...scaffold.warnings,
@@ -1226,7 +1283,7 @@ export function registerTools(
         ...(move.ok ? movedWarnings(p.project, args.refs.map((ref) => ({ ref, toNamespace: `plugin::${args.name}` }))) : []),
       ];
       if (!move.ok) return json({ extracted: false, errors: move.errors, warnings });
-      const s = await syncPlan(p.project, { textEdits: move.textEdits, fileRenames: move.fileRenames, fileCreates: scaffold.fileCreates }, warnings, args.configSync);
+      const s = await syncPlan(p.project, { textEdits: [...scaffold.textEdits, ...move.textEdits], fileRenames: move.fileRenames, fileCreates: scaffold.fileCreates }, warnings, args.configSync);
       const planned = await planEdit(fs, s.edit);
       rememberPlan(planned);
       return json({ ...planned, warnings: s.warnings });

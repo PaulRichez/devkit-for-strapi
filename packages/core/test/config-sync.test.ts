@@ -74,6 +74,16 @@ describe('config-sync, read from the files', () => {
     expect(d.syncDirExists).toBe(true);
   });
 
+  it('warns that importOnBootstrap overwrites a database shared between branches (feedback v2 #13)', async () => {
+    const on = { ...FILES, [`${ROOT}/config/plugins.config-sync.ts`]: `export default { importOnBootstrap: true };` };
+    const { fs, project } = await load(on);
+    const d = (await detectConfigSync(fs, project))!;
+    expect(d.options).toMatchObject({ importOnBootstrap: true, sources: { importOnBootstrap: 'config' } });
+    expect(d.warnings.join(' ')).toMatch(/importOnBootstrap is on: every start of Strapi imports .* shared between branches/);
+    const off = await load(FILES);
+    expect((await detectConfigSync(off.fs, off.project))!.warnings.join(' ')).not.toContain('importOnBootstrap');
+  });
+
   it("merges a short excludedConfig with the plugin's defaults index by index, as Strapi does, and says so", async () => {
     const { fs, project } = await load(FILES);
     const d = (await detectConfigSync(fs, project))!;
