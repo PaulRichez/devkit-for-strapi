@@ -172,6 +172,12 @@ export interface StrapiIndex {
    */
   openCollections?: Map<string, Set<ArtifactKind>>;
   /**
+   * Where the code DevKit couldn't read builds each open collection, keyed
+   * `<plugin>/<kind>` (the object with a helper spread into it, the loader call) —
+   * said by `project_info` and `validate_reference`, so a partial check is never silent.
+   */
+  openCollectionSites?: Map<string, { file: string; pos: number; line?: number }>;
+  /**
    * Strapi's built-in middlewares (`strapi::<name>` → definition), present only
    * when read exhaustively from the installed Strapi — then `strapi::` names in
    * `config/middlewares` are verified instead of skipped.
@@ -346,6 +352,12 @@ export interface ReferenceLocation {
    * also a variable's name, so a rename must keep the value (`owner: user`).
    */
   shorthand?: boolean;
+  /**
+   * A call whose UID DevKit can't read (`unresolved:` keys): the start every UID
+   * it may reach has — `plugin::y.` for `strapi.plugin('y').service(name)`.
+   * Absent when none is readable (it may reach anything of its kind).
+   */
+  scope?: string;
 }
 
 export interface CodeLensEntry {

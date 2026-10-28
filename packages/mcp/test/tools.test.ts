@@ -384,3 +384,51 @@ describe('MCP Pro gate (licence)', () => {
     expect(data.map((c: { uid: string }) => c.uid)).toContain('api::page.page');
   });
 });
+
+describe('feedback v2 #19, #21, #23 through the tools', () => {
+  const R = '/fb';
+  const handlers = new Map<string, Handler>();
+  const raw = async (name: string, args?: unknown): Promise<CallToolResult> => handlers.get(name)!(args ?? {});
+
+  beforeAll(async () => {
+    const fs = new MemoryFileSystem({
+      [`${R}/package.json`]: '{"dependencies":{"@strapi/strapi":"^4.0.0"}}',
+      [`${R}/src/api/bar/content-types/bar/schema.json`]: '{"kind":"collectionType","info":{"singularName":"bar","pluralName":"bars"},"attributes":{}}',
+      [`${R}/src/api/bar/services/helper.js`]: 'module.exports = ({ strapi }) => ({ go() {} });\n',
+      [`${R}/src/api/foo/services/calls.js`]: [
+        'module.exports = ({ strapi }) => ({',
+        "  a(name) { return strapi.plugin('y').service(name); },",
+        "  b(kind) { return strapi.service('api::foo.' + kind); },",
+        '  c(uid) { return strapi.service(uid); },',
+        '});',
+        '',
+      ].join('\n'),
+      [`${R}/src/index.js`]: "const helper = require('./api/bar/services/helper');\nmodule.exports = { register() {} };\n",
+      [`${R}/config/plugins.js`]: "module.exports = { x: { enabled: true, resolve: './src/plugins/x' } };\n",
+      [`${R}/src/plugins/x/strapi-server.js`]: "module.exports = () => ({\n  routes: build(),\n});\n",
+    });
+    const engine = createEngine(fs);
+    await engine.init([R]);
+    await engine.whenReferencesReady();
+    const fakeServer = { registerTool: (name: string, _c: unknown, cb: Handler) => handlers.set(name, cb) } as unknown as McpServer;
+    registerTools(fakeServer, engine, fs, Promise.resolve());
+  });
+
+  it('find_references: only the unresolved calls whose readable start fits the ref', async () => {
+    const res = JSON.parse(((await raw('find_references', { ref: 'api::bar.helper' })).content[0] as { text: string }).text);
+    expect(res.unresolvedCalls.total).toBe(1);
+    expect(res.unresolvedCalls.sample[0]).toContain('strapi.service(uid)');
+  });
+
+  it('list_unused: a service loaded by path says so', async () => {
+    const res = JSON.parse(((await raw('list_unused', { kinds: ['service'] })).content[0] as { text: string }).text);
+    expect(res.unused.find((u: { ref: string }) => u.ref === 'api::bar.helper').requiredByPath).toEqual([`${R}/src/index.js`]);
+  });
+
+  it('list_routes: a local plugin whose routes are unread comes in a block of its own, the table unchanged', async () => {
+    const res = await raw('list_routes', { admin: true });
+    expect(Array.isArray(JSON.parse((res.content[0] as { text: string }).text))).toBe(true);
+    const extra = JSON.parse((res.content[1] as { text: string }).text);
+    expect(extra.unreadRoutes).toEqual([{ plugin: 'x', file: `${R}/src/plugins/x/strapi-server.js`, line: 2, why: expect.any(String) }]);
+  });
+});

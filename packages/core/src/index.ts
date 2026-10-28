@@ -13,7 +13,7 @@ export * from './model/uid';
 
 // Building blocks (used by the client, tests, and a future LSP server)
 export { buildIndex, updateIndexForFile } from './index/indexer';
-export { listRoutes, type ListRoutesOptions } from './index/routes';
+export { listRoutes, type ListRoutesOptions, readRoutes, type UnreadPluginRoutes } from './index/routes';
 export { readInstalledPlugins, type InstalledPlugin, type InstalledPluginsResult, type PluginRoute } from './plugins/installed';
 export { parseSchemaFile } from './index/schema';
 export { parseComponentFile } from './index/components';
@@ -44,6 +44,7 @@ export {
   isArchivedMigration,
   isEntityKey,
   removeReferencesForFile,
+  requirersOf,
   scopedKey,
   updateReferencesForFile,
 } from './reference/references';

@@ -41,12 +41,20 @@ export interface RegistryEntry {
   keyPos: number;
 }
 
+/** Where code DevKit couldn't read builds a collection (an open one). */
+export interface CollectionSite {
+  file: string;
+  pos: number;
+  /** 1-based line of `pos`, when the file was parsed. */
+  line?: number;
+}
+
 /** What DevKit knows of one collection (`services`, `controllers`, …) of a local plugin. */
 export type CollectionRead =
-  /** Names are the keys of the registered object; `open` when it may hold keys DevKit couldn't see. */
-  | { mode: 'keys'; entries: RegistryEntry[]; open: boolean }
-  /** Names come from the folder convention; `open` when the plugin's loader isn't a recognised folder loader. */
-  | { mode: 'convention'; open: boolean };
+  /** Names are the keys of the registered object; `open` when it may hold keys DevKit couldn't see (`where`). */
+  | { mode: 'keys'; entries: RegistryEntry[]; open: boolean; where?: CollectionSite }
+  /** Names come from the folder convention; `open` when the plugin's loader isn't a recognised folder loader (`where`). */
+  | { mode: 'convention'; open: boolean; where?: CollectionSite };
 
 export interface LocalPluginRegistry {
   /** The server entry evaluated, if any. */
@@ -115,9 +123,14 @@ export async function readLocalPluginRegistry(fs: FileSystem, srcDir: string, pl
   try {
     server = await configModuleValue(ev, entry);
   } catch {
-    return { entry, collections: everyKind({ mode: 'convention', open: true }) };
+    return { entry, collections: everyKind({ mode: 'convention', open: true, where: { file: entry, pos: 0 } }) };
   }
-  const unknownLoader = (key: string): CollectionRead => ({ mode: 'convention', open: !isScaffoldedLoader(ev.parsedFiles().map((sf) => sf.text), key) });
+  const atEntry: CollectionSite = { file: entry, pos: 0 };
+  const siteOf = (key: string): CollectionSite => (server.k === 'obj' ? (server.keyLocs.get(key) ?? server.loc) : undefined) ?? atEntry;
+  const unknownLoader = (key: string): CollectionRead => {
+    const open = !isScaffoldedLoader(ev.parsedFiles().map((sf) => sf.text), key);
+    return open ? { mode: 'convention', open, where: siteOf(key) } : { mode: 'convention', open };
+  };
 
   const collections = {} as Record<ArtifactKind, CollectionRead>;
   for (const [kind, key] of COLLECTIONS) {
@@ -127,7 +140,7 @@ export async function readLocalPluginRegistry(fs: FileSystem, srcDir: string, pl
     }
     if (!server.props.has(key)) {
       // Strapi's default is an empty collection; an open server object may hide the key.
-      collections[kind] = server.open ? { mode: 'convention', open: true } : { mode: 'keys', entries: [], open: false };
+      collections[kind] = server.open ? { mode: 'convention', open: true, where: server.loc ?? atEntry } : { mode: 'keys', entries: [], open: false };
       continue;
     }
     let v = await ev.getProp(server, key);
@@ -136,14 +149,24 @@ export async function readLocalPluginRegistry(fs: FileSystem, srcDir: string, pl
       collections[kind] = unknownLoader(key);
       continue;
     }
-    collections[kind] = { mode: 'keys', entries: await entriesOf(ev, v, entry), open: v.open };
+    const entries = await entriesOf(ev, v, entry);
+    collections[kind] = v.open ? { mode: 'keys', entries, open: true, where: v.loc ?? siteOf(key) } : { mode: 'keys', entries, open: false };
   }
   // Cut by the budget: what was read is real, but more may exist.
   if (ev.exhausted) {
     for (const [kind] of COLLECTIONS) {
       const c = collections[kind];
-      collections[kind] = c.mode === 'keys' ? { ...c, open: true } : { mode: 'convention', open: true };
+      collections[kind] = c.mode === 'keys' ? { ...c, open: true, where: c.where ?? atEntry } : { mode: 'convention', open: true, where: c.where ?? atEntry };
     }
+  }
+  // Each open collection's site with its line, for the messages that name it.
+  const lineOf = (site: CollectionSite): CollectionSite => {
+    const sf = ev.parsedFiles().find((f) => normalize(f.fileName) === normalize(site.file));
+    return sf ? { ...site, line: sf.getLineAndCharacterOfPosition(site.pos).line + 1 } : site;
+  };
+  for (const [kind] of COLLECTIONS) {
+    const c = collections[kind];
+    if (c.where) collections[kind] = { ...c, where: lineOf(c.where) };
   }
   return { entry, collections };
 }

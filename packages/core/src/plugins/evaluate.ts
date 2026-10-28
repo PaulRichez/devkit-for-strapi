@@ -29,7 +29,7 @@
 import ts from 'typescript';
 import { MAX_PARSE_CHARS, scriptKindFor } from '../analyze/parse';
 import { type FileSystem, FileType } from '../fs/FileSystem';
-import { dirname, isPathInside, join, normalize } from '../fs/paths';
+import { dirname, isAbsolute, isPathInside, join, normalize } from '../fs/paths';
 
 export interface Loc {
   file: string;
@@ -210,6 +210,103 @@ function isScopeNode(n: ts.Node): boolean {
 function skipParens(e: ts.Expression): ts.Expression {
   while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e) || ts.isSatisfiesExpression(e)) e = e.expression;
   return e;
+}
+
+/** A `reduce` callback that builds an object, in one of the two shapes the evaluator follows. */
+interface ReduceShape {
+  cb: ts.ArrowFunction | ts.FunctionExpression;
+  acc: string;
+  item: string;
+  index?: string;
+  key: ts.Expression;
+  value: ts.Expression;
+  /** The `acc[K]` written (block shape), or the returned literal (spread shape). */
+  target: ts.Expression;
+}
+
+/**
+ * `(acc, x[, i]) => { acc[K] = V; return acc; }` or `(acc, x[, i]) => ({ ...acc, [K]: V })`,
+ * with K and V not reading `acc` — the shapes {@link StaticEvaluator.reduceToObject}
+ * evaluates and its escape analysis follows. Anything else: `undefined`.
+ */
+function reduceShape(node: ts.Node): ReduceShape | undefined {
+  if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node)) return undefined;
+  const [accP, itemP, indexP, ...rest] = node.parameters;
+  if (rest.length || !accP || !itemP || !ts.isIdentifier(accP.name) || !ts.isIdentifier(itemP.name) || (indexP && !ts.isIdentifier(indexP.name))) return undefined;
+  const acc = accP.name.text;
+  const base = { cb: node, acc, item: itemP.name.text, ...(indexP && ts.isIdentifier(indexP.name) ? { index: indexP.name.text } : {}) };
+  let shape: ReduceShape | undefined;
+  if (ts.isBlock(node.body)) {
+    const [assign, ret] = node.body.statements;
+    if (node.body.statements.length !== 2 || !assign || !ret) return undefined;
+    if (!ts.isExpressionStatement(assign) || !ts.isBinaryExpression(assign.expression) || assign.expression.operatorToken.kind !== ts.SyntaxKind.EqualsToken) return undefined;
+    const target = assign.expression.left;
+    if (!ts.isElementAccessExpression(target) || !ts.isIdentifier(target.expression) || target.expression.text !== acc) return undefined;
+    if (!ts.isReturnStatement(ret) || !ret.expression || !ts.isIdentifier(ret.expression) || ret.expression.text !== acc) return undefined;
+    shape = { ...base, key: target.argumentExpression, value: assign.expression.right, target };
+  } else {
+    const built = skipParens(node.body);
+    if (!ts.isObjectLiteralExpression(built) || built.properties.length !== 2) return undefined;
+    const [spread, entry] = built.properties;
+    if (!spread || !ts.isSpreadAssignment(spread) || !ts.isIdentifier(spread.expression) || spread.expression.text !== acc) return undefined;
+    if (!entry || !ts.isPropertyAssignment(entry) || !ts.isComputedPropertyName(entry.name)) return undefined;
+    shape = { ...base, key: entry.name.expression, value: entry.initializer, target: built };
+  }
+  return readsName(shape.key, acc) || readsName(shape.value, acc) ? undefined : shape;
+}
+
+/** The `list.reduce(cb, {})` call `cb` is handed to, when `cb` has a {@link reduceShape}. */
+function objectReduceCall(cb: ts.Node): ts.CallExpression | undefined {
+  if (!reduceShape(cb)) return undefined;
+  let arg: ts.Node = cb;
+  while (arg.parent && ts.isParenthesizedExpression(arg.parent)) arg = arg.parent;
+  const call = arg.parent;
+  if (!call || !ts.isCallExpression(call) || call.arguments.length !== 2 || call.arguments[0] !== arg) return undefined;
+  if (!ts.isPropertyAccessExpression(call.expression) || call.expression.name.text !== 'reduce') return undefined;
+  const init = skipParens(call.arguments[1]!);
+  return ts.isObjectLiteralExpression(init) && init.properties.length === 0 ? call : undefined;
+}
+
+/** Functions of Node's modules that read their arguments and change none. */
+const NODE_READERS = {
+  fs: new Set(['existsSync']),
+  path: new Set(['join', 'resolve', 'dirname', 'basename', 'extname', 'normalize', 'relative']),
+};
+
+/** `require('<literal>')` — a module DevKit can load. */
+function isStaticRequire(e: ts.Expression): boolean {
+  return ts.isCallExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === 'require' && e.arguments.length === 1 && ts.isStringLiteralLike(e.arguments[0]!);
+}
+
+/**
+ * The `require(…)` of a function body shaped `try { return require(…); } catch { … }`
+ * (a statement of the body itself, no `finally`, nothing else in the `try`, every
+ * other return in the `catch` or after it): only a failed load reaches the fallback.
+ */
+function optionalRequire(body: ts.Block, returns: ts.ReturnStatement[]): ts.Expression | undefined {
+  for (const stmt of body.statements) {
+    if (!ts.isTryStatement(stmt) || stmt.finallyBlock || stmt.tryBlock.statements.length !== 1) continue;
+    const ret = stmt.tryBlock.statements[0]!;
+    if (!ts.isReturnStatement(ret) || !ret.expression) return undefined;
+    const e = skipParens(ret.expression);
+    if (!ts.isCallExpression(e) || !ts.isIdentifier(e.expression) || e.expression.text !== 'require' || e.arguments.length !== 1) return undefined;
+    const catchBlock = stmt.catchClause?.block;
+    const fallback = (r: ts.ReturnStatement): boolean => (!!catchBlock && r.pos >= catchBlock.pos && r.end <= catchBlock.end) || r.pos >= stmt.end;
+    return returns.every((r) => r === ret || fallback(r)) ? e : undefined;
+  }
+  return undefined;
+}
+
+/** Does `e` read the identifier `name` anywhere (a property name aside)? */
+function readsName(e: ts.Node, name: string): boolean {
+  let found = false;
+  const visit = (n: ts.Node): void => {
+    if (found) return;
+    if (ts.isIdentifier(n) && n.text === name && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n)) found = true;
+    else n.forEachChild(visit);
+  };
+  visit(e);
+  return found;
 }
 
 /** `module.exports` / `module['exports']` */
@@ -780,6 +877,32 @@ export class StaticEvaluator {
     return this.moduleExports(file);
   }
 
+  /** `require(<absolute path>)` — a path built from `__dirname` and read whole (inside the roots). */
+  private async requireAbsolute(p: string): Promise<Value> {
+    const base = resolveDots(p);
+    if (!this.inRoots(base)) return UNKNOWN(`require of '${p}' outside the plugin`);
+    const file = await this.resolveBase(base, p.endsWith('/'));
+    if (!file) return UNKNOWN(`unresolved '${p}'`);
+    return this.moduleExports(file);
+  }
+
+  /** A folder's entries by name, inside the roots (`undefined` outside them, or unreadable). */
+  async entries(dir: string): Promise<Map<string, FileType> | undefined> {
+    const d = resolveDots(dir);
+    return this.inRoots(d) ? this.listing(d) : undefined;
+  }
+
+  /**
+   * Is there a file or a folder at `p` (inside the roots)? `undefined` outside them.
+   * What `fs.existsSync` answers at run time when the files run where they are.
+   */
+  async pathExists(p: string): Promise<boolean | undefined> {
+    const base = resolveDots(p);
+    if (!this.inRoots(base)) return undefined;
+    const t = (await this.fs.stat(base))?.type;
+    return t === FileType.File || t === FileType.Directory || t === FileType.SymbolicLink;
+  }
+
   /** The value of `module.exports` (CJS) or the module namespace (ESM) of `file`. */
   moduleExports(file: string): Promise<Value> {
     const key = resolveDots(file);
@@ -1126,6 +1249,10 @@ export class StaticEvaluator {
         if (ts.isReturnStatement(n)) returns.push(n);
       });
       if (returns.length === 0) return NIL;
+      // `try { return require('./routes'); } catch { return {}; }`: the module, which
+      // is what Strapi gets whenever the file is there to load.
+      const optional = optionalRequire(body, returns);
+      if (optional) return await this.ev(optional, fn.file, scope);
       if (returns.length > 1) {
         // Only one shape is followed: every return yields the same variable or
         // access path on the same binding (rollup's `if (cached) return x; …; return x;`
@@ -1216,15 +1343,17 @@ export class StaticEvaluator {
     }
     if (ts.isElementAccessExpression(node)) {
       const arg = node.argumentExpression;
-      if (!ts.isStringLiteralLike(arg) && !ts.isNumericLiteral(arg)) return UNKNOWN('computed access');
       if (isModuleExports(node)) return UNKNOWN('self module.exports');
+      // A computed key is followed only when it evaluates to a known string or number.
+      const key: Value =
+        ts.isStringLiteralLike(arg) ? { k: 'str', v: arg.text } : ts.isNumericLiteral(arg) ? { k: 'num', v: Number(arg.text) } : await this.ev(arg, file, scope);
+      if (key.k !== 'str' && key.k !== 'num') return UNKNOWN('computed access');
       const base = await this.ev(node.expression, file, scope);
-      if (base.k === 'arr' && ts.isNumericLiteral(arg)) {
-        const i = Number(arg.text);
+      if (base.k === 'arr' && key.k === 'num') {
         if (base.open) return UNKNOWN('open array');
-        return this.force(base.items[i]);
+        return this.force(base.items[key.v]);
       }
-      return this.getProp(base, arg.text);
+      return this.getProp(base, String(key.v));
     }
     if (ts.isCallExpression(node)) return this.evCall(node, file, scope);
     if (ts.isConditionalExpression(node)) {
@@ -1260,7 +1389,16 @@ export class StaticEvaluator {
       return f && ts.isSourceFile(f) ? { k: 'obj', props: new Map(), keyLocs: new Map(), open: false } : UNKNOWN('this');
     }
     if (ts.isAwaitExpression(node)) return this.ev(node.expression, file, scope);
-    if (ts.isTemplateExpression(node)) return UNKNOWN('template');
+    if (ts.isTemplateExpression(node)) {
+      // `${prefix}.${key}` — known only when every part is a known string or number.
+      let text = node.head.text;
+      for (const span of node.templateSpans) {
+        const part = await this.ev(span.expression, file, scope);
+        if (part.k !== 'str' && part.k !== 'num') return UNKNOWN('template');
+        text += String(part.v) + span.literal.text;
+      }
+      return { k: 'str', v: text, loc: { file, pos: node.getStart(sf) } };
+    }
     if (ts.isClassExpression(node)) return UNKNOWN('class');
     if (ts.isNewExpression(node)) return UNKNOWN('new');
     return UNKNOWN(ts.SyntaxKind[node.kind]);
@@ -1338,13 +1476,21 @@ export class StaticEvaluator {
     if (ts.isIdentifier(callee) && callee.text === 'require' && !this.isLocallyDeclared(callee, 'require')) {
       const spec = node.arguments[0];
       if (spec && ts.isStringLiteralLike(spec)) return this.requireModule(file, spec.text);
+      // `require(path.join(__dirname, 'server', 'routes'))`: a path read whole.
+      const p = spec && !ts.isSpreadElement(spec) ? await this.ev(spec, file, scope) : undefined;
+      if (p?.k === 'str' && isAbsolute(p.v)) return this.requireAbsolute(p.v);
       return UNKNOWN('dynamic require');
     }
     if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'Object') {
       const m = callee.name.text;
       if ((m === 'freeze' || m === 'seal') && node.arguments[0]) return this.ev(node.arguments[0], file, scope);
       if (m === 'assign') return this.assign(node.arguments, file, scope);
+      if (m === 'keys' && node.arguments.length === 1) return this.objectKeys(node.arguments[0]!, file, scope);
       return UNKNOWN(`Object.${m}`);
+    }
+    if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'reduce') {
+      const built = await this.reduceToObject(node, file, scope);
+      if (built) return built;
     }
     const fn = await this.ev(callee, file, scope);
     if (fn.k === 'native') {
@@ -1365,12 +1511,64 @@ export class StaticEvaluator {
         continue;
       }
       args.push(
-        ts.isIdentifier(a) || ts.isObjectLiteralExpression(a) || ts.isStringLiteralLike(a) || ts.isArrowFunction(a) || ts.isFunctionExpression(a)
+        ts.isIdentifier(a) ||
+          ts.isObjectLiteralExpression(a) ||
+          ts.isStringLiteralLike(a) ||
+          ts.isNumericLiteral(a) ||
+          ts.isTemplateExpression(a) ||
+          ts.isArrowFunction(a) ||
+          ts.isFunctionExpression(a) ||
+          isStaticRequire(a)
           ? await this.ev(a, file, scope)
           : UNKNOWN('arg'),
       );
     }
     return this.call(fn, args);
+  }
+
+  /** The `list.reduce(cb, {})` call when `left` is the `acc[K]` its object-building callback writes (see {@link reduceShape}). */
+  private accumulatorReduce(left: ts.ElementAccessExpression): ts.CallExpression | undefined {
+    if (!ts.isIdentifier(left.expression)) return undefined;
+    const d = this.findDeclaration(left.expression.text, left.expression);
+    if (d?.kind !== 'param' || d.index !== 0) return undefined;
+    return reduceShape(d.fn)?.target === left ? objectReduceCall(d.fn) : undefined;
+  }
+
+  /** `Object.keys(o)` of a closed (non-ES-module) object: its own keys, in order. */
+  private async objectKeys(arg: ts.Expression, file: string, scope: Scope | undefined): Promise<Value> {
+    const o = await this.ev(arg, file, scope);
+    if (o.k !== 'obj' || o.open || o.esModule) return UNKNOWN('Object.keys');
+    return { k: 'arr', items: [...o.props.keys()].map((key) => () => Promise.resolve<Value>({ k: 'str', v: key })), open: false };
+  }
+
+  /**
+   * `list.reduce((acc, x) => { acc[K] = V; return acc; }, {})`, or its spread form
+   * `list.reduce((acc, x) => ({ ...acc, [K]: V }), {})`, over a closed list: the
+   * object it builds, one key per item — what a helper that prefixes or renames the
+   * keys of an index does (`prefixServices('error', require('./error'))`). Only these
+   * two exact shapes, with an empty `{}` to start and K and V not reading `acc`;
+   * `undefined` for any other `reduce` (evaluated as usual: unknown).
+   */
+  private async reduceToObject(node: ts.CallExpression, file: string, scope: Scope | undefined): Promise<Value | undefined> {
+    const callee = node.expression as ts.PropertyAccessExpression;
+    const cb = node.arguments[0] && skipParens(node.arguments[0]);
+    if (!cb || objectReduceCall(cb) !== node) return undefined;
+    const shape = reduceShape(cb)!;
+    const list = await this.ev(callee.expression, file, scope);
+    if (list.k !== 'arr' || list.open) return UNKNOWN('reduce over a list not known whole');
+    const sf = node.getSourceFile();
+    const out: ObjValue = { k: 'obj', props: new Map(), keyLocs: new Map(), open: false, loc: { file, pos: node.arguments[1]!.getStart(sf) } };
+    for (let i = 0; i < list.items.length; i++) {
+      const bindings = new Map<string, Value>([[shape.item, await this.force(list.items[i])]]);
+      if (shape.index) bindings.set(shape.index, { k: 'num', v: i });
+      const itemScope: Scope = { fn: shape.cb, bindings, parent: scope };
+      const key = await this.ev(shape.key, file, itemScope);
+      if (key.k !== 'str' && key.k !== 'num') return UNKNOWN('reduce key');
+      const name = String(key.v);
+      out.props.set(name, memo(() => this.ev(shape.value, file, itemScope)));
+      out.keyLocs.set(name, { file, pos: shape.key.getStart(sf) });
+    }
+    return out;
   }
 
   /** `getDefaultExportFromCjs(x)`: the CJS value Node would hand an ESM importer. */
@@ -1569,7 +1767,12 @@ export class StaticEvaluator {
 
   private async resolveIdentifierByName(name: string, at: ts.Identifier, file: string, scope: Scope | undefined): Promise<Value> {
     const d = this.findDeclaration(name, at);
-    if (!d) return UNKNOWN(`global '${name}'`);
+    if (!d) {
+      // CommonJS's own: the folder and the path of the module being read.
+      if (name === '__dirname') return { k: 'str', v: dirname(file) };
+      if (name === '__filename') return { k: 'str', v: file };
+      return UNKNOWN(`global '${name}'`);
+    }
     switch (d.kind) {
       case 'opaque':
         return UNKNOWN(d.why);
@@ -1884,6 +2087,10 @@ export class StaticEvaluator {
         if (d?.kind === 'var') return this.aliasUnsafe(d.decl, left.text, depth, seen);
         return 'assigned to a binding it cannot follow';
       }
+      // `acc[K] = V` in an object-building `reduce` (see reduceShape): V lives on in the
+      // object the reduce returns — follow that object, as for an object literal.
+      const reduce = ts.isElementAccessExpression(left) ? this.accumulatorReduce(left) : undefined;
+      if (reduce) return this.escapeContext(reduce, viaAccess, isModule, depth, seen);
       return 'stored into another object';
     }
     if (ts.isReturnStatement(p) || (ts.isArrowFunction(p) && p.body === e)) {
@@ -1892,6 +2099,10 @@ export class StaticEvaluator {
       while (fn && !isFunctionLike(fn)) fn = fn.parent;
       if (!fn || seen.has(fn)) return undefined;
       seen.add(fn);
+      // The literal an object-building `reduce` callback returns (`({ ...acc, [K]: V })`)
+      // is the object that reduce returns: follow it.
+      const reduce = objectReduceCall(fn);
+      if (reduce && reduceShape(fn)?.target === skipParens(e)) return this.escapeContext(reduce, viaAccess, isModule, depth, seen);
       const { sites, escape } = this.resultSites(fn, depth);
       if (escape) return escape;
       for (const site of sites) {
@@ -2759,6 +2970,20 @@ export class StaticEvaluator {
   }
 
   /** Is passing a variable to this call harmless (the callee cannot write into it)? */
+  /** `fs` / `path` when `id` is bound to Node's module of that name (`require('fs')`, `import * as path from 'path'`). */
+  private nodeBuiltinOf(id: ts.Identifier): keyof typeof NODE_READERS | undefined {
+    const d = this.findDeclaration(id.text, id);
+    let spec: ts.Expression | undefined;
+    if (d?.kind === 'var' && d.decl.initializer) {
+      const init = skipParens(d.decl.initializer);
+      if (ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === 'require' && init.arguments.length === 1) spec = init.arguments[0];
+    } else if (d?.kind === 'import' && (d.imported === 'namespace' || d.imported === 'default')) {
+      spec = d.decl.moduleSpecifier;
+    }
+    const name = spec && ts.isStringLiteralLike(spec) ? spec.text.replace(/^node:/, '') : undefined;
+    return name === 'fs' || name === 'path' ? name : undefined;
+  }
+
   private isPureCall(call: ts.CallExpression): boolean {
     const c = call.expression;
     const text = calleeText(c);
@@ -2766,6 +2991,11 @@ export class StaticEvaluator {
     const rootNode = ts.isIdentifier(c) ? c : ts.isPropertyAccessExpression(c) ? c.expression : undefined;
     const isGlobal = rootName !== undefined && rootNode !== undefined && this.findDeclaration(rootName, rootNode) === undefined;
     if (isGlobal && (text === 'require' || (text && PURE_GLOBAL_CALLS.has(text)) || (text && /^console\./.test(text)))) return true;
+    // `fs.existsSync(p)`, `path.join(a, b)`: Node's own, which only read their arguments.
+    if (ts.isPropertyAccessExpression(c) && ts.isIdentifier(c.expression)) {
+      const builtin = this.nodeBuiltinOf(c.expression);
+      if (builtin && NODE_READERS[builtin].has(c.name.text)) return true;
+    }
     if (ts.isIdentifier(c)) {
       const d = this.findDeclaration(c.text, c);
       if (d?.kind === 'fn' && INTEROP_NAME.test(c.text) && d.decl.body?.getText().includes('__esModule')) return true;

@@ -3,6 +3,7 @@ import { createEngine, type StrapiEngine } from '../src/engine';
 import { MemoryFileSystem } from '../src/fs/MemoryFileSystem';
 import { buildIndex, updateIndexForFile } from '../src/index/indexer';
 import type { StrapiIndex, StrapiProject } from '../src/model/types';
+import { projectInfo } from '../src/query/projectInfo';
 import { listBrokenRefs, listUnused, referencesOf, validateRef } from '../src/query/refQuery';
 
 // DevKit names artifacts the way Strapi's loaders do: an API's files kebab-cased
@@ -31,6 +32,7 @@ const files: Record<string, string> = {
     "    await strapi.service('api::foo.sub.bar').run();",
     "    await strapi.plugin('helper').service('error.catch').run();",
     "    await strapi.service('plugin::helper.error.log').write();",
+    "    await strapi.service('plugin::opaque.x.thing').go();",
     "    await strapi.service('plugin::auto.thing').go();",
     "    await strapi.service('plugin::auto.nope').go();",
     '  },',
@@ -58,7 +60,8 @@ const files: Record<string, string> = {
   [`${R}/src/plugins/keys/server/routes/index.js`]:
     "module.exports = [{ method: 'GET', path: '/', handler: 'myController.index' }, { method: 'GET', path: '/m', handler: 'content-api-item.findItems' }];\n",
 
-  // A plugin whose services object is built by a helper DevKit can't follow (open).
+  // A plugin whose services object spreads a helper that prefixes a sub-index's keys —
+  // a pure local function DevKit evaluates: the collection stays closed.
   [`${R}/src/plugins/helper/strapi-server.js`]: "module.exports = require('./server');\n",
   [`${R}/src/plugins/helper/server/index.js`]: "module.exports = { services: require('./services') };\n",
   [`${R}/src/plugins/helper/server/services/index.js`]: [
@@ -72,6 +75,22 @@ const files: Record<string, string> = {
   [`${R}/src/plugins/helper/server/services/email.js`]: 'module.exports = ({ strapi }) => ({ send() {} });\n',
   [`${R}/src/plugins/helper/server/services/error/index.js`]: "module.exports = { catch: require('./catch') };\n",
   [`${R}/src/plugins/helper/server/services/error/catch.js`]: 'module.exports = ({ strapi }) => ({ run() {} });\n',
+
+  // A helper DevKit can't follow (a loop writing into an object): the collection is open.
+  [`${R}/src/plugins/opaque/strapi-server.js`]: "module.exports = require('./server');\n",
+  [`${R}/src/plugins/opaque/server/index.js`]: "module.exports = { services: require('./services') };\n",
+  [`${R}/src/plugins/opaque/server/services/index.js`]: [
+    'function load(prefix, services) {',
+    '  const out = {};',
+    "  for (const key in services) out[prefix + '.' + key] = services[key];",
+    '  return out;',
+    '}',
+    "module.exports = { email: require('./email'), ...load('x', require('./x')) };",
+    '',
+  ].join('\n'),
+  [`${R}/src/plugins/opaque/server/services/email.js`]: 'module.exports = ({ strapi }) => ({ send() {} });\n',
+  [`${R}/src/plugins/opaque/server/services/x/index.js`]: "module.exports = { thing: require('./thing') };\n",
+  [`${R}/src/plugins/opaque/server/services/x/thing.js`]: 'module.exports = ({ strapi }) => ({ go() {} });\n',
 
   // A folder auto-loader (the kind DevKit scaffolds): the folder convention holds.
   [`${R}/src/plugins/auto/strapi-server.js`]: [
@@ -159,15 +178,36 @@ describe("names as Strapi's loaders register them (feedback v2: 1-4, 11, 14)", (
     expect(unused).not.toContain('plugin::keys.my-service');
   });
 
-  it('V2-4: an index built by a helper is open — what DevKit sees is real, the rest is never reported', () => {
+  it('V2-18: a helper that prefixes a sub-index is evaluated — exact keys, the collection stays closed', () => {
     expect(validateRef(project, 'plugin::helper.email').status).toBe('valid');
-    expect(validateRef(project, 'plugin::helper.error.log').status).toBe('external');
-    expect(listBrokenRefs(project).filter((b) => b.ref.startsWith('plugin::helper.'))).toEqual([]);
+    expect(validateRef(project, 'plugin::helper.error.catch')).toMatchObject({ status: 'valid', kinds: ['service'] });
+    const errorCatch = project.index.services.get('plugin::helper.error.catch');
+    expect(errorCatch?.unconfirmed).toBeUndefined();
+    expect(errorCatch?.filePath).toBe(`${R}/src/plugins/helper/server/services/error/catch.js`);
+    // A name it doesn't register is unknown again (a typo is caught), and broken where it is called.
+    expect(validateRef(project, 'plugin::helper.error.log', 'service').status).toBe('unknown');
+    expect(validateRef(project, 'plugin::helper.fooo', 'service').status).toBe('unknown');
+    expect(listBrokenRefs(project).map((b) => b.ref)).toContain('plugin::helper.error.log');
+    expect(project.index.openCollections?.get('helper')).toBeUndefined();
+  });
+
+  it('V2-18: a helper DevKit cannot follow leaves the collection open — and says so, with where', async () => {
+    expect(validateRef(project, 'plugin::opaque.email').status).toBe('valid');
+    const unseen = validateRef(project, 'plugin::opaque.nope', 'service');
+    expect(unseen.status).toBe('external');
+    expect(unseen.reason).toMatch(/^Plugin 'opaque' registers its services through code DevKit can't read \(src\/plugins\/opaque\/server\/services\/index\.js:6\)/);
+    expect(listBrokenRefs(project).filter((b) => b.ref.startsWith('plugin::opaque.'))).toEqual([]);
     // Files no key accounts for keep their folder name, unconfirmed: never "unused".
-    expect(project.index.services.get('plugin::helper.error.catch')?.unconfirmed).toBe(true);
-    const unused = listUnused(project).map((u) => u.ref);
-    expect(unused).not.toContain('plugin::helper.error');
-    expect(unused).not.toContain('plugin::helper.error.catch');
+    expect(project.index.services.get('plugin::opaque.x.thing')?.unconfirmed).toBe(true);
+    expect(listUnused(project).map((u) => u.ref)).not.toContain('plugin::opaque.x.thing');
+    // project_info: verified in part, why, and the refs it can't check counted.
+    const info = await projectInfo(new MemoryFileSystem(files), project, engine.getProjects()[0]!);
+    const opaque = info.plugins.find((p) => p.name === 'opaque')!;
+    expect(opaque.verified).toBe('partial');
+    expect(opaque.why?.[0]).toMatch(/its services are registered by code DevKit can't read \(src\/plugins\/opaque\/server\/services\/index\.js:6\)/);
+    expect(info.health.unverifiedByPlugin?.opaque).toBe(2); // the service, and its method called
+    expect(info.notes.join('\n')).toMatch(/Verified in part: opaque/);
+    expect(info.plugins.find((p) => p.name === 'helper')?.verified).toBe(true);
   });
 
   it('V2-4: a folder auto-loader keeps the folder convention, verified', () => {
@@ -196,7 +236,7 @@ describe("names as Strapi's loaders register them (feedback v2: 1-4, 11, 14)", (
   it('the editor diagnostics agree: only the refs Strapi would not find are flagged', async () => {
     const f = `${R}/src/api/foo/controllers/foo.js`;
     const flagged = (await engine.validateFile(f, files[f]!)).map((d) => files[f]!.slice(d.start, d.end));
-    expect(flagged.sort()).toEqual(['api::foo.sub.bar', 'plugin::auto.nope']);
+    expect(flagged.sort()).toEqual(['api::foo.sub.bar', 'plugin::auto.nope', 'plugin::helper.error.log']);
   });
 });
 

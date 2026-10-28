@@ -7,12 +7,15 @@
 
 import { type FileSystem, FileType } from '../fs/FileSystem';
 import { basename, join } from '../fs/paths';
-import { listRoutes } from '../index/routes';
-import type { ProjectSummary, RouteInfo, StrapiProject } from '../model/types';
+import { readRoutes, type UnreadPluginRoutes } from '../index/routes';
+import type { ArtifactKind, ProjectSummary, RouteInfo, StrapiProject } from '../model/types';
 import { isFrameworkRef, parseRef } from '../model/uid';
 import { StaticEvaluator } from '../plugins/evaluate';
 import { readApiPrefix } from '../plugins/installed';
+import { hasPartialContentTypes } from '../index/codeContentTypes';
 import { isVerifiablePlugin } from '../plugins/merge';
+import type { StatusKind } from '../validate/refStatus';
+import { IMPORT_ON_BOOTSTRAP_WARNING } from '../configSync/detect';
 import { configSyncStatus, type ConfigSyncStaticStatus } from '../configSync/status';
 import { isEntityKey } from '../reference/references';
 import { listBrokenRefs, validateRef } from './refQuery';
@@ -25,9 +28,13 @@ export interface PluginInfo {
   version?: string;
   /** For installed plugins: Strapi's own (`internal`) or a dependency. */
   origin?: 'internal' | 'dependency';
-  /** Refs into it are checked; otherwise they come back `external` (never reported). */
-  verified: boolean;
-  /** Why it isn't verified. */
+  /**
+   * Refs into it are checked; otherwise they come back `external` (never reported).
+   * `partial`: a local plugin some of whose collections are built by code DevKit
+   * can't read — a name it doesn't see there comes back `external` (`why` says where).
+   */
+  verified: boolean | 'partial';
+  /** Why it isn't verified, or only in part. */
   why?: string[];
 }
 
@@ -60,11 +67,25 @@ export interface ProjectInfo {
     unverifiedByPlugin?: Record<string, number>;
   };
   /** strapi-plugin-config-sync is used: its version, its sync directory, its files (config_sync_status lists them). */
-  configSync?: { version?: string; syncDir: string; files: number; invalid: number };
+  /** config-sync, read from the files; `warnings`: what its detection says (options, versions, importOnBootstrap…). */
+  configSync?: { version?: string; syncDir: string; files: number; invalid: number; warnings?: string[] };
   /** Plain-language caveats an agent should know before trusting a `valid`/`unknown`. */
   notes: string[];
   freshness: ProjectSummary['freshness'];
 }
+
+const PLURAL_KIND: Record<ArtifactKind, string> = { service: 'services', controller: 'controllers', policy: 'policies', middleware: 'middlewares' };
+
+/** Reference-index key prefix → the kind its ref is checked as. */
+const KEY_KIND: Record<string, StatusKind | undefined> = {
+  ct: 'content-type',
+  component: 'component',
+  service: 'service',
+  controller: 'controller',
+  policy: 'policy',
+  middleware: 'middleware',
+  method: 'method',
+};
 
 const LOCKFILES: Array<[string, NonNullable<ProjectInfo['packageManager']>]> = [
   ['pnpm-lock.yaml', 'pnpm'],
@@ -80,8 +101,8 @@ export async function projectInfo(
   fs: FileSystem,
   project: StrapiProject,
   summary: ProjectSummary,
-  /** What the caller already has: the routes, the config-sync status (`null`: config-sync isn't used). */
-  cached?: { routes?: readonly RouteInfo[]; configSync?: ConfigSyncStaticStatus | null },
+  /** What the caller already has: the routes (and the local plugins' routes it couldn't read), the config-sync status (`null`: config-sync isn't used). */
+  cached?: { routes?: readonly RouteInfo[]; unreadRoutes?: readonly UnreadPluginRoutes[]; configSync?: ConfigSyncStaticStatus | null },
 ): Promise<ProjectInfo> {
   const idx = project.index;
   const root = project.root;
@@ -116,8 +137,11 @@ export async function projectInfo(
     }
   }
   let routes = { api: 0, plugins: 0 };
+  let unreadRoutes: readonly UnreadPluginRoutes[] = [];
   try {
-    for (const r of cached?.routes ?? (await listRoutes(fs, project, { plugins: true }))) {
+    const read = cached?.routes ? { routes: cached.routes, unread: cached.unreadRoutes ?? [] } : await readRoutes(fs, project, { plugins: true });
+    unreadRoutes = read.unread;
+    for (const r of read.routes) {
       if (r.owner?.startsWith('plugin::')) routes.plugins++;
       else routes.api++;
     }
@@ -152,9 +176,26 @@ export async function projectInfo(
   };
   const plugins: PluginInfo[] = [];
   const localNames = new Set(idx.pluginNames);
+  /** What a verified local plugin leaves unchecked: its collections built by code DevKit can't read. */
+  const partlyWhy = (name: string): string[] => {
+    const why: string[] = [];
+    for (const kind of [...(idx.openCollections?.get(name) ?? [])].sort()) {
+      const site = idx.openCollectionSites?.get(`${name}/${kind}`);
+      const at = site ? ` (${rel(site.file)}${site.line ? `:${site.line}` : ''})` : '';
+      why.push(`its ${PLURAL_KIND[kind]} are registered by code DevKit can't read${at}: a name it doesn't see there isn't checked`);
+    }
+    if (hasPartialContentTypes(idx, name)) why.push("its content-types can't all be listed without running it");
+    return why;
+  };
+  const partlyVerified: string[] = [];
   for (const name of [...localNames].sort()) {
-    const verified = isVerifiablePlugin(idx, name);
-    plugins.push({ name, source: 'local', verified, ...(verified ? {} : { why: whyNot(name, []) }) });
+    if (!isVerifiablePlugin(idx, name)) {
+      plugins.push({ name, source: 'local', verified: false, why: whyNot(name, []) });
+      continue;
+    }
+    const partly = partlyWhy(name);
+    if (partly.length) partlyVerified.push(name);
+    plugins.push({ name, source: 'local', verified: partly.length ? 'partial' : true, ...(partly.length ? { why: partly } : {}) });
   }
   for (const p of [...(project.installed?.plugins ?? [])].sort((a, b) => a.name.localeCompare(b.name))) {
     if (localNames.has(p.name)) continue; // a local plugin of the same name replaces it
@@ -176,15 +217,19 @@ export async function projectInfo(
   // whatever forms it is used under; field keys aside).
   const unverifiedByPlugin: Record<string, number> = {};
   let unverifiedPluginRefs = 0;
-  const seen = new Set<string>();
+  const counted = new Set<string>();
   for (const [key, locations] of project.references) {
     if (!locations.length || !isEntityKey(key) || key.startsWith('relation-field:') || key.startsWith('plugin:')) continue;
     const ref = key.slice(key.indexOf(':') + 1).split('#')[0]!;
-    if (seen.has(ref) || isFrameworkRef(ref)) continue;
-    seen.add(ref);
+    if (counted.has(ref) || isFrameworkRef(ref)) continue;
     const parsed = parseRef(ref);
-    if (!parsed || parsed.namespace !== 'plugin' || isVerifiablePlugin(idx, parsed.scope)) continue;
-    if (validateRef(project, ref).status !== 'external') continue;
+    if (!parsed || parsed.namespace !== 'plugin') continue;
+    // An unverified plugin: every ref into it. A partly verified one: the refs its kind can't check.
+    const partly = partlyVerified.includes(parsed.scope);
+    if (isVerifiablePlugin(idx, parsed.scope) && !partly) continue;
+    const kind = partly ? KEY_KIND[key.slice(0, key.indexOf(':'))] : undefined;
+    if (validateRef(project, ref, kind).status !== 'external') continue;
+    counted.add(ref);
     unverifiedByPlugin[parsed.scope] = (unverifiedByPlugin[parsed.scope] ?? 0) + 1;
     unverifiedPluginRefs++;
   }
@@ -196,12 +241,27 @@ export async function projectInfo(
   if (!nodeModules) notes.push('@strapi/strapi is not installed (no node_modules): refs into installed plugins (users-permissions, upload, i18n…) come back `external`, never checked. Install the dependencies to verify them.');
   if (loading) notes.push('Installed plugins are still being read: plugin refs come back `external` for a few more seconds.');
   if (unverifiedPluginRefs) notes.push(`${unverifiedPluginRefs} distinct ref(s) into unverified plugins come back \`external\`: neither confirmed nor reported (see plugins[].why).`);
+  if (partlyVerified.length) {
+    notes.push(`Verified in part: ${partlyVerified.join(', ')} — some of their collections are built by code DevKit can't read; a name it doesn't see there comes back \`external\` (see plugins[].why).`);
+  }
+  for (const u of unreadRoutes) {
+    notes.push(`Routes of plugin '${u.plugin}' built by code DevKit can't read (${rel(u.file)}${u.line ? `:${u.line}` : ''}: ${u.why}): list_routes is missing them, or some of them.`);
+  }
   let configSync: ProjectInfo['configSync'];
   const cs = cached?.configSync !== undefined ? (cached.configSync ?? undefined) : await configSyncStatus(fs, project).catch(() => undefined);
   if (cs && !cs.detection.disabled) {
     const v = cs.detection.installedVersion;
-    configSync = { ...(v ? { version: v } : {}), syncDir: rel(cs.detection.syncDirPath), files: cs.files.length, invalid: cs.files.filter((f) => f.status === 'invalid').length };
+    const warnings = cs.detection.warnings;
+    configSync = {
+      ...(v ? { version: v } : {}),
+      syncDir: rel(cs.detection.syncDirPath),
+      files: cs.files.length,
+      invalid: cs.files.filter((f) => f.status === 'invalid').length,
+      ...(warnings.length ? { warnings } : {}),
+    };
     notes.push('config-sync is used: config_sync_status lists its files. Prefer an export (the admin Config Sync page, `npx config-sync export`) to editing config/sync/*.json by hand: config-sync compares each file as written with the database.');
+    // The trap that overwrites a shared database: said where an agent orients itself, not only in config_sync_status.
+    if (warnings.includes(IMPORT_ON_BOOTSTRAP_WARNING)) notes.push(IMPORT_ON_BOOTSTRAP_WARNING);
   }
   if (summary.freshness.diskTracking === 'off') notes.push('Too many files to compare with the disk on each call: call refresh after editing files outside this session.');
 

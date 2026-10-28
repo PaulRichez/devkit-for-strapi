@@ -167,7 +167,10 @@ export function collectConstantCallSites(filePath: string, text: string): Refere
  * template, a value from another module, an index into a map
  * (`strapi.service(uid)`, `strapi.services[TARGETS[type]]`): they may reach
  * anything of their kind, so they are what can complete a find-references or
- * an unused list. Context text is empty (unknown); the range is the argument.
+ * an unused list. Context text is the part of the UID DevKit can read — every
+ * UID the call may reach starts with it (`plugin::y.` for
+ * `strapi.plugin('y').service(name)`, `api::foo.` for `'api::foo.' + kind`),
+ * '' when none is; the range is the argument.
  */
 export function collectUnresolvedCalls(filePath: string, text: string): ReferenceContext[] {
   if (isJson(filePath) || isConfigMiddlewares(filePath) || !CODE_PREFILTER.test(text)) return [];
@@ -178,7 +181,9 @@ export function collectUnresolvedCalls(filePath: string, text: string): Referenc
     if (ts.isStringLiteralLike(arg) || (ts.isIdentifier(arg) && constants?.resolve(arg))) return;
     const c = classifyArgument(arg);
     if (!c || c.kind === 'plugin-name') return;
-    const ctx: ReferenceContext = { kind: c.kind, text: '', range: { start: arg.getStart(sf), end: arg.getEnd() }, isLiteral: false };
+    const head = staticHead(arg, constants);
+    const scope = c.pluginName !== undefined ? `plugin::${c.pluginName}.${head}` : head;
+    const ctx: ReferenceContext = { kind: c.kind, text: scope, range: { start: arg.getStart(sf), end: arg.getEnd() }, isLiteral: false };
     if (c.apiStyle) ctx.apiStyle = c.apiStyle;
     out.push(ctx);
   };
@@ -189,6 +194,50 @@ export function collectUnresolvedCalls(filePath: string, text: string): Referenc
   };
   visit(sf);
   return out;
+}
+
+const RELATIVE_IMPORT_PREFILTER = /(require|import)\s*\(\s*['"`]\.|from\s*['"]\./;
+
+/**
+ * The relative module paths a code file loads (`require('../services/x')`,
+ * `import x from './x'`, `import('./x')`), as written: what keeps a file's module
+ * used even when nothing calls its Strapi name. The range is the path's.
+ */
+export function collectRelativeImports(filePath: string, text: string): Array<{ spec: string; start: number; end: number }> {
+  if (isJson(filePath) || !RELATIVE_IMPORT_PREFILTER.test(text)) return [];
+  const sf = parseSource(filePath, text);
+  const out: Array<{ spec: string; start: number; end: number }> = [];
+  const add = (s: ts.Expression | undefined): void => {
+    if (s && ts.isStringLiteralLike(s) && /^\.\.?(\/|$)/.test(s.text)) out.push({ spec: s.text, start: s.getStart(sf) + 1, end: s.getEnd() - 1 });
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && node.arguments.length === 1) {
+      const callee = node.expression;
+      if ((ts.isIdentifier(callee) && callee.text === 'require') || callee.kind === ts.SyntaxKind.ImportKeyword) add(node.arguments[0]);
+    } else if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
+      add(node.moduleSpecifier);
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      add(node.moduleReference.expression);
+    }
+    node.forEachChild(visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/**
+ * The start every value of `e` has, read statically: the literal (or string
+ * constant) leftmost in a `+` chain, a template's head — a string `+` anything
+ * is a string that starts with it. '' otherwise.
+ */
+function staticHead(e: ts.Expression, constants: ReturnType<typeof constantResolver> | undefined): string {
+  while (ts.isParenthesizedExpression(e) || (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken)) {
+    e = ts.isParenthesizedExpression(e) ? e.expression : e.left;
+  }
+  if (ts.isStringLiteralLike(e)) return e.text;
+  if (ts.isTemplateExpression(e)) return e.head.text;
+  if (ts.isIdentifier(e)) return constants?.resolve(e)?.text ?? '';
+  return '';
 }
 
 /**

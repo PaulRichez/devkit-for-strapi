@@ -318,6 +318,7 @@ async function indexPluginArtifacts(
       const kinds = index.openCollections.get(pluginName) ?? new Set<ArtifactKind>();
       kinds.add(kind);
       index.openCollections.set(pluginName, kinds);
+      if (read.where) (index.openCollectionSites ??= new Map()).set(`${pluginName}/${kind}`, read.where);
     }
     if (read.mode === 'convention') {
       await indexArtifactDir(fs, dir, kind, owner, index, read.open);
@@ -392,6 +393,8 @@ async function reindexPluginArtifacts(fs: FileSystem, project: { srcDir: string;
   index.openCollections?.delete(pluginName);
   const open = fresh.openCollections?.get(pluginName);
   if (open) (index.openCollections ??= new Map()).set(pluginName, open);
+  for (const key of [...(index.openCollectionSites?.keys() ?? [])]) if (key.startsWith(`${pluginName}/`)) index.openCollectionSites!.delete(key);
+  for (const [key, site] of fresh.openCollectionSites ?? []) (index.openCollectionSites ??= new Map()).set(key, site);
 }
 
 /** Re-read the code-defined content-types of one local plugin (after an edit under its content-types dir). */

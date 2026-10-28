@@ -22,7 +22,7 @@ import type {
   StrapiProject,
   TargetLocation,
 } from './model/types';
-import { listRoutes, type ListRoutesOptions } from './index/routes';
+import { type ListRoutesOptions, readRoutes, type UnreadPluginRoutes } from './index/routes';
 import { type GlobalMiddlewares, readGlobalMiddlewares } from './index/globalMiddlewares';
 import { modelOf } from './query/model';
 import { buildModelMaps, contentTypeInsights, type ModelMaps } from './reference/insights';
@@ -115,8 +115,9 @@ export interface StrapiEngine {
    * Every project's HTTP routes (see `listRoutes`), for the editor's Routes view.
    * Cached per project until a route-relevant file changes (routes, content-types,
    * plugins, config) or installed plugins are re-read; the arrays are shared: read-only.
+   * `unread`: the local plugins whose routes DevKit couldn't read whole.
    */
-  getRoutes(opts?: ListRoutesOptions & { root?: string }): Promise<Array<{ root: string; routes: RouteInfo[] }>>;
+  getRoutes(opts?: ListRoutesOptions & { root?: string }): Promise<Array<{ root: string; routes: RouteInfo[]; unread: UnreadPluginRoutes[] }>>;
   /** A project's `config/middlewares` stack (cached like {@link getRoutes}). */
   getGlobalMiddlewares(root: string): Promise<GlobalMiddlewares>;
 }
@@ -192,7 +193,7 @@ class Engine implements StrapiEngine {
   /** The token of the installed-plugin load in flight (see loadInstalledInBackground). */
   private loadToken = 0;
   /** Every route of a project (admin and plugins included), until a route-relevant change. */
-  private routeCache = new WeakMap<StrapiProject, Promise<RouteInfo[]>>();
+  private routeCache = new WeakMap<StrapiProject, Promise<{ routes: RouteInfo[]; unread: UnreadPluginRoutes[] }>>();
   private globalMwCache = new WeakMap<StrapiProject, Promise<GlobalMiddlewares>>();
 
   constructor(
@@ -428,25 +429,25 @@ class Engine implements StrapiEngine {
     return this.projects.find((p) => isPathInside(p.root, f));
   }
 
-  async getRoutes(opts?: ListRoutesOptions & { root?: string }): Promise<Array<{ root: string; routes: RouteInfo[] }>> {
+  async getRoutes(opts?: ListRoutesOptions & { root?: string }): Promise<Array<{ root: string; routes: RouteInfo[]; unread: UnreadPluginRoutes[] }>> {
     await this.refreshInstalledIfStale();
-    const out: Array<{ root: string; routes: RouteInfo[] }> = [];
+    const out: Array<{ root: string; routes: RouteInfo[]; unread: UnreadPluginRoutes[] }> = [];
     const only = opts?.root !== undefined ? normalize(opts.root) : undefined;
     for (const project of [...this.projects].sort((a, b) => a.root.localeCompare(b.root))) {
       if (only !== undefined && project.root !== only) continue;
       const all = await this.routesOf(project);
-      const routes = all.filter((r) => (opts?.admin || r.type !== 'admin') && (opts?.plugins !== false || r.origin === 'project'));
-      out.push({ root: project.root, routes });
+      const routes = all.routes.filter((r) => (opts?.admin || r.type !== 'admin') && (opts?.plugins !== false || r.origin === 'project'));
+      out.push({ root: project.root, routes, unread: opts?.plugins === false ? [] : all.unread });
     }
     return out;
   }
 
-  private routesOf(project: StrapiProject): Promise<RouteInfo[]> {
+  private routesOf(project: StrapiProject): Promise<{ routes: RouteInfo[]; unread: UnreadPluginRoutes[] }> {
     let p = this.routeCache.get(project);
     if (!p) {
-      const read: Promise<RouteInfo[]> = listRoutes(this.fs, project, { admin: true, plugins: true }).catch(() => {
+      const read: Promise<{ routes: RouteInfo[]; unread: UnreadPluginRoutes[] }> = readRoutes(this.fs, project, { admin: true, plugins: true }).catch(() => {
         if (this.routeCache.get(project) === read) this.routeCache.delete(project);
-        return [];
+        return { routes: [], unread: [] };
       });
       this.routeCache.set(project, (p = read));
     }

@@ -40,6 +40,7 @@ import {
   type StrapiEngine,
   type StrapiProject,
   type TargetKind,
+  type UnreadPluginRoutes,
   validateRef,
   type WorkspaceEdit,
 } from 'devkit-for-strapi-core';
@@ -130,16 +131,35 @@ export function withFreshness(engine: StrapiEngine, res: CallToolResult): CallTo
   };
 }
 
+/** A result, with the local plugins whose routes DevKit couldn't read whole (`unreadRoutes`) in a block of its own. */
+const withUnreadRoutes = (res: CallToolResult, unread: readonly UnreadPluginRoutes[]): CallToolResult =>
+  unread.length
+    ? {
+        ...res,
+        content: [
+          ...res.content,
+          {
+            type: 'text' as const,
+            text: JSON.stringify({
+              unreadRoutes: unread,
+              note: "These local plugins build their routes with code DevKit can't read: the table is missing them, or some of them — read the file named.",
+            }),
+          },
+        ],
+      }
+    : res;
+
 /** One reference as a compact, token-cheap line: `path:line:col [via]  snippet` (1-based). */
 const compactRef = (r: ReferenceLocation): string =>
   `${r.filePath}:${r.start.line + 1}:${r.start.character + 1}${r.via ? ` [${r.via}]` : ''}${r.archived ? ' (archived migration, never run)' : ''}${r.snippet ? `  ${r.snippet}` : ''}`;
 
 /**
- * The Strapi calls whose UID DevKit can't read that could reach `kinds` — said
- * with a result they may complete (a few of them, and how many in all).
+ * The Strapi calls whose UID DevKit can't read that could reach `kinds` (one of
+ * `refs`, when the start of the UID they read rules it out) — said with a result
+ * they may complete (a few of them, and how many in all).
  */
-const unresolvedNote = (project: StrapiProject, kinds: Array<TargetKind | 'method'>): { total: number; note: string; sample: string[] } | undefined => {
-  const calls = unresolvedCallsOf(project, kinds);
+const unresolvedNote = (project: StrapiProject, kinds: Array<TargetKind | 'method'>, refs: string[]): { total: number; note: string; sample: string[] } | undefined => {
+  const calls = unresolvedCallsOf(project, kinds, refs);
   if (!calls.length) return undefined;
   return {
     total: calls.length,
@@ -433,8 +453,8 @@ export function registerTools(
       if ('result' in p) return p.result;
       const summary = engine.getProjects().find((s) => s.root === p.project.root);
       if (!summary) return json({ error: 'The project was re-indexed meanwhile: call project_info again.' });
-      const routes = (await engine.getRoutes({ root: p.project.root }))[0]?.routes;
-      return json(await projectInfo(fs, p.project, summary, { routes }));
+      const read = (await engine.getRoutes({ root: p.project.root }))[0];
+      return json(await projectInfo(fs, p.project, summary, { routes: read?.routes, unreadRoutes: read?.unread }));
     },
   );
 
@@ -661,7 +681,7 @@ export function registerTools(
         const all = referencesOf(p.project, ref);
         const page = all.slice(offset, offset + limit);
         const kinds: Array<TargetKind | 'method'> = ref.includes('#') ? ['method'] : resolveRef(p.project, ref).map((t) => t.kind);
-        const unresolved = unresolvedNote(p.project, kinds);
+        const unresolved = unresolvedNote(p.project, kinds, [ref]);
         return {
           ref,
           total: all.length,
@@ -683,7 +703,7 @@ export function registerTools(
     {
       title: 'List HTTP routes',
       description:
-        'List a project\'s HTTP route table: method, path, mounted `fullPath` (API prefix included), handler, policies, middlewares, `public` (auth: false), `auth` when customized, and where each route is declared (`filePath`/`offset`). Covers the project\'s explicit routes, the auto-CRUD routes synthesized from createCoreRouter, and the routes local and installed plugins declare (`origin`), read from node_modules without booting Strapi. Admin-panel routes are left out unless `admin: true`. Filter with `method`, `path` (a pattern, a part of it, or a concrete URL such as `/api/articles/12`) and `handler`. With `pipeline: true` (needs a filter, at most ' +
+        'List a project\'s HTTP route table: method, path, mounted `fullPath` (API prefix included), handler, policies, middlewares, `public` (auth: false), `auth` when customized, and where each route is declared (`filePath`/`offset`). Covers the project\'s explicit routes, the auto-CRUD routes synthesized from createCoreRouter, and the routes local and installed plugins declare (`origin`), read from node_modules without booting Strapi; a local plugin whose routes are built by code DevKit cannot read comes in a block of its own (`unreadRoutes`: the file and line to read). Admin-panel routes are left out unless `admin: true`. Filter with `method`, `path` (a pattern, a part of it, or a concrete URL such as `/api/articles/12`) and `handler`. With `pipeline: true` (needs a filter, at most ' +
         PIPELINE_MAX +
         ' routes), each route also gets what a request goes through, in Strapi\'s order — the `config/middlewares` stack (once, in `globalMiddlewares`), auth, policies, route middlewares, handler — each step with a status: `ok`, `not-found-by-strapi` (it exists under another name Strapi won\'t try: Strapi throws at startup), `unknown`, `unverified`, `unread` or `inline`. Use it to explain a 401/403, or a startup error about a policy or middleware.',
       inputSchema: {
@@ -700,19 +720,22 @@ export function registerTools(
       await ready;
       const p = pick(engine, args, roots());
       if ('result' in p) return p.result;
-      const all = (await engine.getRoutes({ ...(args.plugins !== undefined ? { plugins: args.plugins } : {}), admin: args.admin ?? false, root: p.project.root }))[0]?.routes ?? [];
+      const read = (await engine.getRoutes({ ...(args.plugins !== undefined ? { plugins: args.plugins } : {}), admin: args.admin ?? false, root: p.project.root }))[0];
+      const all = read?.routes ?? [];
+      // Local plugins whose routes DevKit couldn't read: said apart, the table keeps its shape.
+      const answer = (data: unknown): CallToolResult => withUnreadRoutes(json(data), read?.unread ?? []);
       const routes = all.filter(
         (r: RouteInfo) =>
           (!args.method || r.method.toUpperCase().split(/[|,]/).includes(args.method.toUpperCase())) &&
           (!args.path || pathMatches(r.fullPath ?? r.path, args.path) || pathMatches(r.path, args.path)) &&
           (!args.handler || qualifiedHandler(r).includes(args.handler)),
       );
-      if (!args.pipeline) return json(routes);
+      if (!args.pipeline) return answer(routes);
       if (!args.method && !args.path && !args.handler) {
-        return json({ error: 'pipeline needs a filter: pass `method`, `path` or `handler` to narrow the routes first.', routes: routes.length });
+        return answer({ error: 'pipeline needs a filter: pass `method`, `path` or `handler` to narrow the routes first.', routes: routes.length });
       }
       if (routes.length > PIPELINE_MAX) {
-        return json({ error: `${routes.length} routes match: narrow the filter to at most ${PIPELINE_MAX} for the pipeline.`, routes: routes.map((r) => `${r.method} ${r.fullPath ?? r.path}`) });
+        return answer({ error: `${routes.length} routes match: narrow the filter to at most ${PIPELINE_MAX} for the pipeline.`, routes: routes.map((r) => `${r.method} ${r.fullPath ?? r.path}`) });
       }
       const global = await engine.getGlobalMiddlewares(p.project.root);
       // The users-permissions roles in config/sync: who may call each route once they are imported.
@@ -723,7 +746,7 @@ export function registerTools(
       };
       const piped = routes.map((r) => ({ ...r, pipeline: routePipeline(p.project, r, global).steps.filter((s) => s.phase !== 'global-middleware').map((s) => withAccess(r, s)) }));
       const stack = routes[0] ? routePipeline(p.project, routes[0], global).steps.filter((s) => s.phase === 'global-middleware') : [];
-      return json({ globalMiddlewares: { status: global.status, file: global.file, envFiles: global.envFiles, steps: stack }, routes: piped });
+      return answer({ globalMiddlewares: { status: global.status, file: global.file, envFiles: global.envFiles, steps: stack }, routes: piped });
     },
   );
 
@@ -732,7 +755,7 @@ export function registerTools(
     {
       title: 'Find unused Strapi entities/methods',
       description:
-        "List definitions with 0 Strapi references — service/controller methods never called via strapi.service()/route handlers, plus unused content-types, components, services, policies and middlewares. Static: counts Strapi refs only, so a method called **directly in TS** still appears — verify before deleting. Use `file` for one file (else the whole app), `kinds` to narrow.",
+        "List definitions with 0 Strapi references — service/controller methods never called via strapi.service()/route handlers, plus unused content-types, components, services, policies and middlewares. Static: counts Strapi refs only, so a method called **directly in TS** still appears — verify before deleting. `onlyArchivedCallers`: its only callers are migrations Strapi never runs; `requiredByPath`: live code loads its file by path (`require('../services/x')`), so its module is used. Use `file` for one file (else the whole app), `kinds` to narrow.",
       inputSchema: {
         file: z.string().optional().describe('Restrict to one file; omit for the whole app.'),
         kinds: z
@@ -748,7 +771,7 @@ export function registerTools(
       const p = pick(engine, args, roots());
       if ('result' in p) return p.result;
       const unused = listUnused(p.project, { kinds: args.kinds, file: args.file });
-      const unresolved = unused.length ? unresolvedNote(p.project, [...new Set(unused.map((u) => (u.kind === 'method' ? 'method' : u.kind)))]) : undefined;
+      const unresolved = unused.length ? unresolvedNote(p.project, [...new Set(unused.map((u) => (u.kind === 'method' ? 'method' : u.kind)))], unused.map((u) => u.ref)) : undefined;
       return json({ unused, ...(unresolved ? { unresolvedCalls: unresolved } : {}) });
     },
   );

@@ -351,7 +351,26 @@ export function collectCoreRouterHandlers(filePath: string, text: string, projec
  * each with its declaration location and mounted path. Never boots Strapi.
  */
 export async function listRoutes(fs: FileSystem, project: StrapiProject, opts: ListRoutesOptions = {}): Promise<RouteInfo[]> {
+  return (await readRoutes(fs, project, opts)).routes;
+}
+
+/**
+ * A local plugin whose routes DevKit couldn't read whole: they are built by code
+ * it can't follow. Its routes are missing from the table, or some of them.
+ */
+export interface UnreadPluginRoutes {
+  plugin: string;
+  /** Where the routes are declared: the `routes` key of the server entry, else the entry (1-based line). */
+  file: string;
+  line?: number;
+  /** What DevKit couldn't read. */
+  why: string;
+}
+
+/** {@link listRoutes}, with the local plugins whose routes DevKit couldn't read whole. */
+export async function readRoutes(fs: FileSystem, project: StrapiProject, opts: ListRoutesOptions = {}): Promise<{ routes: RouteInfo[]; unread: UnreadPluginRoutes[] }> {
   const out: RouteInfo[] = [];
+  const unread: UnreadPluginRoutes[] = [];
   const prefix = project.installed ? project.installed.apiPrefix : await readApiPrefix(fs, project.root, new StaticEvaluator(fs, { roots: [project.root] }));
   const apiDir = join(project.srcDir, 'api');
   for (const api of await entries(fs, apiDir)) {
@@ -395,10 +414,16 @@ export async function listRoutes(fs: FileSystem, project: StrapiProject, opts: L
       const entry = await localPluginEntry(fs, project.srcDir, name);
       if (!entry) continue;
       try {
-        const { routes } = await withTimeout(readPluginRoutes(fs, name, entry, prefix, join(project.srcDir, 'plugins', name)), 10_000, { routes: [], complete: false });
-        out.push(...routes.map((r) => fromPluginRoute(r, 'local-plugin')));
+        const read = await withTimeout(readPluginRoutes(fs, name, entry, prefix, join(project.srcDir, 'plugins', name)), 10_000, {
+          routes: [],
+          complete: false,
+          gaps: ['reading its routes took too long'],
+          where: { file: entry },
+        });
+        out.push(...read.routes.map((r) => fromPluginRoute(r, 'local-plugin')));
+        if (!read.complete) unread.push({ plugin: name, ...read.where, why: [...new Set(read.gaps)].join('; ') });
       } catch {
-        /* unreadable plugin — skip */
+        unread.push({ plugin: name, file: entry, why: 'its server entry could not be read' });
       }
     }
     for (const p of project.installed?.plugins ?? []) {
@@ -406,5 +431,5 @@ export async function listRoutes(fs: FileSystem, project: StrapiProject, opts: L
       out.push(...p.routes.map((r) => fromPluginRoute(r, 'installed-plugin')));
     }
   }
-  return opts.admin ? out : out.filter((r) => r.type !== 'admin');
+  return { routes: opts.admin ? out : out.filter((r) => r.type !== 'admin'), unread };
 }

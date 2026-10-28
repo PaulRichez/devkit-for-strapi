@@ -57,7 +57,7 @@ describe('weak literals follow definition changes (incremental = full build)', (
 });
 
 describe('names the folder convention only guessed', () => {
-  it('a name an opaque helper may register differently is external, never valid', async () => {
+  it('a name a helper registers differently is the helper\'s, never the folder\'s guess', async () => {
     const { project } = await open({
       [`${R}/src/plugins/helper/package.json`]: '{"name":"helper","strapi":{"kind":"plugin","name":"helper"}}',
       [`${R}/src/plugins/helper/strapi-server.js`]: "module.exports = require('./server');\n",
@@ -76,9 +76,11 @@ describe('names the folder convention only guessed', () => {
       [`${R}/config/plugins.js`]: "module.exports = { helper: { enabled: true, resolve: './src/plugins/helper' } };\n",
     });
     expect(validateRef(project(), 'plugin::helper.email').status).toBe('valid');
-    // Strapi registers `error.catch`, never `error`: DevKit can't tell, so it doesn't say valid.
-    expect(validateRef(project(), 'plugin::helper.error').status).toBe('external');
-    expect(validateRef(project(), 'plugin::helper.error', 'service').status).toBe('external');
+    // Strapi registers `error.catch`, never `error`: the helper is read exactly (v2 #18), so DevKit
+    // says it — the helper's own names valid, the folder's guess unknown. (An opaque helper: loader-parity.)
+    expect(validateRef(project(), 'plugin::helper.error.catch').status).toBe('valid');
+    expect(validateRef(project(), 'plugin::helper.error').status).toBe('unknown');
+    expect(validateRef(project(), 'plugin::helper.error', 'service').status).toBe('unknown');
   });
 });
 

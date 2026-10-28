@@ -1,10 +1,10 @@
-import { collectConstantCallSites, collectReferences, collectUnclassifiedUidLiterals, collectUnresolvedCalls } from '../analyze/callSite';
+import { collectConstantCallSites, collectReferences, collectRelativeImports, collectUnclassifiedUidLiterals, collectUnresolvedCalls } from '../analyze/callSite';
 import { hasContentType } from '../index/codeContentTypes';
 import { collectMemberReferences, collectThisMemberReferences } from '../analyze/memberRefs';
 import { MAX_PARSE_CHARS } from '../analyze/parse';
 import { collectRelationFieldUsages } from '../analyze/relationUsage';
 import { type FileSystem, FileType } from '../fs/FileSystem';
-import { join, normalize } from '../fs/paths';
+import { basename, dirname, extname, join, normalize, stripExt } from '../fs/paths';
 import { factoryObjectRange } from '../index/actions';
 import { collectCoreRouterHandlers } from '../index/routes';
 import type { CodeArtifact, ReferenceContext, ReferenceLocation, StrapiProject } from '../model/types';
@@ -131,7 +131,13 @@ function collectFileReferences(project: StrapiProject, filePath: string, text: s
   for (const ctx of collectUnresolvedCalls(filePath, text)) {
     const loc: ReferenceLocation = { filePath, start: positionAt(starts, ctx.range.start), end: positionAt(starts, ctx.range.end), snippet: snippetAt(ctx.range.start) };
     if (ctx.apiStyle) loc.via = ctx.apiStyle;
+    if (ctx.text) loc.scope = ctx.text;
     out.push({ key: `${UNRESOLVED_PREFIX}${ctx.kind}`, loc });
+  }
+  // A file loaded by its path: its module is used whatever its Strapi name (see `requirersOf`).
+  for (const m of collectRelativeImports(filePath, text)) {
+    const loc: ReferenceLocation = { filePath, start: positionAt(starts, m.start), end: positionAt(starts, m.end), via: 'require', snippet: snippetAt(m.start) };
+    out.push({ key: `${MODULE_PREFIX}${resolveDots(join(dirname(filePath), m.spec)).toLowerCase()}`, loc });
   }
   if (isArchivedMigration(project, filePath)) {
     for (const r of out) r.loc.archived = true;
@@ -172,9 +178,51 @@ export function resyncWeakLiterals(project: StrapiProject): void {
  */
 export const UNRESOLVED_PREFIX = 'unresolved:';
 
-/** True for a reference key that points at an entity (not a call whose UID is unknown). */
+/**
+ * Key prefix of a relative `require`/`import` of a file, by the path it resolves
+ * to (lower-cased, as written: no extension added) — not a reference to an
+ * entity ({@link isEntityKey}); {@link requirersOf} reads them.
+ */
+export const MODULE_PREFIX = 'module:';
+
+/** True for a reference key that points at an entity (not a call whose UID is unknown, nor a file loaded by its path). */
 export function isEntityKey(key: string): boolean {
-  return !key.startsWith(UNRESOLVED_PREFIX);
+  return !key.startsWith(UNRESOLVED_PREFIX) && !key.startsWith(MODULE_PREFIX);
+}
+
+/** `a/./b/../c` → `a/c` (a path's `.` and `..` segments resolved; one above the root is kept). */
+function resolveDots(p: string): string {
+  const out: string[] = [];
+  for (const seg of p.split('/')) {
+    if (seg === '.') continue;
+    if (seg === '..' && out.length && out[out.length - 1] !== '..' && !/^[a-z]:$/i.test(out[out.length - 1]!) && out[out.length - 1] !== '') out.pop();
+    else out.push(seg);
+  }
+  return out.join('/');
+}
+
+/**
+ * The relative `require`s/`import`s that load `filePath` — by its path with or
+ * without its extension, or its folder for an `index` file. A module loaded so
+ * is used even when nothing calls its Strapi name. In a local plugin, the files
+ * that register its artifacts (its server entry, its indexes: any file of the
+ * plugin that isn't an artifact's own, or is an `index`) require them to register
+ * them: not counted.
+ */
+export function requirersOf(project: StrapiProject, filePath: string): ReferenceLocation[] {
+  const f = normalize(filePath).toLowerCase();
+  const forms = new Set([f, join(dirname(f), stripExt(basename(f)))]);
+  if (stripExt(basename(f)) === 'index' && extname(f) !== '.json') forms.add(dirname(f));
+  const plugin = owningPluginName(project, filePath);
+  const registers = (from: string): boolean =>
+    plugin !== undefined && owningPluginName(project, from) === plugin && (stripExt(basename(from)) === 'index' || !isArtifactFile(project, from));
+  return [...forms].flatMap((p) => project.references.get(`${MODULE_PREFIX}${p}`) ?? []).filter((l) => !registers(l.filePath));
+}
+
+/** Is `filePath` the file of a service, a controller, a policy or a middleware? */
+function isArtifactFile(project: StrapiProject, filePath: string): boolean {
+  const idx = project.index;
+  return [idx.services, idx.controllers, idx.policies, idx.middlewares].some((m) => [...m.values()].some((a) => sameFile(a.filePath, filePath)));
 }
 
 /** Strapi's migrations folder: it runs the `.js` files at its root, never a subfolder. */

@@ -3,6 +3,7 @@ import { analyzeAt, collectReferences } from '../src/analyze/callSite';
 import { createEngine, type StrapiEngine } from '../src/engine';
 import { MemoryFileSystem } from '../src/fs/MemoryFileSystem';
 import type { StrapiProject } from '../src/model/types';
+import { requirersOf } from '../src/reference/references';
 import { callFormCoverage, listBrokenRefs, listUnused, referencesOf, relationUsagesOf, unresolvedCallsOf } from '../src/query/refQuery';
 
 // References that don't sit in a Strapi call as a literal: the object form of a
@@ -177,6 +178,22 @@ describe('database/migrations (feedback v2: 8)', () => {
     // Services deleted since: called by an archived migration (never run), and by an active one.
     [`${M}/database/migrations/old/2023.01.01T00.00.00.gone.js`]: "module.exports = { async up() { await strapi.service('api::a.deleted-long-ago').run(); } };\n",
     [`${M}/database/migrations/2026.10.08T00.00.00.gone.js`]: "module.exports = { async up() { await strapi.service('api::a.deleted-recently').run(); } };\n",
+    // Loaded by path, never by name (feedback v2 #21): from an archived migration, from live code.
+    [`${M}/src/api/a/services/init.js`]: 'module.exports = ({ strapi }) => ({ run() {} });\n',
+    [`${M}/src/api/a/services/move.js`]: 'module.exports = ({ strapi }) => ({ run() {} });\n',
+    [`${M}/src/api/a/services/lone.js`]: 'module.exports = ({ strapi }) => ({ run() {} });\n',
+    [`${M}/database/migrations/old/2024.02.01T00.00.00.init.js`]:
+      "const init = require('../../../src/api/a/services/init');\nmodule.exports = { async up() { await init({ strapi }).run(); } };\n",
+    [`${M}/src/lib/dir/index.js`]: 'module.exports = {};\n',
+    // A local plugin registers its services by requiring them: that is not a use.
+    [`${M}/config/plugins.js`]: "module.exports = { q: { enabled: true, resolve: './src/plugins/q' } };\n",
+    [`${M}/src/plugins/q/strapi-server.js`]: "module.exports = require('./server');\n",
+    [`${M}/src/plugins/q/server/index.js`]: "module.exports = { services: require('./services') };\n",
+    [`${M}/src/plugins/q/server/services/index.js`]: "module.exports = { idle: require('./idle'), used: require('./used') };\n",
+    [`${M}/src/plugins/q/server/services/idle.js`]: 'module.exports = ({ strapi }) => ({ run() {} });\n',
+    [`${M}/src/plugins/q/server/services/used.js`]: "const idle = require('./idle');\nmodule.exports = ({ strapi }) => ({ run() {} });\n",
+    [`${M}/src/index.js`]:
+      "const move = require('./api/a/services/move');\nconst dir = require('./lib/dir');\nimport other from './api/a/./services/../services/lone.js';\nmodule.exports = { register() {}, bootstrap() {} };\n",
   };
   let project: StrapiProject;
   beforeAll(async () => {
@@ -204,6 +221,25 @@ describe('database/migrations (feedback v2: 8)', () => {
     const unused = listUnused(project).find((u) => u.ref === 'api::a.copy');
     expect(unused?.onlyArchivedCallers).toEqual([`${M}/database/migrations/old/2024.01.01T00.00.00.copy.js`]);
   });
+
+  it('a file loaded by its path counts as a caller: archived, or said apart from live code (feedback v2 #21)', () => {
+    const unused = listUnused(project);
+    const of = (ref: string) => unused.find((u) => u.ref === ref);
+    expect(of('api::a.init')?.onlyArchivedCallers).toEqual([`${M}/database/migrations/old/2024.02.01T00.00.00.init.js`]);
+    expect(of('api::a.init')?.requiredByPath).toBeUndefined();
+    expect(of('api::a.move')?.requiredByPath).toEqual([`${M}/src/index.js`]);
+    expect(of('api::a.lone')?.requiredByPath).toEqual([`${M}/src/index.js`]);
+    expect(of('api::a.move.run')?.requiredByPath).toEqual([`${M}/src/index.js`]);
+    expect(of('api::a.copy')?.requiredByPath).toBeUndefined();
+    // A plugin's registry requires its services to register them; another service requiring one uses it.
+    expect(of('plugin::q.used')?.requiredByPath).toBeUndefined();
+    expect(of('plugin::q.idle')?.requiredByPath).toEqual([`${M}/src/plugins/q/server/services/used.js`]);
+    // A folder required for its index file.
+    expect(requirersOf(project, `${M}/src/lib/dir/index.js`).map((l) => l.snippet)).toEqual(["const dir = require('./lib/dir');"]);
+    // Not a reference to an entity: no count, no broken ref.
+    expect(referencesOf(project, 'api::a.move')).toEqual([]);
+    expect(listBrokenRefs(project).map((x) => x.ref)).not.toContain('api::a.move');
+  });
 });
 
 describe('coverage says what is not indexed, and the calls that fall in it (feedback v2: 10)', () => {
@@ -227,5 +263,41 @@ describe('coverage says what is not indexed, and the calls that fall in it (feed
     const services = unresolvedCallsOf(project, ['service']);
     expect(services.map((l) => l.snippet)).toEqual([expect.stringContaining('strapi.service(TARGETS[type])')]);
     expect(unresolvedCallsOf(project, ['content-type'])).toEqual([]);
+  });
+
+  it('a call whose UID starts with a part DevKit reads reaches only the refs that start with it (feedback v2 #19)', async () => {
+    const S = 'c:/scoped';
+    const engine = createEngine(
+      new MemoryFileSystem({
+        [`${S}/package.json`]: '{"dependencies":{"@strapi/strapi":"^4.0.0"}}',
+        [`${S}/src/api/bar/content-types/bar/schema.json`]: '{"kind":"collectionType","info":{"singularName":"bar","pluralName":"bars"},"attributes":{}}',
+        [`${S}/src/api/bar/services/bar.js`]: 'module.exports = ({ strapi }) => ({ go() {} });\n',
+        [`${S}/src/api/foo/services/calls.js`]: [
+          "const PREFIX = 'api::foo.';",
+          'module.exports = ({ strapi }) => ({',
+          "  a(name) { return strapi.plugin('y').service(name); },",
+          "  b(kind, id) { return strapi.entityService.findOne('api::foo.' + kind, id); },",
+          '  c(name) { return strapi.service(`plugin::x.${name}`); },',
+          '  d(kind) { return strapi.service((PREFIX + kind) + \'.x\'); },',
+          '  e(uid) { return strapi.service(uid); },',
+          "  f(n) { return strapi.service(1 + n + 'api::bar.'); },",
+          '});',
+          '',
+        ].join('\n'),
+      }),
+    );
+    await engine.init([S]);
+    await engine.whenReferencesReady();
+    const project = engine.allProjects()[0]!;
+    const calls = (kinds: Parameters<typeof unresolvedCallsOf>[1], refs?: string[]) => unresolvedCallsOf(project, kinds, refs).map((l) => l.snippet);
+    const all = calls(['service', 'content-type']);
+    expect(all).toHaveLength(6);
+    expect(calls(['service', 'content-type'], ['api::bar.bar'])).toEqual([expect.stringContaining('strapi.service(uid)'), expect.stringContaining("1 + n + 'api::bar.'")]);
+    expect(calls(['service'], ['plugin::y.mail'])).toEqual(expect.arrayContaining([expect.stringContaining("strapi.plugin('y').service(name)")]));
+    expect(calls(['service'], ['plugin::x.mail'])).toEqual(expect.arrayContaining([expect.stringContaining('`plugin::x.${name}`')]));
+    expect(calls(['content-type'], ['api::foo.foo'])).toEqual([expect.stringContaining("'api::foo.' + kind")]);
+    expect(calls(['service'], ['api::foo.foo'])).toEqual(expect.arrayContaining([expect.stringContaining('(PREFIX + kind)')]));
+    expect(calls(['method'], ['api::foo.foo#run'])).toEqual(expect.arrayContaining([expect.stringContaining('(PREFIX + kind)')]));
+    expect(project.references.get('unresolved:plugin-service-ref')?.[0]?.scope).toBe('plugin::y.');
   });
 });

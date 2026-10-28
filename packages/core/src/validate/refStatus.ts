@@ -11,6 +11,7 @@
  */
 
 import { hasContentType, hasPartialContentTypes } from '../index/codeContentTypes';
+import { normalize } from '../fs/paths';
 import { normalizeApiName } from '../index/loaderNames';
 import type { ArtifactKind, StrapiProject } from '../model/types';
 import { isFrameworkRef, parseComponentUid, parseEntityRef } from '../model/uid';
@@ -77,6 +78,41 @@ export function isUnverifiable(project: StrapiProject, kind: StatusKind, ref: st
   if (!isVerifiablePlugin(idx, parsed.scope)) return true;
   if (kind !== 'policy' && kind !== 'middleware' && hasPartialContentTypes(idx, parsed.scope)) return true;
   return artifactKindsOf(kind).some((k) => isOpenCollection(idx, parsed.scope, k));
+}
+
+const PLURAL: Record<ArtifactKind, string> = { service: 'services', controller: 'controllers', policy: 'policies', middleware: 'middlewares' };
+
+/**
+ * Why a ref DevKit doesn't find can't be called unknown (see {@link isUnverifiable}),
+ * in a sentence — the plugin and, for a registry DevKit couldn't read whole, where
+ * the code it couldn't follow is. Checked as `kinds` (every kind when absent);
+ * `undefined` when the ref is verifiable.
+ */
+export function unverifiableReason(project: StrapiProject, ref: string, kinds?: StatusKind[]): string | undefined {
+  const all = kinds ?? (['content-type', 'service', 'controller', 'policy', 'middleware'] as StatusKind[]);
+  if (isFrameworkRef(ref)) return 'A Strapi built-in (admin::, strapi::): outside the project, never checked.';
+  const parsed = parseEntityRef(ref);
+  if (!parsed || parsed.namespace !== 'plugin') return undefined;
+  const idx = project.index;
+  const plugin = parsed.scope;
+  if (!isVerifiablePlugin(idx, plugin)) return `Plugin '${plugin}' is not verified: project_info says why.`;
+  if (all.some((k) => k !== 'policy' && k !== 'middleware') && hasPartialContentTypes(idx, plugin)) {
+    return `Plugin '${plugin}' declares content-types DevKit can't list whole.`;
+  }
+  for (const k of [...new Set(all.flatMap(artifactKindsOf))]) {
+    if (!isOpenCollection(idx, plugin, k)) continue;
+    const site = idx.openCollectionSites?.get(`${plugin}/${k}`);
+    const at = site ? ` (${relativeTo(project.root, site.file)}${site.line ? `:${site.line}` : ''})` : '';
+    return `Plugin '${plugin}' registers its ${PLURAL[k]} through code DevKit can't read${at}: a name it doesn't see there can't be checked.`;
+  }
+  return undefined;
+}
+
+/** `file` relative to `root` (as is when outside it). */
+function relativeTo(root: string, file: string): string {
+  const r = normalize(root) + '/';
+  const f = normalize(file);
+  return f.toLowerCase().startsWith(r.toLowerCase()) ? f.slice(r.length) : f;
 }
 
 /** The verdict on a fully-qualified `ref` checked as `kind` (see the module doc). */

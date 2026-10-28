@@ -16,11 +16,11 @@ import type {
   ReferenceLocation,
   StrapiProject,
 } from '../model/types';
-import { UNRESOLVED_PREFIX } from '../reference/references';
+import { requirersOf, UNRESOLVED_PREFIX } from '../reference/references';
 import { isFrameworkRef, parseAddress, parseHandlerRef } from '../model/uid';
 import { lookupContentType } from '../index/codeContentTypes';
 import { closest } from '../util/levenshtein';
-import { isUnverifiable, loaderNameOf, refStatus, type StatusKind } from '../validate/refStatus';
+import { isUnverifiable, loaderNameOf, refStatus, type StatusKind, unverifiableReason } from '../validate/refStatus';
 
 export interface ContentTypeSummary {
   uid: string;
@@ -86,6 +86,11 @@ export interface ValidationResult {
   kinds: TargetKind[];
   /** Nearest known reference, only when `status === 'unknown'`. */
   didYouMean?: string;
+  /**
+   * Why an `external` ref can't be checked: a plugin DevKit can't verify, or one whose
+   * registry is built by code DevKit couldn't read (named, with its file and line).
+   */
+  reason?: string;
 }
 
 const artifactMaps = (p: StrapiProject): Record<ArtifactKind, Map<string, CodeArtifact>> => ({
@@ -252,6 +257,14 @@ const ANY_KIND: StatusKind[] = ['content-type', 'component', 'service', 'control
  * "unknown" — the verdict is {@link refStatus}, shared with the diagnostics.
  */
 export function validateRef(project: StrapiProject, address: string, kind?: StatusKind): ValidationResult {
+  const result = verdictOf(project, address, kind);
+  if (result.status !== 'external') return result;
+  const reason = unverifiableReason(project, parseAddress(address).ref, kind ? [kind] : undefined);
+  return reason ? { ...result, reason } : result;
+}
+
+/** {@link validateRef} without the reason of an `external` verdict. */
+function verdictOf(project: StrapiProject, address: string, kind?: StatusKind): ValidationResult {
   const { ref, method } = parseAddress(address);
   if (kind && !method) {
     // The handler form names its entity before the last dot.
@@ -404,12 +417,17 @@ const CALL_KINDS: Record<TargetKind | 'method', ReferenceKind[]> = {
  * The Strapi calls of the project whose UID DevKit can't read (`strapi.service(uid)`
  * with `uid` a parameter, a template, an import…) and that could reach a target of
  * one of `kinds` — what may complete a find-references or an unused list. Archived
- * migrations aside.
+ * migrations aside. With `refs` (UIDs, `ref.method` or `ref#method`), only the calls
+ * that may reach one of them: a call whose UID starts with a part DevKit reads
+ * (`strapi.plugin('y').service(name)`, `'api::foo.' + kind`) reaches only the refs
+ * that start with it.
  */
-export function unresolvedCallsOf(project: StrapiProject, kinds: Array<TargetKind | 'method'>): ReferenceLocation[] {
+export function unresolvedCallsOf(project: StrapiProject, kinds: Array<TargetKind | 'method'>, refs?: string[]): ReferenceLocation[] {
+  const targets = refs?.map((r) => r.replace('#', '.'));
+  const reaches = (loc: ReferenceLocation): boolean => !targets || !loc.scope || targets.some((t) => t.startsWith(loc.scope!));
   const out: ReferenceLocation[] = [];
   for (const rk of new Set(kinds.flatMap((k) => CALL_KINDS[k]))) {
-    for (const loc of project.references.get(`${UNRESOLVED_PREFIX}${rk}`) ?? []) if (!loc.archived) out.push(loc);
+    for (const loc of project.references.get(`${UNRESOLVED_PREFIX}${rk}`) ?? []) if (!loc.archived && reaches(loc)) out.push(loc);
   }
   return out;
 }
@@ -533,6 +551,11 @@ export interface UnusedItem {
   offset: number;
   /** Its only callers are migrations Strapi never runs (a subfolder of `database/migrations`). */
   onlyArchivedCallers?: string[];
+  /**
+   * Files of live code that load its file by path (`require('../services/x')`):
+   * nothing calls its Strapi name, but its module is used — not dead code as is.
+   */
+  requiredByPath?: string[];
 }
 
 const DEFAULT_UNUSED_KINDS: UnusedKind[] = ['method', 'content-type', 'component', 'service', 'policy', 'middleware'];
@@ -554,9 +577,13 @@ export function listUnused(project: StrapiProject, opts?: { kinds?: UnusedKind[]
   // A reference from an archived migration (never run) doesn't make its target used.
   const unused = (key: string): boolean => !(project.references.get(key) ?? []).some((l) => !l.archived);
   const out: UnusedItem[] = [];
+  // A `require('../services/x')` loads the module whatever its Strapi name: from an
+  // archived migration, one more archived caller; from live code, said apart.
   const item = (key: string, it: UnusedItem): UnusedItem => {
-    const archived = [...new Set((project.references.get(key) ?? []).map((l) => l.filePath))];
-    return archived.length ? { ...it, onlyArchivedCallers: archived } : it;
+    const byPath = requirersOf(project, it.filePath);
+    const archived = [...new Set([...(project.references.get(key) ?? []), ...byPath.filter((l) => l.archived)].map((l) => l.filePath))];
+    const live = [...new Set(byPath.filter((l) => !l.archived).map((l) => l.filePath))];
+    return { ...it, ...(archived.length ? { onlyArchivedCallers: archived } : {}), ...(live.length ? { requiredByPath: live } : {}) };
   };
 
   if (kinds.has('method')) {

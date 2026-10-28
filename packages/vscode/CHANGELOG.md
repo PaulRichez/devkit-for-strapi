@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+**Local plugins read where they were left unverified**
+
+- A plugin index built by a helper that prefixes a sub-index
+  (``Object.keys(s).reduce((acc, key) => { acc[`${p}.${key}`] = s[key]; return acc; }, {})``,
+  or its spread form) is read exactly: its names are valid, the folder's guess is
+  unknown. Anything looser stays unread.
+- A plugin DevKit reads only in part is `verified: 'partial'` in `project_info`:
+  what it reads is checked, and `validate_reference` says why a name it can't see
+  comes back `external`, with the file and line of the code it can't read.
+- A local plugin's routes loaded by its own function are listed: `require` of a path
+  built from `__dirname` (`path.join`, `path.resolve`) behind `fs.existsSync`, a
+  `require` in a `try`, and `create_plugin`'s own loader. A loader DevKit can't read
+  is said: `list_routes` gives it in `unreadRoutes` (file and line), `project_info`
+  in its notes — never an empty table.
+
+**Fewer calls that may reach anything**
+
+- The calls whose UID DevKit can't read keep the start it can
+  (`strapi.plugin('y').service(name)` reaches `plugin::y.*` only,
+  `'api::foo.' + kind` reaches `api::foo.*`): `find_references` and `list_unused`
+  show only those that may reach what they answer for.
+- A file loaded by its path (`require('../../src/api/foo/services/bar')`) counts as a
+  caller: from an archived migration, `onlyArchivedCallers`; from live code,
+  `list_unused` says `requiredByPath`.
+
+**Config Sync**
+
+- `project_info` says when `importOnBootstrap` is on, in its notes and its
+  `configSync` block.
+- Pro: an export keeps the key order of the file it replaces (new keys at the end):
+  two databases of the same schema give the same file, and a git diff shows what
+  changed only.
+
 ## 0.2.2
 
 **Names as Strapi's loaders register them**

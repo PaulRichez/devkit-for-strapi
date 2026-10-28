@@ -202,6 +202,10 @@ function major(version: string | undefined): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
+/** What config-sync's `importOnBootstrap` does to a database shared between branches (said wherever config-sync is described). */
+export const IMPORT_ON_BOOTSTRAP_WARNING =
+  'importOnBootstrap is on: every start of Strapi imports the files of the checked-out branch into the database. On a database shared between branches, switching branch and then starting overwrites what the other branches set (roles, permissions, views): export first, or turn it off locally.';
+
 /** config-sync in `project`, or undefined when it is neither declared, installed nor configured. */
 export async function detectConfigSync(fs: FileSystem, project: StrapiProject): Promise<ConfigSyncDetection | undefined> {
   const root = project.root;
@@ -235,11 +239,7 @@ export async function detectConfigSync(fs: FileSystem, project: StrapiProject): 
   if (declaredRange && !installedVersion) warnings.push(`${CONFIG_SYNC_PACKAGE} is declared but not installed.`);
   // The plugin writes `${syncDir}${type}.${name}.json`: without a trailing slash, syncDir prefixes file names.
   if (!options.syncDir.endsWith('/')) warnings.push(`syncDir "${options.syncDir}" has no trailing slash: the plugin prefixes the file names with it instead of using a folder.`);
-  if (options.importOnBootstrap && !disabled) {
-    warnings.push(
-      'importOnBootstrap is on: every start of Strapi imports the files of the checked-out branch into the database. On a database shared between branches, switching branch and then starting overwrites what the other branches set (roles, permissions, views): export first, or turn it off locally.',
-    );
-  }
+  if (options.importOnBootstrap && !disabled) warnings.push(IMPORT_ON_BOOTSTRAP_WARNING);
   const syncDirPath = normalize(isAbsolute(options.syncDir) ? options.syncDir : join(root, options.syncDir.replace(/^\.\//, '')));
   const syncDirExists = (await fs.stat(syncDirPath)) !== null;
   const envOverrides = await envConfigFiles(fs, root, 'plugins');

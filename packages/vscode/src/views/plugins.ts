@@ -223,7 +223,7 @@ export class PluginsProvider extends CachedTree<Node> {
         const item = new vscode.TreeItem(label, n.section === 'disabled' ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.Expanded);
         item.id = n.id;
         const list = n.section === 'disabled' ? d?.disabled ?? [] : (d?.plugins ?? []).filter((p) => p.source === n.section);
-        const unverified = n.section === 'disabled' ? 0 : (list as PluginEntry[]).filter((p) => p.info && !p.info.verified).length;
+        const unverified = n.section === 'disabled' ? 0 : (list as PluginEntry[]).filter((p) => p.info && p.info.verified !== true).length;
         item.description = unverified ? `${list.length} · ${unverified} not verified` : `${list.length}`;
         item.iconPath = new vscode.ThemeIcon(n.section === 'local' ? 'folder-library' : n.section === 'installed' ? 'package' : 'circle-slash');
         item.tooltip = n.section === 'local' ? 'Plugins in src/plugins (or resolved from config/plugins).' : n.section === 'installed' ? 'Plugins read from node_modules the way Strapi loads them, without running their code.' : 'Declared with `enabled: false`.';
@@ -308,17 +308,23 @@ export class PluginsProvider extends CachedTree<Node> {
     item.id = id;
     const verified = p.info?.verified;
     const version = p.installed?.version ?? p.info?.version;
-    item.description = [version, verified === undefined ? '' : verified ? 'verified' : 'not verified'].filter(Boolean).join(' · ');
+    item.description = [version, verified === undefined ? '' : verified === 'partial' ? 'verified in part' : verified ? 'verified' : 'not verified'].filter(Boolean).join(' · ');
     item.iconPath =
       verified === false
         ? new vscode.ThemeIcon('question', new vscode.ThemeColor('descriptionForeground'))
-        : new vscode.ThemeIcon(p.source === 'local' ? 'folder-library' : 'package', verified ? new vscode.ThemeColor('testing.iconPassed') : undefined);
+        : new vscode.ThemeIcon(p.source === 'local' ? 'folder-library' : 'package', verified === true ? new vscode.ThemeColor('testing.iconPassed') : undefined);
     const md = markdown();
     md.appendMarkdown(`**${p.name}**${p.installed ? ` — ${code(p.installed.packageName)}${version ? ` ${version}` : ''}` : ' — local plugin'}\n\n`);
     if (p.installed) md.appendMarkdown(`${p.installed.origin === 'internal' ? "Strapi's own plugin" : 'A dependency declaring itself a Strapi plugin'}\n\n`);
     if (p.installed?.enabled === 'uncertain') md.appendMarkdown('$(info) Enabled unless a config DevKit cannot read (env-specific or computed) turns it off.\n\n');
-    md.appendMarkdown(verified ? '$(pass) DevKit read it completely: refs into it are checked like your own.\n\n' : '$(question) Refs into it are **not** checked (never reported as broken).\n\n');
-    if (!verified && p.info?.why?.length) md.appendMarkdown(`Why: ${p.info.why.join('; ')}\n\n`);
+    md.appendMarkdown(
+      verified === 'partial'
+        ? '$(info) Checked in part: some of its collections are built by code DevKit cannot read — a name it does not see there is not checked.\n\n'
+        : verified
+          ? '$(pass) DevKit read it completely: refs into it are checked like your own.\n\n'
+          : '$(question) Refs into it are **not** checked (never reported as broken).\n\n',
+    );
+    if (verified !== true && p.info?.why?.length) md.appendMarkdown(`Why: ${p.info.why.join('; ')}\n\n`);
     md.appendMarkdown(`${p.contentTypes.length} content-types · ${p.artifacts.length} services/controllers/policies/middlewares · ${p.routes} routes`);
     item.tooltip = md;
     item.contextValue = `strapiPlugin.${p.source}`;

@@ -201,7 +201,7 @@ export class HealthProvider extends CachedTree<Node> {
             return kinds.map((unusedKind) => ({ kind: 'unusedKind', id: `${element.id}|${unusedKind}`, root: r.root, unusedKind, items: r.unused.filter((u) => u.kind === unusedKind) }));
           }
           case 'plugins':
-            return (r.info?.plugins ?? []).filter((p) => !p.verified).map((plugin) => ({ kind: 'plugin', id: `${element.id}|${plugin.name}`, root: r.root, plugin }));
+            return (r.info?.plugins ?? []).filter((p) => p.verified !== true).map((plugin) => ({ kind: 'plugin', id: `${element.id}|${plugin.name}`, root: r.root, plugin }));
           case 'configSync':
             return r.configSync.map((file) => ({ kind: 'syncFile', id: `${element.id}|${file.key}`, root: r.root, file }));
         }
@@ -238,7 +238,7 @@ export class HealthProvider extends CachedTree<Node> {
     if (r.configSync.length) out.push({ kind: 'group', id: `health|${root}|configSync`, root, group: 'configSync' });
     if (r.info?.health.unverifiedPluginRefs) out.push({ kind: 'group', id: `health|${root}|unverified`, root, group: 'unverified' });
     if (r.unused.length) out.push({ kind: 'group', id: `health|${root}|unused`, root, group: 'unused' });
-    if (r.info?.plugins.some((p) => !p.verified)) out.push({ kind: 'group', id: `health|${root}|plugins`, root, group: 'plugins' });
+    if (r.info?.plugins.some((p) => p.verified !== true)) out.push({ kind: 'group', id: `health|${root}|plugins`, root, group: 'plugins' });
     return out;
   }
 
@@ -365,7 +365,7 @@ export class HealthProvider extends CachedTree<Node> {
       case 'unused':
         return ['No Strapi reference', r?.unused.length ?? 0, 'circle-slash', 'descriptionForeground', 'Definitions no Strapi magic string or route uses. A direct call or a dynamic access can still use them.'];
       case 'plugins':
-        return ['Plugins not read completely', r?.info?.plugins.filter((p) => !p.verified).length ?? 0, 'extensions', 'descriptionForeground', 'Their refs are not checked; each says why.'];
+        return ['Plugins not read completely', r?.info?.plugins.filter((p) => p.verified !== true).length ?? 0, 'extensions', 'descriptionForeground', 'Their refs are not checked, or only in part; each says why.'];
     }
   }
 
@@ -374,7 +374,7 @@ export class HealthProvider extends CachedTree<Node> {
     const parts = [`Strapi ${strapi}`, i.language === 'typescript' ? 'TypeScript' : 'JavaScript', i.packageManager, i.apiPrefix].filter(Boolean);
     const item = new vscode.TreeItem(parts.join(' · '), vscode.TreeItemCollapsibleState.None);
     item.id = id;
-    const verified = i.plugins.filter((p) => p.verified).length;
+    const verified = i.plugins.filter((p) => p.verified === true).length;
     item.description = `indexed ${ago(i.freshness.indexedAt)} · plugins ${verified}/${i.plugins.length} verified${i.freshness.pluginsLoading ? ' (reading…)' : ''}`;
     item.iconPath = new vscode.ThemeIcon('info');
     const md = markdown();

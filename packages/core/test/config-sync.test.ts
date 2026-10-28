@@ -5,7 +5,8 @@
  * and Strapi 5 (`@strapi/core/dist/loaders/plugins/index.js` for the options merge).
  */
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_EXCLUDED_CONFIG, detectConfigSync } from '../src/configSync/detect';
+import { DEFAULT_EXCLUDED_CONFIG, detectConfigSync, IMPORT_ON_BOOTSTRAP_WARNING } from '../src/configSync/detect';
+import { projectInfo } from '../src/query/projectInfo';
 import { configSyncLabel } from '../src/configSync/labels';
 import { followConfigSync, syncFilesInPlan } from '../src/configSync/planNote';
 import { routeAccessForRoute, routeAccessInSync } from '../src/configSync/routeAccess';
@@ -82,6 +83,20 @@ describe('config-sync, read from the files', () => {
     expect(d.warnings.join(' ')).toMatch(/importOnBootstrap is on: every start of Strapi imports .* shared between branches/);
     const off = await load(FILES);
     expect((await detectConfigSync(off.fs, off.project))!.warnings.join(' ')).not.toContain('importOnBootstrap');
+  });
+
+  it('project_info says it too, in its notes and its configSync block (feedback v2 #20)', async () => {
+    const info = async (files: Record<string, string>) => {
+      const fs = new MemoryFileSystem(files);
+      const engine = createEngine(fs);
+      await engine.init([ROOT], { waitForInstalled: true });
+      return projectInfo(fs, engine.allProjects()[0]!, engine.getProjects()[0]!);
+    };
+    const on = await info({ ...FILES, [`${ROOT}/config/plugins.config-sync.ts`]: `export default { importOnBootstrap: true };` });
+    expect(on.notes).toContain(IMPORT_ON_BOOTSTRAP_WARNING);
+    expect(on.configSync?.warnings).toContain(IMPORT_ON_BOOTSTRAP_WARNING);
+    const off = await info(FILES);
+    expect(off.notes).not.toContain(IMPORT_ON_BOOTSTRAP_WARNING);
   });
 
   it("merges a short excludedConfig with the plugin's defaults index by index, as Strapi does, and says so", async () => {

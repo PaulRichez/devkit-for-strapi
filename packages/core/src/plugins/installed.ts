@@ -220,6 +220,18 @@ function joinRoutePath(...parts: string[]): string {
   return p || '/';
 }
 
+/** create_plugin's `loadRoutes()` and what it relies on, whitespace aside: only that text is its convention. */
+const SCAFFOLDED_ROUTES = [
+  'constCODE=/\\.[cm]?[jt]s$/;',
+  'constSKIPPED=/\\.(test|spec)\\.[cm]?[jt]s$|\\.d\\.[cm]?ts$/;',
+  "functionload(file){constmod=require(file);returnmod&&mod.__esModule&&'default'inmod?mod.default:mod;}",
+  "functionlist(dir){try{returnfs.readdirSync(dir,{withFileTypes:true});}catch{return[];}}",
+  "functionloadRoutes(){constroot=path.join(__dirname,'server','routes');constfiles=list(root).filter((f)=>f.isFile()&&CODE.test(f.name)&&!SKIPPED.test(f.name));constindex=files.find((f)=>f.name.replace(CODE,'')==='index');if(index)returnload(path.join(root,index.name));constout={};for(constfoffiles){constrouter=load(path.join(root,f.name));out[f.name.replace(CODE,'')]=Array.isArray(router)?{type:'admin',routes:router}:router;}returnout;}",
+  'routes:loadRoutes(),',
+];
+const ROUTE_CODE = /\.[cm]?[jt]s$/;
+const ROUTE_SKIPPED = /\.(test|spec)\.[cm]?[jt]s$|\.d\.[cm]?ts$/;
+
 class PluginReader {
   constructor(
     private readonly ev: StaticEvaluator,
@@ -253,15 +265,51 @@ class PluginReader {
     return v;
   }
 
-  /** Only the routes of the server entry (used for local plugins). */
-  async readRoutesFrom(entryFile: string): Promise<void> {
+  /**
+   * Only the routes of the server entry (used for local plugins). Returns where
+   * they are declared: the `routes` key, else the entry.
+   */
+  async readRoutesFrom(entryFile: string): Promise<{ file: string; pos: number }> {
     const server = await configModuleValue(this.ev, entryFile);
     if (server.k !== 'obj') {
       this.gap(`server entry: ${server.k === 'unknown' ? server.why : server.k}`);
-      return;
+      return server.k === 'fn' ? server.loc : { file: entryFile, pos: 0 };
     }
     if (server.open) this.gap('server object not exhaustive');
-    await this.readRoutes(server);
+    await this.readRoutes(server, entryFile);
+    return server.keyLocs.get('routes') ?? server.loc ?? { file: entryFile, pos: 0 };
+  }
+
+  /**
+   * The routes of DevKit's own `loadRoutes()` (create_plugin's `strapi-server.js`, as
+   * generated), read the way it loads them: `server/routes/index` as written, else one
+   * router per code file — a list of routes an admin router. `undefined` for any other loader.
+   */
+  private async scaffoldedRoutes(entryFile: string): Promise<Value | undefined> {
+    const text = this.ev.parsedFiles().find((sf) => normalize(sf.fileName) === normalize(entryFile))?.text.replace(/\s+/g, '');
+    if (!text || !SCAFFOLDED_ROUTES.every((part) => text.includes(part))) return undefined;
+    const dir = join(dirname(entryFile), 'server', 'routes');
+    const entries = await this.ev.entries(dir);
+    if (!entries) return { k: 'nil' };
+    const files = [...entries].filter(([n, t]) => t === FileType.File && ROUTE_CODE.test(n) && !ROUTE_SKIPPED.test(n)).map(([n]) => n);
+    const load = async (n: string): Promise<Value> => {
+      const m = await this.ev.moduleExports(join(dir, n));
+      return m.k === 'obj' && m.esModule && m.props.has('default') ? this.ev.getProp(m, 'default') : m;
+    };
+    const index = files.find((n) => n.replace(ROUTE_CODE, '') === 'index');
+    if (index) return load(index);
+    const out: ObjValue = { k: 'obj', props: new Map(), keyLocs: new Map(), open: false };
+    for (const n of files.sort()) {
+      out.props.set(n.replace(ROUTE_CODE, ''), async () => {
+        const router = await load(n);
+        if (router.k !== 'arr') return router;
+        const admin: ObjValue = { k: 'obj', props: new Map(), keyLocs: new Map(), open: false };
+        admin.props.set('type', async () => ({ k: 'str', v: 'admin' }));
+        admin.props.set('routes', async () => router);
+        return admin;
+      });
+    }
+    return out;
   }
 
   async read(entryFile: string): Promise<void> {
@@ -368,13 +416,14 @@ class PluginReader {
     return out;
   }
 
-  private async readRoutes(server: ObjValue): Promise<void> {
+  private async readRoutes(server: ObjValue, entryFile?: string): Promise<void> {
     const name = this.plugin.name;
     if (!server.props.has('routes')) {
       if (server.open) this.gap('routes: server object not exhaustive');
       return;
     }
-    const v = await this.ev.getProp(server, 'routes');
+    let v = await this.ev.getProp(server, 'routes');
+    if (v.k === 'unknown' && entryFile) v = (await this.scaffoldedRoutes(entryFile)) ?? v;
     const routers: Array<{ type: Value; prefix: Value; routes: Value; hasPrefix: boolean }> = [];
     if (v.k === 'nil') return;
     if (v.k === 'arr') {
@@ -553,6 +602,8 @@ export async function contentTypeFromDefinition(
  * The routes a plugin server entry declares (Strapi's rules: an array is one
  * `admin` router; routers default to `admin` / `/<plugin>`). Used for local
  * plugins, whose installed counterpart is read by {@link readInstalledPlugins}.
+ * Not `complete`: some of them are built by code DevKit can't read — `gaps`
+ * says what, `where` the place they are declared (the `routes` key, 1-based line).
  */
 export async function readPluginRoutes(
   fs: FileSystem,
@@ -560,7 +611,7 @@ export async function readPluginRoutes(
   entryFile: string,
   apiPrefix: string | undefined,
   pluginDir: string = dirname(entryFile),
-): Promise<{ routes: PluginRoute[]; complete: boolean }> {
+): Promise<{ routes: PluginRoute[]; complete: boolean; gaps: string[]; where: { file: string; line?: number } }> {
   const ev = new StaticEvaluator(fs, { roots: [pluginDir], timeBudgetMs: PLUGIN_BUDGET_MS }, strapiExternals);
   const plugin: InstalledPlugin = {
     name: pluginName,
@@ -575,8 +626,10 @@ export async function readPluginRoutes(
     artifacts: [],
     routes: [],
   };
-  await new PluginReader(ev, plugin, apiPrefix).readRoutesFrom(entryFile);
-  return { routes: plugin.routes, complete: plugin.complete };
+  const site = await new PluginReader(ev, plugin, apiPrefix).readRoutesFrom(entryFile);
+  const sf = ev.parsedFiles().find((f) => normalize(f.fileName) === normalize(site.file));
+  const where = sf ? { file: site.file, line: sf.getLineAndCharacterOfPosition(site.pos).line + 1 } : { file: site.file };
+  return { routes: plugin.routes, complete: plugin.complete, gaps: plugin.gaps, where };
 }
 
 /** `api.rest.prefix` from `config/api.*` (default `/api`). */
