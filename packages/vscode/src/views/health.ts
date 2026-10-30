@@ -343,9 +343,10 @@ export class HealthProvider extends CachedTree<Node> {
         const p = n.plugin;
         const item = new vscode.TreeItem(p.name, vscode.TreeItemCollapsibleState.None);
         item.id = n.id;
-        item.description = p.why?.[0] ?? 'not read completely';
-        item.iconPath = new vscode.ThemeIcon('question', new vscode.ThemeColor('descriptionForeground'));
-        item.tooltip = `${p.package ?? p.name}${p.version ? ` ${p.version}` : ''} — refs into it are not checked.${p.why?.length ? `\n\nWhy: ${p.why.join('; ')}` : ''}`;
+        const partial = p.verified === 'partial';
+        item.description = p.why?.[0] ?? (partial ? 'checked in part' : 'not read completely');
+        item.iconPath = new vscode.ThemeIcon(partial ? 'info' : 'question', new vscode.ThemeColor('descriptionForeground'));
+        item.tooltip = `${p.package ?? p.name}${p.version ? ` ${p.version}` : ''} — ${partial ? 'refs into it are checked in part: what DevKit can read is checked, the rest is never reported' : 'refs into it are not checked'}.${p.why?.length ? `\n\nWhy: ${p.why.join('; ')}` : ''}`;
         item.command = { command: 'strapiDevkit.plugins.reveal', title: 'Show plugin', arguments: [n.root, p.name] };
         return item;
       }

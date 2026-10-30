@@ -86,7 +86,8 @@ function pathModule(): ObjValue {
 /**
  * Node's `fs` → `existsSync(path)`, answered from the disk: `true` when the file
  * or folder is there. Absent, it stays unknown — a build (TypeScript's `dist`)
- * may hold what the sources don't.
+ * may hold what the sources don't. A TypeScript source stays unknown too: once
+ * compiled, the code runs from `dist`, where it isn't.
  */
 function fsModule(ev: StaticEvaluator): ObjValue {
   const m = obj({
@@ -95,6 +96,7 @@ function fsModule(ev: StaticEvaluator): ObjValue {
       name: 'fs.existsSync',
       impl: async ([p]) => {
         if (p?.k !== 'str' || !isAbsolute(p.v)) return UNKNOWN('fs.existsSync of a path not read');
+        if (/\.[cm]?tsx?$/.test(p.v) && !p.v.endsWith('.d.ts')) return UNKNOWN('fs.existsSync of a TypeScript source (gone once compiled)');
         return (await ev.pathExists(p.v)) ? { k: 'bool', v: true } : UNKNOWN('fs.existsSync: not here (a build may add it)');
       },
     }),

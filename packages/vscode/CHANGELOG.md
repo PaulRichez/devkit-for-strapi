@@ -14,8 +14,8 @@
 - A local plugin's routes loaded by its own function are listed: `require` of a path
   built from `__dirname` (`path.join`, `path.resolve`) behind `fs.existsSync`, a
   `require` in a `try`, and `create_plugin`'s own loader. A loader DevKit can't read
-  is said: `list_routes` gives it in `unreadRoutes` (file and line), `project_info`
-  in its notes — never an empty table.
+  is said: `list_routes` gives it in `unreadRoutes` (its file, and the line when
+  there is one), `project_info` in its notes — never an empty table.
 
 **Fewer calls that may reach anything**
 
@@ -25,15 +25,16 @@
   show only those that may reach what they answer for.
 - A file loaded by its path (`require('../../src/api/foo/services/bar')`) counts as a
   caller: from an archived migration, `onlyArchivedCallers`; from live code,
-  `list_unused` says `requiredByPath`.
+  `list_unused` says `requiredByPath`. A test, or an import of types only, doesn't.
 
 **Config Sync**
 
 - `project_info` says when `importOnBootstrap` is on, in its notes and its
   `configSync` block.
-- Pro: an export keeps the key order of the file it replaces (new keys at the end):
-  two databases of the same schema give the same file, and a git diff shows what
-  changed only.
+- Pro: an export keeps the key order of the file it replaces: the keys and items the
+  file already has stay where they are, new ones come at the end in the database's
+  order. Exporting a changed entry from another database no longer reorders the whole
+  file: the git diff shows what changed.
 
 ## 0.2.2
 

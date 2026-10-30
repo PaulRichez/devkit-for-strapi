@@ -182,7 +182,9 @@ export function collectUnresolvedCalls(filePath: string, text: string): Referenc
     const c = classifyArgument(arg);
     if (!c || c.kind === 'plugin-name') return;
     const head = staticHead(arg, constants);
-    const scope = c.pluginName !== undefined ? `plugin::${c.pluginName}.${head}` : head;
+    // A head without `::` proves nothing about the UID: a bare name (`'is-' + kind`) is
+    // qualified by its file (api, global, plugin), so the call may reach anything.
+    const scope = c.pluginName !== undefined ? `plugin::${c.pluginName}.${head}` : head.includes('::') ? head : '';
     const ctx: ReferenceContext = { kind: c.kind, text: scope, range: { start: arg.getStart(sf), end: arg.getEnd() }, isLiteral: false };
     if (c.apiStyle) ctx.apiStyle = c.apiStyle;
     out.push(ctx);
@@ -215,14 +217,30 @@ export function collectRelativeImports(filePath: string, text: string): Array<{ 
       const callee = node.expression;
       if ((ts.isIdentifier(callee) && callee.text === 'require') || callee.kind === ts.SyntaxKind.ImportKeyword) add(node.arguments[0]);
     } else if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
-      add(node.moduleSpecifier);
-    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      // Types only (`import type`, `export type`, every binding `type`): erased, never loaded.
+      if (!isTypeOnlyModuleUse(node)) add(node.moduleSpecifier);
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && !node.isTypeOnly) {
       add(node.moduleReference.expression);
     }
     node.forEachChild(visit);
   };
   visit(sf);
   return out;
+}
+
+/** An import or export that TypeScript erases: it names types only, so the module is never loaded. */
+function isTypeOnlyModuleUse(node: ts.ImportDeclaration | ts.ExportDeclaration): boolean {
+  if (ts.isExportDeclaration(node)) {
+    if (node.isTypeOnly) return true;
+    const clause = node.exportClause;
+    return !!clause && ts.isNamedExports(clause) && clause.elements.length > 0 && clause.elements.every((e) => e.isTypeOnly);
+  }
+  const clause = node.importClause;
+  if (!clause) return false; // `import './x'`: a side-effect import loads it
+  if (clause.isTypeOnly) return true;
+  if (clause.name) return false;
+  const named = clause.namedBindings;
+  return !!named && ts.isNamedImports(named) && named.elements.length > 0 && named.elements.every((e) => e.isTypeOnly);
 }
 
 /**

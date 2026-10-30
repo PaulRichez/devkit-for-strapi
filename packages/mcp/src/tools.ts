@@ -83,6 +83,8 @@ const json = (data: unknown): CallToolResult => ({
 /** Characters, as `json` sends it. Claude Code refuses a tool result over 25,000 tokens: answers stay well under. */
 const sizeOf = (v: unknown): number => JSON.stringify(v, null, 2)?.length ?? 0;
 const ANSWER_MAX = 40_000;
+/** The files an unused item names (`requiredByPath`, `onlyArchivedCallers`) before only their total. */
+const UNUSED_FILES_SHOWN = 3;
 const DIFFERENCES_MAX = 24_000;
 
 /** The lines that fit in `max` characters (a very long one clipped), and whether that's all of them. */
@@ -770,9 +772,30 @@ export function registerTools(
       await engine.whenReferencesReady();
       const p = pick(engine, args, roots());
       if ('result' in p) return p.result;
-      const unused = listUnused(p.project, { kinds: args.kinds, file: args.file });
-      const unresolved = unused.length ? unresolvedNote(p.project, [...new Set(unused.map((u) => (u.kind === 'method' ? 'method' : u.kind)))], unused.map((u) => u.ref)) : undefined;
-      return json({ unused, ...(unresolved ? { unresolvedCalls: unresolved } : {}) });
+      const all = listUnused(p.project, { kinds: args.kinds, file: args.file });
+      const unresolved = all.length ? unresolvedNote(p.project, [...new Set(all.map((u) => (u.kind === 'method' ? 'method' : u.kind)))], all.map((u) => u.ref)) : undefined;
+      // Within one answer: each item names a few files (and how many), and when the list
+      // still doesn't fit, the first items — said, with how to narrow it.
+      const brief = all.map((u) => {
+        const out: Record<string, unknown> = { ...u };
+        for (const k of ['onlyArchivedCallers', 'requiredByPath'] as const) {
+          const files = u[k];
+          if (files && files.length > UNUSED_FILES_SHOWN) {
+            out[k] = files.slice(0, UNUSED_FILES_SHOWN);
+            out[`${k}Total`] = files.length;
+          }
+        }
+        return out;
+      });
+      const unused: unknown[] = [];
+      let used = sizeOf(unresolved ?? {}) + 400;
+      for (const u of brief) {
+        used += sizeOf(u);
+        if (used > ANSWER_MAX) break;
+        unused.push(u);
+      }
+      const shortened = unused.length < brief.length ? { shortened: `${unused.length} of ${brief.length} listed, to fit one answer: pass \`file\` or \`kinds\` to narrow.` } : {};
+      return json({ unused, ...shortened, ...(unresolved ? { unresolvedCalls: unresolved } : {}) });
     },
   );
 

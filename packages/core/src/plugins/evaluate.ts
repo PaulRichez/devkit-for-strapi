@@ -98,6 +98,8 @@ export const UNKNOWN = (why: string): Value => ({ k: 'unknown', why });
 const NIL: Value = { k: 'nil' };
 
 const RESOLVE_EXT = ['', '.js', '.cjs', '.mjs', '.ts', '.cts', '.mts', '.json'];
+/** A TypeScript source (not a declaration): Node runs it only compiled. */
+const TS_SOURCE = /(?<!\.d)\.[cm]?tsx?$/;
 /** Parallel file reads during a crawl. */
 const IO_CONCURRENCY = 16;
 
@@ -233,6 +235,8 @@ function reduceShape(node: ts.Node): ReduceShape | undefined {
   if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node)) return undefined;
   const [accP, itemP, indexP, ...rest] = node.parameters;
   if (rest.length || !accP || !itemP || !ts.isIdentifier(accP.name) || !ts.isIdentifier(itemP.name) || (indexP && !ts.isIdentifier(indexP.name))) return undefined;
+  // A rest parameter (`...k`) or a default value changes what a name holds.
+  if (node.parameters.some((p) => p.dotDotDotToken || p.initializer)) return undefined;
   const acc = accP.name.text;
   const base = { cb: node, acc, item: itemP.name.text, ...(indexP && ts.isIdentifier(indexP.name) ? { index: indexP.name.text } : {}) };
   let shape: ReduceShape | undefined;
@@ -252,7 +256,9 @@ function reduceShape(node: ts.Node): ReduceShape | undefined {
     if (!entry || !ts.isPropertyAssignment(entry) || !ts.isComputedPropertyName(entry.name)) return undefined;
     shape = { ...base, key: entry.name.expression, value: entry.initializer, target: built };
   }
-  return readsName(shape.key, acc) || readsName(shape.value, acc) ? undefined : shape;
+  // `arguments` (a function callback) reaches the accumulator under another name.
+  const readsAcc = (e: ts.Node): boolean => readsName(e, acc) || (ts.isFunctionExpression(node) && readsName(e, 'arguments'));
+  return readsAcc(shape.key) || readsAcc(shape.value) ? undefined : shape;
 }
 
 /** The `list.reduce(cb, {})` call `cb` is handed to, when `cb` has a {@link reduceShape}. */
@@ -283,7 +289,7 @@ function isStaticRequire(e: ts.Expression): boolean {
  * (a statement of the body itself, no `finally`, nothing else in the `try`, every
  * other return in the `catch` or after it): only a failed load reaches the fallback.
  */
-function optionalRequire(body: ts.Block, returns: ts.ReturnStatement[]): ts.Expression | undefined {
+function optionalRequire(body: ts.Block, returns: ts.ReturnStatement[]): ts.CallExpression | undefined {
   for (const stmt of body.statements) {
     if (!ts.isTryStatement(stmt) || stmt.finallyBlock || stmt.tryBlock.statements.length !== 1) continue;
     const ret = stmt.tryBlock.statements[0]!;
@@ -298,6 +304,39 @@ function optionalRequire(body: ts.Block, returns: ts.ReturnStatement[]): ts.Expr
 }
 
 /** Does `e` read the identifier `name` anywhere (a property name aside)? */
+/**
+ * True when the file writes into an object named `name` — `name.x = …`, `name[k] = …`,
+ * `delete name.x`, `Object.assign(name, …)`, `Object.defineProperty(name, …)` —
+ * anywhere (another binding of the same name included: conservative).
+ */
+function writesInto(sf: ts.SourceFile, name: string): boolean {
+  const isName = (e: ts.Expression): boolean => {
+    const x = skipParens(e);
+    return ts.isIdentifier(x) && x.text === name;
+  };
+  const member = (e: ts.Expression): boolean => (ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e)) && isName(e.expression);
+  const OBJECT_WRITERS = new Set(['assign', 'defineProperty', 'defineProperties', 'setPrototypeOf']);
+  let found = false;
+  const visit = (n: ts.Node): void => {
+    if (found) return;
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment && member(n.left)) found = true;
+    else if (ts.isDeleteExpression(n) && member(n.expression)) found = true;
+    else if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      ts.isIdentifier(n.expression.expression) &&
+      n.expression.expression.text === 'Object' &&
+      OBJECT_WRITERS.has(n.expression.name.text) &&
+      n.arguments[0] !== undefined &&
+      isName(n.arguments[0])
+    ) {
+      found = true;
+    } else n.forEachChild(visit);
+  };
+  visit(sf);
+  return found;
+}
+
 function readsName(e: ts.Node, name: string): boolean {
   let found = false;
   const visit = (n: ts.Node): void => {
@@ -803,6 +842,16 @@ export class StaticEvaluator {
     return false;
   }
 
+  /** True when `require(x)` from `file` resolves to a TypeScript source (`.ts`, `.cts`, `.mts`). */
+  private async resolvesToTypeScript(call: ts.CallExpression, file: string, scope: Scope | undefined): Promise<boolean> {
+    const spec = await this.ev(call.arguments[0]!, file, scope);
+    if (spec.k !== 'str') return false;
+    const base = isAbsolute(spec.v) ? spec.v : /^\.\.?(\/|$)/.test(spec.v) ? join(dirname(file), spec.v) : undefined;
+    if (!base) return false;
+    const resolved = await this.resolveBase(resolveDots(base), spec.v.endsWith('/'));
+    return resolved !== undefined && TS_SOURCE.test(resolved);
+  }
+
   /** Node's resolution of a relative path: the file, `base` + an extension, or the folder's index. */
   private async resolveBase(base: string, folderOnly = false): Promise<string | undefined> {
     const dir = dirname(base);
@@ -1252,7 +1301,12 @@ export class StaticEvaluator {
       // `try { return require('./routes'); } catch { return {}; }`: the module, which
       // is what Strapi gets whenever the file is there to load.
       const optional = optionalRequire(body, returns);
-      if (optional) return await this.ev(optional, fn.file, scope);
+      if (optional) {
+        // Node loads what is on disk: JavaScript requiring a TypeScript source only
+        // gets it compiled — a build DevKit doesn't see — else the catch's value.
+        if (!TS_SOURCE.test(fn.file) && (await this.resolvesToTypeScript(optional, fn.file, scope))) return UNKNOWN('optional require of a TypeScript source');
+        return await this.ev(optional, fn.file, scope);
+      }
       if (returns.length > 1) {
         // Only one shape is followed: every return yields the same variable or
         // access path on the same binding (rollup's `if (cached) return x; …; return x;`
@@ -1534,8 +1588,14 @@ export class StaticEvaluator {
     return reduceShape(d.fn)?.target === left ? objectReduceCall(d.fn) : undefined;
   }
 
-  /** `Object.keys(o)` of a closed (non-ES-module) object: its own keys, in order. */
+  /**
+   * `Object.keys(o)` of a closed (non-ES-module) object: its own keys, in order —
+   * unknown when `o` is a name the file writes into (a property set or deleted, an
+   * `Object.assign`): its keys then depend on when the call runs.
+   */
   private async objectKeys(arg: ts.Expression, file: string, scope: Scope | undefined): Promise<Value> {
+    const named = skipParens(arg);
+    if (ts.isIdentifier(named) && writesInto(arg.getSourceFile(), named.text)) return UNKNOWN('Object.keys of an object the file writes into');
     const o = await this.ev(arg, file, scope);
     if (o.k !== 'obj' || o.open || o.esModule) return UNKNOWN('Object.keys');
     return { k: 'arr', items: [...o.props.keys()].map((key) => () => Promise.resolve<Value>({ k: 'str', v: key })), open: false };

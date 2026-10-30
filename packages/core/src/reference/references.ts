@@ -6,6 +6,7 @@ import { collectRelationFieldUsages } from '../analyze/relationUsage';
 import { type FileSystem, FileType } from '../fs/FileSystem';
 import { basename, dirname, extname, join, normalize, stripExt } from '../fs/paths';
 import { factoryObjectRange } from '../index/actions';
+import { isTestPath } from '../index/loaderNames';
 import { collectCoreRouterHandlers } from '../index/routes';
 import type { CodeArtifact, ReferenceContext, ReferenceLocation, StrapiProject } from '../model/types';
 import { parseHandlerRef, qualifyPluginRef } from '../model/uid';
@@ -211,12 +212,18 @@ function resolveDots(p: string): string {
  */
 export function requirersOf(project: StrapiProject, filePath: string): ReferenceLocation[] {
   const f = normalize(filePath).toLowerCase();
-  const forms = new Set([f, join(dirname(f), stripExt(basename(f)))]);
+  const bare = join(dirname(f), stripExt(basename(f)));
+  const forms = new Set([f, bare]);
+  // TypeScript's ESM style names the compiled file: `import x from './x.js'` loads `x.ts`.
+  const compiled: Record<string, string[]> = { '.ts': ['.js'], '.mts': ['.mjs', '.js'], '.cts': ['.cjs', '.js'] };
+  for (const ext of compiled[extname(f)] ?? []) forms.add(`${bare}${ext}`);
   if (stripExt(basename(f)) === 'index' && extname(f) !== '.json') forms.add(dirname(f));
   const plugin = owningPluginName(project, filePath);
   const registers = (from: string): boolean =>
     plugin !== undefined && owningPluginName(project, from) === plugin && (stripExt(basename(from)) === 'index' || !isArtifactFile(project, from));
-  return [...forms].flatMap((p) => project.references.get(`${MODULE_PREFIX}${p}`) ?? []).filter((l) => !registers(l.filePath));
+  // A test that loads it doesn't make it used.
+  const test = (from: string): boolean => isTestPath(normalize(from));
+  return [...forms].flatMap((p) => project.references.get(`${MODULE_PREFIX}${p}`) ?? []).filter((l) => !registers(l.filePath) && !test(l.filePath));
 }
 
 /** Is `filePath` the file of a service, a controller, a policy or a middleware? */
