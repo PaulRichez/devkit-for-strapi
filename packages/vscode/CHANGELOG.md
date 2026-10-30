@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.3
 
 **Local plugins read where they were left unverified**
 
