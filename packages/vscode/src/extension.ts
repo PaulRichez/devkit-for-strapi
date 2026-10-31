@@ -23,6 +23,7 @@ import { registerRefactorCommands } from './views/refactor';
 import { registerRoutesView, type RoutesProvider } from './views/routes';
 import { openAt, pluginsLoading } from './views/tree';
 import { createLicenseManager, type LicenseManager } from './license';
+import { registerOfferNotice } from './offer';
 
 /** What `activate` returns: read access to the panel's trees (integration tests). */
 export interface DevkitExports {
@@ -181,6 +182,7 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
   );
 
   registerMcpServer(context, license);
+  registerOfferNotice(context, license.isLicensed, () => engine.getProjects().length > 0);
 
   // Re-index when the workspace folders actually change. Guarded by a signature
   // so a spurious folder event at startup doesn't trigger a second scan/log.

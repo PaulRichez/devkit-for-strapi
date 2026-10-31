@@ -7,6 +7,8 @@ The free tier makes Strapi magic strings **understandable**. Pro lets DevKit
 **change** them for you — safely, across your whole project, in your editor and
 through your AI agent.
 
+<p class="offer-note" data-offer-show hidden><strong>Black Friday:</strong> Pro is <strong>€14.90</strong> instead of €39.99 until November 30 (Paris time). The <a href="#pricing--licence">checkout link below</a> applies it.</p>
+
 ## What’s in Pro
 
 - **Propagated rename** — rename an entity or a method and DevKit updates every
@@ -98,8 +100,8 @@ Keep this file out of Git — the key is a secret.
 
 Every free tool keeps working. The Pro tools stay **visible** to your agent, but
 calling one (a `plan_*` refactor, `apply_*` or `get_model_diagram`) returns a short **“Pro required”**
-result — the feature, where to buy a licence, and how to activate it — so your agent
-can relay it to you instead of failing silently. Both the refactor *plan* and its
+result — the feature, where to buy a licence, how to activate it, and a running offer
+when there is one — so your agent can relay it to you instead of failing silently. Both the refactor *plan* and its
 *apply* are Pro, so an agent can't sidestep the licence by applying a free plan with
 its own tools.
 

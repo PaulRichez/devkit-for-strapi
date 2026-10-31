@@ -3,6 +3,7 @@ import type { FileSystem, StrapiEngine, StrapiProject } from 'devkit-for-strapi-
 import { computeRename, prepareRename as prepareRenameAt } from 'devkit-for-strapi-pro';
 import * as vscode from 'vscode';
 import { toVscodeWorkspaceEdit } from '../conv';
+import { withOffer } from '../offer';
 import { DOCUMENT_SELECTOR, docPath } from '../selector';
 
 /**
@@ -32,7 +33,7 @@ export function registerRenameProvider(
           // DevKit-exclusive (a magic string / `any`-typed call-site that native
           // rename can't touch) and it's Pro → surface the upsell, not a no-op.
           throw new Error(
-            'Propagated rename is a DevKit for Strapi Pro feature — run "DevKit for Strapi: Enter License Key" to unlock it.',
+            withOffer('Propagated rename is a DevKit for Strapi Pro feature — run "DevKit for Strapi: Enter License Key" to unlock it.'),
           );
         }
         return {

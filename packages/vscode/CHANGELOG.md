@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+**Black Friday**
+
+- From 27 to 30 November (Paris time), DevKit for Strapi Pro is €14.90 instead of €39.99.
+  Without a licence, the editor says so once, a few minutes into a session with a Strapi
+  project open. On those days only, the editor's Pro messages and the MCP server's
+  "Pro required" answers (`offer`) mention it. The dates come from the computer's clock:
+  no network call.
+
 ## 0.2.3
 
 **Local plugins read where they were left unverified**

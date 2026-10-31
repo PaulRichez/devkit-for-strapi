@@ -16,6 +16,7 @@ import {
   runtimeHint,
 } from 'devkit-for-strapi-pro';
 import * as vscode from 'vscode';
+import { withOffer } from '../offer';
 
 /**
  * config-sync against the database (Pro): the project's own Strapi, loaded the way the
@@ -130,7 +131,7 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
     if (!(await this.isLicensed())) {
       if (!noPrompt) {
         const pick = await vscode.window.showInformationMessage(
-          'Comparing config/sync with the database, and exporting or importing, is a DevKit for Strapi Pro feature: it runs the real config-sync through your project\'s Strapi. Reading the files stays free.',
+          withOffer('Comparing config/sync with the database, and exporting or importing, is a DevKit for Strapi Pro feature: it runs the real config-sync through your project\'s Strapi. Reading the files stays free.'),
           'Enter License Key',
           'Get Pro',
         );

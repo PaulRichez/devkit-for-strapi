@@ -25,6 +25,33 @@ export interface ProUpsell {
   message: string;
   getPro: string;
   activate: string;
+  /** The offer running today (Black Friday), only while it runs. */
+  offer?: string;
+}
+
+/** A limited-time price on Pro, mentioned only while it runs. */
+export interface Offer {
+  /** Stable id, so an editor shows its notice once. */
+  id: string;
+  text: string;
+}
+
+/**
+ * Black Friday 2026: Polar's discount on Pro, which the Pro page's checkout link
+ * applies, runs from 27 Nov 00:00 to 30 Nov 23:59, Paris time. Outside it the
+ * price is the regular one, so the offer is never mentioned there.
+ */
+const OFFERS: { start: number; end: number; offer: Offer }[] = [
+  {
+    start: Date.parse('2026-11-26T23:00:00Z'),
+    end: Date.parse('2026-11-30T23:00:00Z'),
+    offer: { id: 'black-friday-2026', text: 'Black Friday: DevKit for Strapi Pro is €14.90 instead of €39.99 until November 30.' },
+  },
+];
+
+/** The offer running at `now`, if any — a clock check, no network call. */
+export function currentOffer(now: number = Date.now()): Offer | undefined {
+  return OFFERS.find((o) => now >= o.start && now < o.end)?.offer;
 }
 
 /** Every Pro tool (writes, refactors, the data-model diagram), mapped to the capability it belongs to. */
@@ -58,8 +85,9 @@ export function proToolNames(): string[] {
 }
 
 /** Build the "Pro required" upsell for a gated tool. */
-export function proRequired(tool: string): ProUpsell {
+export function proRequired(tool: string, now: number = Date.now()): ProUpsell {
   const feature = TOOL_FEATURE[tool] ?? 'This refactor';
+  const offer = currentOffer(now);
   return {
     proRequired: true,
     feature,
@@ -67,5 +95,6 @@ export function proRequired(tool: string): ProUpsell {
     message: `${feature} is a DevKit for Strapi Pro feature — reading and analysing your project stays free, changing it is Pro.`,
     getPro: GET_PRO_URL,
     activate: ACTIVATE_HINT,
+    ...(offer ? { offer: offer.text } : {}),
   };
 }

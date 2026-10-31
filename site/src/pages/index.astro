@@ -6,6 +6,7 @@
 // Starlight docs theme is untouched).
 
 import vscodeManifest from '../../../packages/vscode/package.json';
+import { OFFER_SCRIPT } from '../offer.mjs';
 
 const VSCODE_MARKETPLACE =
   'https://marketplace.visualstudio.com/items?itemName=paul-richez.devkit-for-strapi';
@@ -148,8 +149,14 @@ const faqs = [
     <script is:inline>
       document.documentElement.classList.add('js');
     </script>
+    <!-- The Black Friday price, on its dates only. -->
+    <script is:inline set:html={OFFER_SCRIPT}></script>
   </head>
   <body>
+    <div class="offer-bar" data-offer-show hidden>
+      Black Friday: DevKit for Strapi Pro is <strong>€14.90</strong> instead of €39.99 until November 30 (Paris time) ·
+      <a href="#pricing" data-umami-event="pro-interest" data-umami-event-cta="offer-bar">See Pro →</a>
+    </div>
     <!-- Page-wide aurora + grid backdrop -->
     <div class="backdrop" aria-hidden="true">
       <div class="aurora"></div>
@@ -293,7 +300,9 @@ strapi.documents(<span class="bad">'api::article.artcle'</span>) <span class="cb
         <div class="plan featured reveal" data-delay="80">
           <span class="badge">Pro</span>
           <h3>Pro</h3>
-          <p class="amount">€39.99 <span class="once">one-time</span></p>
+          <p class="amount" data-offer-hide>€39.99 <span class="once">one-time</span></p>
+          <p class="amount" data-offer-show hidden>€14.90 <s class="was">€39.99</s> <span class="once">one-time</span></p>
+          <p class="muted" data-offer-show hidden>Black Friday price until November 30 (Paris time).</p>
           <p class="muted">Perpetual licence + 1 year of updates. Per developer.</p>
           <ul class="ticks">
             <li>Everything in Free</li>
@@ -610,6 +619,12 @@ strapi.documents(<span class="bad">'api::article.artcle'</span>) <span class="cb
       .plan h3 { margin: 0 0 8px; font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
       .amount { font-family: 'Sora', sans-serif; font-size: 46px; font-weight: 800; margin: 0; }
       .amount .once { font-size: 15px; font-weight: 500; color: var(--muted); }
+      .amount .was { font-size: 22px; font-weight: 600; color: var(--muted); }
+      .offer-bar {
+        position: relative; z-index: 51; padding: 10px 16px; text-align: center; font-size: 14px;
+        background: linear-gradient(90deg, #4945ff, var(--violet)); color: #fff;
+      }
+      .offer-bar a { color: #fff; font-weight: 600; text-decoration: underline; }
       .ticks { list-style: none; padding: 0; margin: 20px 0 0; display: grid; gap: 11px; position: relative; }
       .ticks li { padding-left: 26px; position: relative; color: var(--muted); }
       .ticks li::before { content: '✓'; position: absolute; left: 0; color: var(--teal); font-weight: 700; }

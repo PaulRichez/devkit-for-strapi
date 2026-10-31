@@ -1,6 +1,7 @@
 import { diagramOf, paths, type StrapiEngine, toMermaid } from 'devkit-for-strapi-core';
 import { GET_PRO_URL } from 'devkit-for-strapi-pro';
 import * as vscode from 'vscode';
+import { withOffer } from '../offer';
 import type { FromWebview, ToWebview } from '../webview/protocol';
 import type { ModelView } from './model';
 import { openAt, orderedRoots } from './tree';
@@ -135,7 +136,7 @@ export function registerDiagram(context: vscode.ExtensionContext, engine: Strapi
 
   const open = async (): Promise<void> => {
     if (!(await isLicensed())) {
-      const pick = await vscode.window.showInformationMessage('The relations diagram is a DevKit for Strapi Pro feature (the Model view stays free).', 'Enter License Key', 'Get Pro');
+      const pick = await vscode.window.showInformationMessage(withOffer('The relations diagram is a DevKit for Strapi Pro feature (the Model view stays free).'), 'Enter License Key', 'Get Pro');
       if (pick === 'Enter License Key') await vscode.commands.executeCommand('strapiDevkit.enterLicenseKey');
       if (pick === 'Get Pro') await vscode.env.openExternal(vscode.Uri.parse(GET_PRO_URL));
       return;

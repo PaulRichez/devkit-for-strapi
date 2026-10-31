@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import { OFFER_SCRIPT } from './src/offer.mjs';
 
 // Hosted on a free subdomain of the existing paulrichez.fr (no new domain to buy).
 const SITE = 'https://devkit-for-strapi.paulrichez.fr';
@@ -62,6 +63,8 @@ export default defineConfig({
             'data-website-id': '6966158d-16d2-47b1-a802-20fb2eb71e19',
           },
         },
+        // Shows the Black Friday price on its dates only (the Pro page's note).
+        { tag: 'script', content: OFFER_SCRIPT },
       ],
       customCss: ['./src/styles/theme.css'],
       lastUpdated: true,

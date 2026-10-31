@@ -68,3 +68,11 @@ h3,
   --ec-frm-edTabBarBg: #12121f;
   --ec-frm-trmTtbBg: #12121f;
 }
+
+/* The Black Friday note on the Pro page, shown on its dates only (src/offer.mjs). */
+.offer-note {
+  padding: 0.75rem 1rem;
+  border-left: 4px solid var(--sl-color-accent);
+  background: var(--sl-color-accent-low);
+  border-radius: 0.375rem;
+}

@@ -19,4 +19,4 @@ export {
   type ResolveLicenseParams,
 } from './validate';
 
-export { ACTIVATE_HINT, GET_PRO_URL, isProTool, proRequired, proToolNames, type ProUpsell } from './upsell';
+export { ACTIVATE_HINT, currentOffer, GET_PRO_URL, isProTool, type Offer, proRequired, proToolNames, type ProUpsell } from './upsell';

@@ -14,6 +14,7 @@ import {
 import { GET_PRO_URL, planChangeRelation, planCreatePlugin, planMove, planRename, planRenameAttribute } from 'devkit-for-strapi-pro';
 import * as vscode from 'vscode';
 import { toVscodeWorkspaceEdit } from '../conv';
+import { withOffer } from '../offer';
 
 /**
  * Refactors from the panel (Pro): rename a content-type, a component, a field or a
@@ -76,7 +77,7 @@ export function registerRefactorCommands(
 
   const upsell = async (): Promise<void> => {
     const pick = await vscode.window.showInformationMessage(
-      'Refactoring from the DevKit panel is a DevKit for Strapi Pro feature (the views stay free).',
+      withOffer('Refactoring from the DevKit panel is a DevKit for Strapi Pro feature (the views stay free).'),
       'Enter License Key',
       'Get Pro',
     );
