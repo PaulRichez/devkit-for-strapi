@@ -9,6 +9,9 @@
   carry a `utm_source` tag (and the offer's `utm_campaign` while it runs), so the site's
   analytics can tell which ones people follow. Never who you are or anything about your
   project.
+- The site passes that tag on to its checkout links (Polar keeps it with the payment
+  session), or the referring site when there is none, so a sale can be traced to where
+  the visit came from.
 
 ## 0.2.4
 

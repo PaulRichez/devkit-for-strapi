@@ -11,6 +11,9 @@ locally and answers from them, with **no telemetry**. The one exception is a
 checked once against the Polar licensing API, then DevKit works offline. The links
 to this site from the extension, the MCP server and the store pages say where they
 come from (a `utm_source` tag, read by the site's analytics when you open one), and
+checked once against the Polar licensing API, then DevKit works offline. The links
+to this site from the extension, the MCP server and the store pages say where they
+come from (a `utm_source` tag, read by the site's analytics when you open one), and
 the site's checkout links carry where your visit came from (those tags, or the
 referring site), which Polar keeps with the payment; it is remembered for the browser
 tab only, with no cookie — never who you are or anything about your project.
