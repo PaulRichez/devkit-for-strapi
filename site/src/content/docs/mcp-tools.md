@@ -89,8 +89,11 @@ your agent but return a structured **“Pro required”** result instead of runn
 the agent can relay it rather than fail silently.
 
 Writes are a **contract**. A `plan_*` tool computes the exact edits and returns a
-**`planId`** — it writes nothing. You review the plan, then `apply_edits` applies
-**exactly that plan**, after re-verifying every touched file's fingerprint (a stale
+**`planId`** — it writes nothing. Its answer is the plan to review: each edit on one
+line with the text it replaces (`25: "api::restaurant.restaurant" → "api::restaurant.eatery"`),
+the file renames, new files and deletes, paths relative to the project. You review it,
+then `apply_edits` applies **exactly that plan** — only a plan DevKit computed this
+session, by its `planId` — after re-verifying every touched file's fingerprint (a stale
 plan is rejected), confined to the project root (symlink-resolved), best-effort
 transactional, and **self-verifying** for broken refs afterward.
 
@@ -104,7 +107,7 @@ transactional, and **self-verifying** for broken refs afterward.
 | `plan_rename_attribute` | `uid`, `oldName`, `newName` | Rename an attribute in `schema.json` + (relation) its `populate`/`filters` usages. ⚠️ Does **not** rewrite `entity.field` object access — always warns. |
 | `create_plugin` | `name` | Scaffold a new local plugin (`strapi-server.js`, `config/plugins`). |
 | `extract_to_plugin` | `refs[]`, `name` | Scaffold a plugin **and** move artifacts into it — in one plan. The one-pass extraction primitive. |
-| `apply_edits` | `planId` \| `plan` | ⚠️ **Writes.** Apply a reviewed plan. Verified against disk first; a changed file → nothing is written. |
+| `apply_edits` | `planId` | ⚠️ **Writes.** Apply a reviewed plan. Verified against disk first; a changed file → nothing is written. |
 | `apply_rename` | `ref`, `newName`, `method?` | ⚠️ **Writes.** Convenience: plan + apply a rename in one call. Prefer `plan_rename_*` + `apply_edits` to review first. |
 
 > Deprecated aliases (kept for transition): `change_relation` → `plan_change_relation`, `rename_attribute` → `plan_rename_attribute`.

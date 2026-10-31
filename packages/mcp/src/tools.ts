@@ -72,6 +72,7 @@ import {
 } from 'devkit-for-strapi-pro';
 import { z } from 'zod';
 import { applyWorkspaceEdit, type ApplyResult } from './apply';
+import { planView, relativeTo } from './planView';
 import { saveRootsCache } from './rootsCache';
 import { VERSION } from './version';
 
@@ -257,17 +258,6 @@ function pick(
 }
 
 /** Register the F1→F4 read tools + the rename tools on the MCP server. */
-/** Strict shape of a contractual plan — closes the `z.any()` hole on apply_edits. */
-const positionSchema = z.object({ line: z.number().int().nonnegative(), character: z.number().int().nonnegative() });
-const planObjectSchema = z.object({
-  textEdits: z.array(z.object({ filePath: z.string(), start: positionSchema, end: positionSchema, newText: z.string() })),
-  fileRenames: z.array(z.object({ from: z.string(), to: z.string() })),
-  fileCreates: z.array(z.object({ path: z.string(), content: z.string() })).optional(),
-  fileDeletes: z.array(z.string()).optional(),
-  planId: z.string(),
-  fingerprints: z.array(z.object({ path: z.string(), hash: z.string() })),
-});
-
 export function registerTools(
   server: McpServer,
   engine: StrapiEngine,
@@ -279,17 +269,29 @@ export function registerTools(
   isLicensed: () => Promise<boolean> = () => Promise.resolve(true),
 ): void {
   // Plans computed by plan_* this session, keyed by planId, so apply_edits can
-  // apply exactly the reviewed plan (no recompute → no TOCTOU window).
-  const plans = new Map<string, PlannedEdit>();
+  // apply exactly the reviewed plan (no recompute → no TOCTOU window). Only these:
+  // an agent can't hand in a plan of its own.
+  const plans = new Map<string, { planned: PlannedEdit; root: string }>();
   const PLAN_CAP = 50;
-  /** Store a plan, capping the Map oldest-first so a long planning session can't grow it unbounded. */
-  const rememberPlan = (p: PlannedEdit): void => {
-    plans.set(p.planId, p);
+  /**
+   * Store a plan (capping the Map oldest-first so a long planning session can't grow
+   * it unbounded) and answer with its review view.
+   */
+  const planAnswer = async (project: StrapiProject, planned: PlannedEdit, warnings?: string[]): Promise<CallToolResult> => {
+    plans.set(planned.planId, { planned, root: project.root });
     if (plans.size > PLAN_CAP) {
       const oldest = plans.keys().next().value;
       if (oldest !== undefined) plans.delete(oldest);
     }
+    return json(await planView(fs, project.root, planned, warnings, ANSWER_MAX));
   };
+  /** An apply's files, relative to the project root. */
+  const relativeApply = (root: string, r: ApplyResult): ApplyResult => ({
+    filesChanged: r.filesChanged.map((f) => relativeTo(root, f)),
+    filesCreated: r.filesCreated.map((f) => relativeTo(root, f)),
+    filesRenamed: r.filesRenamed.map((x) => ({ from: relativeTo(root, x.from), to: relativeTo(root, x.to) })),
+    filesDeleted: r.filesDeleted.map((f) => relativeTo(root, f)),
+  });
 
   // The MCP SDK does not serialize tool handlers; two concurrent applies could
   // interleave verify→write and lose an update despite the fingerprint check.
@@ -338,9 +340,7 @@ export function registerTools(
   const schemaResult = async (project: StrapiProject, plan: SchemaEditPlan, verb: string, configSync?: boolean): Promise<CallToolResult> => {
     if (!plan.ok) return json({ [verb]: false, errors: plan.errors, warnings: plan.warnings });
     const s = await syncPlan(project, { textEdits: plan.textEdits, fileRenames: [] as WorkspaceEdit['fileRenames'] }, plan.warnings, configSync);
-    const planned = await planEdit(fs, s.edit);
-    rememberPlan(planned);
-    return json({ ...planned, warnings: s.warnings });
+    return planAnswer(project, await planEdit(fs, s.edit), s.warnings);
   };
 
   /** Plan a move (single or grouped) → a contractual plan result, or refusal. */
@@ -348,9 +348,7 @@ export function registerTools(
     const move = await planMove(fs, project, specs);
     if (!move.ok) return json({ moved: false, errors: move.errors, warnings: move.warnings });
     const s = await syncPlan(project, { textEdits: move.textEdits, fileRenames: move.fileRenames }, [...move.warnings, ...movedWarnings(project, specs)], configSync);
-    const planned = await planEdit(fs, s.edit);
-    rememberPlan(planned);
-    return json({ ...planned, warnings: s.warnings });
+    return planAnswer(project, await planEdit(fs, s.edit), s.warnings);
   };
   /** The database caveats of moving these refs (UIDs Strapi stores as strings). */
   const movedWarnings = (project: StrapiProject, specs: MoveSpec[]): string[] =>
@@ -1195,9 +1193,7 @@ export function registerTools(
           reason: `\`${args.method}\` is not an indexed method of \`${args.ref}\`, or \`${args.newName}\` is invalid/unchanged. ${RENAME_HINT}`,
         });
       const s = await syncPlan(p.project, edit, [...renameWarnings(p.project, args.ref, args.newName, args.method), ...(edit.warnings ?? [])], args.configSync);
-      const planned = await planEdit(fs, s.edit);
-      rememberPlan(planned);
-      return json(s.warnings.length ? { ...planned, warnings: s.warnings } : planned);
+      return planAnswer(p.project, await planEdit(fs, s.edit), s.warnings);
     },
   );
 
@@ -1226,9 +1222,7 @@ export function registerTools(
           reason: `\`${args.ref}\` is not an indexed entity in this project, or \`${args.newName}\` is invalid/unchanged. ${RENAME_HINT}`,
         });
       const s = await syncPlan(p.project, edit, [...renameWarnings(p.project, args.ref, args.newName), ...(edit.warnings ?? [])], args.configSync);
-      const planned = await planEdit(fs, s.edit);
-      rememberPlan(planned);
-      return json(s.warnings.length ? { ...planned, warnings: s.warnings } : planned);
+      return planAnswer(p.project, await planEdit(fs, s.edit), s.warnings);
     },
   );
 
@@ -1293,9 +1287,7 @@ export function registerTools(
       if ('result' in p) return p.result;
       const scaffold = await planCreatePlugin(fs, p.project, args.name);
       if (!scaffold.ok) return json({ created: false, errors: scaffold.errors });
-      const planned = await planEdit(fs, { textEdits: scaffold.textEdits, fileRenames: [], fileCreates: scaffold.fileCreates });
-      rememberPlan(planned);
-      return json({ ...planned, warnings: scaffold.warnings });
+      return planAnswer(p.project, await planEdit(fs, { textEdits: scaffold.textEdits, fileRenames: [], fileCreates: scaffold.fileCreates }), scaffold.warnings);
     },
   );
 
@@ -1333,9 +1325,7 @@ export function registerTools(
       ];
       if (!move.ok) return json({ extracted: false, errors: move.errors, warnings });
       const s = await syncPlan(p.project, { textEdits: [...scaffold.textEdits, ...move.textEdits], fileRenames: move.fileRenames, fileCreates: scaffold.fileCreates }, warnings, args.configSync);
-      const planned = await planEdit(fs, s.edit);
-      rememberPlan(planned);
-      return json({ ...planned, warnings: s.warnings });
+      return planAnswer(p.project, await planEdit(fs, s.edit), s.warnings);
     },
   );
 
@@ -1386,32 +1376,28 @@ export function registerTools(
     {
       title: 'Apply a reviewed plan to disk (contractual)',
       description:
-        'Apply a plan returned by any plan_* tool, create_plugin or extract_to_plugin. Pass `planId` to apply exactly the reviewed plan, or `plan` (a full plan object) to apply one you hold. The plan is verified against disk first — if any touched file changed since it was computed, nothing is written (the changed paths are returned). ⚠️ Modifies files on disk.',
+        'Apply a plan returned by any plan_* tool, create_plugin or extract_to_plugin, by its `planId`: exactly the reviewed plan. It is verified against disk first — if any touched file changed since it was computed, nothing is written (the changed paths are returned). ⚠️ Modifies files on disk.',
       inputSchema: {
-        planId: z.string().optional().describe('The planId from a plan_* result (preferred).'),
-        plan: planObjectSchema.optional().describe('A full, well-formed plan object (planId + fingerprints), if not using planId.'),
+        planId: z.string().describe('The planId from a plan_* result.'),
       },
     },
     async (args) =>
       withApplyLock(async () => {
         await ready;
-        const planned: PlannedEdit | undefined = args.planId
-          ? plans.get(args.planId)
-          : (args.plan as PlannedEdit | undefined);
-        if (!planned || !planned.fingerprints) {
+        const held = plans.get(args.planId);
+        if (!held) {
           return json({
             applied: false,
-            reason: args.planId
-              ? `Unknown planId \`${args.planId}\` — it was not produced this session. Re-run a plan_* tool to get a fresh plan, or pass the full \`plan\` object.`
-              : 'Provide a `planId` from a plan_* result, or a full `plan` object (with fingerprints).',
+            reason: `Unknown planId \`${args.planId}\` — it was not produced this session (or was already applied). Re-run a plan_* tool to get a fresh plan.`,
           });
         }
+        const { planned, root } = held;
         const check = await verifyFingerprints(fs, planned.fingerprints);
         if (!check.ok) {
           return json({
             applied: false,
             reason: 'The plan is stale — files changed on disk since it was computed. Re-run the plan and review again.',
-            changed: check.changed,
+            changed: check.changed.map((f) => relativeTo(root, f)),
           });
         }
         let result;
@@ -1427,7 +1413,7 @@ export function registerTools(
         plans.delete(planned.planId);
         const { changed, deleted } = applyDelta(result);
         await engine.onFilesChanged(changed, deleted); // incremental refresh — not a full workspace rescan
-        return json({ applied: true, ...result, verify: await verifyAfterApply(changed) });
+        return json({ applied: true, ...relativeApply(root, result), verify: await verifyAfterApply(changed) });
       }),
   );
 
@@ -1469,7 +1455,7 @@ export function registerTools(
         }
         const { changed, deleted } = applyDelta(result);
         await engine.onFilesChanged(changed, deleted); // incremental refresh — not a full workspace rescan
-        return json({ applied: true, ...result, verify: await verifyAfterApply(changed), ...(dbWarnings.length ? { warnings: dbWarnings } : {}) });
+        return json({ applied: true, ...relativeApply(p.project.root, result), verify: await verifyAfterApply(changed), ...(dbWarnings.length ? { warnings: dbWarnings } : {}) });
       }),
   );
 }

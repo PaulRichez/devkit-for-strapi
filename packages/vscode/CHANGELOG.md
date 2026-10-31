@@ -10,6 +10,19 @@
   "Pro required" answers (`offer`) mention it. The dates come from the computer's clock:
   no network call.
 
+**MCP: plans an agent can review**
+
+- A `plan_*` answer shows each edit on one line with the text it replaces
+  (`25: "api::restaurant.restaurant" → "api::restaurant.eatery"`), grouped by file, with
+  the renames, new files and deletes, and a summary — paths relative to the project.
+  The exact edits and the files' fingerprints stay with the server under the `planId`.
+  On foodadvisor, renaming `api::restaurant.restaurant` answers 2,161 characters,
+  warnings included, where the raw plan alone took 5,657. A plan too long for one answer shows its last files as
+  counts and says so; `apply_edits` still applies all of it.
+- `apply_edits` takes a `planId` only: it applies a plan DevKit computed this session,
+  never a plan object handed in. Its answer, and `apply_rename`'s, give paths relative
+  to the project.
+
 ## 0.2.3
 
 **Local plugins read where they were left unverified**

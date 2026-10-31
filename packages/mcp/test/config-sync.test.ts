@@ -125,7 +125,7 @@ describe('config_sync_status, and config-sync in project_info and list_routes', 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const plan = async (args: Record<string, unknown>): Promise<any> => JSON.parse(((await h.get('plan_rename_entity')!({ ref: 'api::article.article', newName: 'post', ...args })).content[0] as { text: string }).text);
     // The files the plan edits or renames (not its warnings, which name them too).
-    const touched = (p: { textEdits: unknown[]; fileRenames: unknown[] }): string => JSON.stringify([p.textEdits, p.fileRenames]);
+    const touched = (p: { edits: Record<string, string[]>; renames?: string[] }): string => JSON.stringify([Object.keys(p.edits), p.renames ?? []]);
     const role = 'user-role.public.json';
 
     const followed = await plan({});

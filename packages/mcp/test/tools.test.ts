@@ -150,21 +150,32 @@ describe('MCP tools (engine-backed handlers)', () => {
     }
   });
 
-  it.skip('plan_rename_method returns a contractual plan (edits + planId + fingerprints), writes nothing', async () => {
+  it.skipIf(!HAS_PRO_ENGINE)('plan_rename_method answers the plan to review: each edit with the text it replaces, relative paths, a planId — writes nothing', async () => {
     const data = await call('plan_rename_method', {
       ref: 'api::page.notifier',
       method: 'notify',
       newName: 'announce',
       from: cmsARoot,
     });
-    expect(data.textEdits.length).toBeGreaterThanOrEqual(2); // declaration + ≥1 call-site
-    expect(data.textEdits.every((e: { newText: string }) => e.newText === 'announce')).toBe(true);
+    const lines = Object.values(data.edits as Record<string, string[]>).flat();
+    expect(lines.length).toBeGreaterThanOrEqual(2); // declaration + ≥1 call-site
+    expect(lines.every((l) => /^\d+: "notify" → "announce"$/.test(l))).toBe(true);
+    expect(Object.keys(data.edits).every((f) => !f.includes(':') && !f.startsWith('/'))).toBe(true); // relative to the project
+    expect(data.summary).toMatch(/^\d+ edits in \d+ files?$/);
     expect(typeof data.planId).toBe('string');
-    expect(Array.isArray(data.fingerprints)).toBe(true);
+    expect(data.fingerprints).toBeUndefined(); // kept by the server, under the planId
+    expect(data.textEdits).toBeUndefined();
   });
 
   it('apply_edits refuses an unknown planId (never writes a guessed plan)', async () => {
     const data = await call('apply_edits', { planId: 'nope-not-a-real-id' });
+    expect(data.applied).toBe(false);
+    expect(data.reason).toMatch(/Unknown planId/);
+  });
+
+  it('apply_edits applies only a plan DevKit computed: a plan object handed in is not applied', async () => {
+    const forged = { textEdits: [], fileRenames: [], fileCreates: [{ path: `${cmsARoot}/src/forged.js`, content: 'x' }], planId: 'forged', fingerprints: [] };
+    const data = await call('apply_edits', { plan: forged });
     expect(data.applied).toBe(false);
     expect(data.reason).toMatch(/Unknown planId/);
   });
@@ -262,7 +273,7 @@ describe('MCP tools (engine-backed handlers)', () => {
   it.skip('create_plugin returns a contractual scaffold plan with warnings (J5)', async () => {
     const data = await call('create_plugin', { name: 'brand-new-plugin', from: cmsARoot });
     expect(typeof data.planId).toBe('string');
-    expect(data.fileCreates.some((c: { path: string }) => c.path.includes('plugins/brand-new-plugin/strapi-server.js'))).toBe(true);
+    expect(Object.keys(data.creates).some((path) => path.includes('plugins/brand-new-plugin/strapi-server.js'))).toBe(true);
     expect(Array.isArray(data.warnings)).toBe(true);
   });
 
@@ -365,7 +376,7 @@ describe('MCP Pro gate (licence)', () => {
     expect(data.proRequired).toBe(true);
     expect(data.tool).toBe('plan_rename_method');
     expect(data.getPro).toContain('devkit-for-strapi');
-    expect(data.textEdits).toBeUndefined(); // the plan was never computed
+    expect(data.edits).toBeUndefined(); // the plan was never computed
   });
 
   it('apply_edits is gated too (no applying a free plan via this tool)', async () => {

@@ -137,9 +137,10 @@ Full parameters and return shapes for every tool are in the
 `plan_rename_attribute`, `create_plugin`, `extract_to_plugin`, then `apply_edits`
 / `apply_rename`.
 
-Every refactor returns a **contractual, reviewable plan** (text edits + file
-creates/renames/deletes + content fingerprints). Applying is explicit and **safe
-by construction**: the executor is confined to your discovered project root(s)
-(symlink-resolved), refuses to silently overwrite, verifies the fingerprints
-first (a stale plan is rejected), is best-effort transactional, and self-verifies
-afterward. Guarantee, don’t guess — that principle applies to writes too.
+Every refactor returns a **contractual, reviewable plan**: each text edit with the
+text it replaces, the file creates/renames/deletes, and a `planId`; the server keeps
+the files' content fingerprints. Applying is explicit and **safe by construction**:
+only a plan DevKit computed is applied, the executor is confined to your discovered
+project root(s) (symlink-resolved), refuses to silently overwrite, verifies the
+fingerprints first (a stale plan is rejected), is best-effort transactional, and
+self-verifies afterward. Guarantee, don’t guess — that principle applies to writes too.
