@@ -22,6 +22,12 @@
 - `apply_edits` takes a `planId` only: it applies a plan DevKit computed this session,
   never a plan object handed in. Its answer, and `apply_rename`'s, give paths relative
   to the project.
+- Every answer names files relative to the project and gives its `root` once, when its
+  files all lie in one project (several projects: kept absolute). On foodadvisor,
+  `find_references` goes from 1,502 to 1,077 characters, `list_routes` from 34,132 to
+  30,450, its pipeline for one route from 8,387 to 6,356.
+- `list_routes` answers `{ routes }`, as it already did with `pipeline: true`, instead
+  of a bare list.
 
 ## 0.2.3
 

@@ -63,7 +63,8 @@ describe('config_sync_diff stays within one answer on a big project', () => {
     expect(text.length).toBeLessThan(50_000);
     expect(data).not.toHaveProperty('file');
     expect(data).not.toHaveProperty('db');
-    expect(data.path).toBe(`${SYNC}/admin-role.strapi-editor.json`);
+    expect(data.root).toBe(ROOT);
+    expect(data.path).toBe('config/sync/admin-role.strapi-editor.json'); // relative to `root`
     expect(data.sides).toMatch(/^Not included: the two sides are \d+ characters.*the first ones; the file side is .*admin-role\.strapi-editor\.json\.$/);
     const lines = data.differences as string[];
     expect(lines[0]).toContain('api::type0.type0');

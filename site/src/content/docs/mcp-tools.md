@@ -60,6 +60,10 @@ plugin again. Every answer carries the same `freshness` in its MCP `_meta`
 when something limits it.
 :::
 
+File paths in an answer are relative to the project: the answer gives its `root`
+once (`"root": "/home/me/my-app"`, then `"filePath": "src/api/article/routes/article.js"`).
+An answer naming the files of several projects keeps them absolute.
+
 Each reference is tagged with a **`via`** — how the call reaches the entity: the
 call form (`service`, `documents`, `query`, `schema` relation, `route` handler,
 `relation-field`, …) or an internal `this` / `member-var` self-call. Run `coverage`

@@ -38,9 +38,9 @@ describe('list_routes: filters and pipeline', () => {
   });
 
   it('filters by method, by a concrete URL, and by handler', async () => {
-    expect((await call({ method: 'get' })).map((r: { path: string }) => r.path).sort()).toEqual(['/articles', '/articles/:id']);
-    expect((await call({ path: '/api/articles/12' })).map((r: { method: string }) => r.method).sort()).toEqual(['DELETE', 'GET', 'PUT']);
-    expect((await call({ handler: 'article.publish' })).map((r: { path: string }) => r.path)).toEqual(['/articles/:id/publish']);
+    expect((await call({ method: 'get' })).routes.map((r: { path: string }) => r.path).sort()).toEqual(['/articles', '/articles/:id']);
+    expect((await call({ path: '/api/articles/12' })).routes.map((r: { method: string }) => r.method).sort()).toEqual(['DELETE', 'GET', 'PUT']);
+    expect((await call({ handler: 'article.publish' })).routes.map((r: { path: string }) => r.path)).toEqual(['/articles/:id/publish']);
   });
 
   it("explains a route: Strapi's order, and a policy Strapi won't find under its short name", async () => {

@@ -143,10 +143,10 @@ describe('MCP tools (engine-backed handlers)', () => {
 
   it('list_routes returns the route table of the selected project', async () => {
     const data = await call('list_routes', { from: cmsARoot });
-    expect(Array.isArray(data)).toBe(true);
-    if (data.length > 0) {
-      expect(data[0]).toHaveProperty('method');
-      expect(data[0]).toHaveProperty('handler');
+    expect(Array.isArray(data.routes)).toBe(true);
+    if (data.routes.length > 0) {
+      expect(data.routes[0]).toHaveProperty('method');
+      expect(data.routes[0]).toHaveProperty('handler');
     }
   });
 
@@ -433,13 +433,15 @@ describe('feedback v2 #19, #21, #23 through the tools', () => {
 
   it('list_unused: a service loaded by path says so', async () => {
     const res = JSON.parse(((await raw('list_unused', { kinds: ['service'] })).content[0] as { text: string }).text);
-    expect(res.unused.find((u: { ref: string }) => u.ref === 'api::bar.helper').requiredByPath).toEqual([`${R}/src/index.js`]);
+    expect(res.unused.find((u: { ref: string }) => u.ref === 'api::bar.helper').requiredByPath).toEqual(['src/index.js']); // relative to `root`
   });
 
   it('list_routes: a local plugin whose routes are unread comes in a block of its own, the table unchanged', async () => {
     const res = await raw('list_routes', { admin: true });
-    expect(Array.isArray(JSON.parse((res.content[0] as { text: string }).text))).toBe(true);
+    const table = JSON.parse((res.content[0] as { text: string }).text);
+    expect(Array.isArray(table.routes)).toBe(true);
+    expect(table.root).toBe(R);
     const extra = JSON.parse((res.content[1] as { text: string }).text);
-    expect(extra.unreadRoutes).toEqual([{ plugin: 'x', file: `${R}/src/plugins/x/strapi-server.js`, line: 2, why: expect.any(String) }]);
+    expect(extra.unreadRoutes).toEqual([{ plugin: 'x', file: 'src/plugins/x/strapi-server.js', line: 2, why: expect.any(String) }]); // relative to `root`
   });
 });

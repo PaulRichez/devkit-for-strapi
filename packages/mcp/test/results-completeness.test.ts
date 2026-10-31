@@ -63,7 +63,8 @@ describe('MCP read tools say how complete their answer is', () => {
   it('list_unused: a service only an archived migration calls is listed, that caller said', async () => {
     const res = await call('list_unused', { kinds: ['service'] });
     const old = res.unused.find((u: { ref: string }) => u.ref === 'api::a.old');
-    expect(old.onlyArchivedCallers).toEqual([`${R}/database/migrations/old/2024.01.01T00.00.00.x.js`]);
+    expect(res.root).toBe(R);
+    expect(old.onlyArchivedCallers).toEqual(['database/migrations/old/2024.01.01T00.00.00.x.js']); // relative to `root`
     expect(res.unresolvedCalls.total).toBe(1);
     const refs = await call('find_references', { ref: 'api::a.old' });
     expect(refs.references[0]).toContain('archived migration');

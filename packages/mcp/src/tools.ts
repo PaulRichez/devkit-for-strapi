@@ -72,7 +72,8 @@ import {
 } from 'devkit-for-strapi-pro';
 import { z } from 'zod';
 import { applyWorkspaceEdit, type ApplyResult } from './apply';
-import { planView, relativeTo } from './planView';
+import { planView } from './planView';
+import { relativeTo, withRelativePaths } from './relativePaths';
 import { saveRootsCache } from './rootsCache';
 import { VERSION } from './version';
 
@@ -384,7 +385,7 @@ export function registerTools(
     // the last call (edits, a git checkout, an `npm install`) — a few ms.
     const fresh = (async (...a: unknown[]) => {
       await engine.refreshIfStale();
-      return withFreshness(engine, (await inner(...a)) as CallToolResult);
+      return withFreshness(engine, withRelativePaths((await inner(...a)) as CallToolResult, projectRoots()));
     }) as unknown as typeof cb;
     return server['registerTool'](name, config, fresh);
   };
@@ -730,7 +731,7 @@ export function registerTools(
           (!args.path || pathMatches(r.fullPath ?? r.path, args.path) || pathMatches(r.path, args.path)) &&
           (!args.handler || qualifiedHandler(r).includes(args.handler)),
       );
-      if (!args.pipeline) return answer(routes);
+      if (!args.pipeline) return answer({ routes });
       if (!args.method && !args.path && !args.handler) {
         return answer({ error: 'pipeline needs a filter: pass `method`, `path` or `handler` to narrow the routes first.', routes: routes.length });
       }
@@ -1397,6 +1398,7 @@ export function registerTools(
           return json({
             applied: false,
             reason: 'The plan is stale — files changed on disk since it was computed. Re-run the plan and review again.',
+            root,
             changed: check.changed.map((f) => relativeTo(root, f)),
           });
         }
@@ -1413,7 +1415,7 @@ export function registerTools(
         plans.delete(planned.planId);
         const { changed, deleted } = applyDelta(result);
         await engine.onFilesChanged(changed, deleted); // incremental refresh — not a full workspace rescan
-        return json({ applied: true, ...relativeApply(root, result), verify: await verifyAfterApply(changed) });
+        return json({ applied: true, root, ...relativeApply(root, result), verify: await verifyAfterApply(changed) });
       }),
   );
 
@@ -1455,7 +1457,7 @@ export function registerTools(
         }
         const { changed, deleted } = applyDelta(result);
         await engine.onFilesChanged(changed, deleted); // incremental refresh — not a full workspace rescan
-        return json({ applied: true, ...relativeApply(p.project.root, result), verify: await verifyAfterApply(changed), ...(dbWarnings.length ? { warnings: dbWarnings } : {}) });
+        return json({ applied: true, root: p.project.root, ...relativeApply(p.project.root, result), verify: await verifyAfterApply(changed), ...(dbWarnings.length ? { warnings: dbWarnings } : {}) });
       }),
   );
 }

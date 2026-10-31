@@ -1,4 +1,5 @@
-import { paths, type FileSystem, type TextEditOp, type WorkspaceEdit } from 'devkit-for-strapi-core';
+import type { FileSystem, TextEditOp, WorkspaceEdit } from 'devkit-for-strapi-core';
+import { relativeTo } from './relativePaths';
 
 /**
  * What a plan_* tool answers: the plan as an agent reviews it before `apply_edits` —
@@ -8,6 +9,8 @@ import { paths, type FileSystem, type TextEditOp, type WorkspaceEdit } from 'dev
  */
 export interface PlanView {
   planId: string;
+  /** The project root the paths below are relative to. */
+  root: string;
   /** `12 edits in 5 files, 1 rename`. */
   summary: string;
   /** Per file, one line per edit: `25: "old" → "new"` (1-based lines). */
@@ -24,13 +27,6 @@ export interface PlanView {
 
 /** Characters of an old or new text shown on its line. */
 const TEXT_SHOWN = 240;
-
-/** `p` relative to `root` (forward slashes), or as is when outside it. */
-export function relativeTo(root: string, p: string): string {
-  const r = paths.normalize(root);
-  const f = paths.normalize(p);
-  return f.length > r.length && paths.isPathInside(r, f) ? f.slice(r.length).replace(/^\/+/, '') : f;
-}
 
 /** A text quoted for its edit line — clipped, and saying so, when long. */
 function quote(text: string): string {
@@ -97,6 +93,7 @@ export async function planView(
 
   const view: PlanView = {
     planId: plan.planId,
+    root,
     summary,
     edits,
     ...(renames.length ? { renames } : {}),

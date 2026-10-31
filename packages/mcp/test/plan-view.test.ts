@@ -1,6 +1,7 @@
 import type { FileSystem, TextEditOp } from 'devkit-for-strapi-core';
 import { describe, expect, it } from 'vitest';
-import { planView, relativeTo } from '../src/planView';
+import { planView } from '../src/planView';
+import { relativeTo } from '../src/relativePaths';
 
 const ROOT = 'C:/work/app';
 const files: Record<string, string> = {
@@ -36,6 +37,7 @@ describe('plan view (what a plan_* tool answers)', () => {
     );
     expect(view).toEqual({
       planId: 'p1',
+      root: ROOT,
       summary: '2 edits in 2 files, 1 rename',
       edits: {
         'src/index.ts': ['1: "api::restaurant.restaurant" → "api::restaurant.eatery"'],
