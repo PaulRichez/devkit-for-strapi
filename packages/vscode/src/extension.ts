@@ -182,7 +182,12 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
   );
 
   registerMcpServer(context, license);
-  registerOfferNotice(context, license.isLicensed, () => engine.getProjects().length > 0);
+  registerOfferNotice(
+    context,
+    license.isLicensed,
+    async () => (await license.getKey()) !== undefined,
+    () => engine.getProjects().length > 0,
+  );
 
   // Re-index when the workspace folders actually change. Guarded by a signature
   // so a spurious folder event at startup doesn't trigger a second scan/log.

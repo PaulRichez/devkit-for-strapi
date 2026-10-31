@@ -143,7 +143,8 @@ describe('proRequired upsell', () => {
     const at = (iso: string): number => Date.parse(iso);
     expect(currentOffer(at('2026-11-26T22:59:59Z'))).toBeUndefined(); // 26 Nov 23:59:59 in Paris
     expect(currentOffer(at('2026-11-26T23:00:00Z'))?.id).toBe('black-friday-2026');
-    expect(currentOffer(at('2026-11-30T22:59:59Z'))?.text).toContain('€14.90 instead of €39.99');
+    // Still on in Sydney on 1 Dec morning: the end is said in Paris time, where it is.
+    expect(currentOffer(at('2026-12-01T09:30:00+11:00'))?.text).toContain('€14.90 instead of €39.99 until November 30, 23:59 Paris time');
     expect(currentOffer(at('2026-11-30T23:00:00Z'))).toBeUndefined(); // 1 Dec 00:00 in Paris
     expect(proRequired('apply_edits', at('2026-11-28T12:00:00Z')).offer).toContain('Black Friday');
     expect(proRequired('apply_edits', at('2026-10-31T12:00:00Z'))).not.toHaveProperty('offer');

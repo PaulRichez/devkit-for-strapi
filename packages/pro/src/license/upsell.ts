@@ -45,7 +45,7 @@ const OFFERS: { start: number; end: number; offer: Offer }[] = [
   {
     start: Date.parse('2026-11-26T23:00:00Z'),
     end: Date.parse('2026-11-30T23:00:00Z'),
-    offer: { id: 'black-friday-2026', text: 'Black Friday: DevKit for Strapi Pro is €14.90 instead of €39.99 until November 30.' },
+    offer: { id: 'black-friday-2026', text: 'Black Friday: DevKit for Strapi Pro is €14.90 instead of €39.99 until November 30, 23:59 Paris time.' },
   },
 ];
 

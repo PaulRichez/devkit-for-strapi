@@ -7,7 +7,7 @@ The free tier makes Strapi magic strings **understandable**. Pro lets DevKit
 **change** them for you — safely, across your whole project, in your editor and
 through your AI agent.
 
-<p class="offer-note" data-offer-show hidden><strong>Black Friday:</strong> Pro is <strong>€14.90</strong> instead of €39.99 until November 30 (Paris time). The <a href="#pricing--licence">checkout link below</a> applies it.</p>
+<p class="offer-note" data-offer-show data-pagefind-ignore hidden><strong>Black Friday:</strong> Pro is <strong>€14.90</strong> instead of €39.99 until November 30 (Paris time). The <a href="#pricing--licence">checkout link below</a> applies it.</p>
 
 ## What’s in Pro
 
