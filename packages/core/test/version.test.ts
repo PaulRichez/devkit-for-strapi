@@ -49,4 +49,18 @@ describe('a Strapi newer than DevKit knows (Strapi 6)', () => {
     expect(info.notes[0]).toBe(summary.unsupportedVersion);
     expect(info.strapi.unsupported).toBe(summary.unsupportedVersion); // the Health view reads it here
   });
+
+  it('found where Node finds it (hoisted to a monorepo root), and said with the version DevKit reads', async () => {
+    const fs = new MemoryFileSystem({
+      '/mono/node_modules/@strapi/strapi/package.json': JSON.stringify({ name: '@strapi/strapi', version: '6.0.1' }),
+      '/mono/apps/cms/package.json': JSON.stringify({ dependencies: { '@strapi/strapi': 'workspace:*' } }),
+      '/mono/apps/old/package.json': JSON.stringify({ dependencies: { '@strapi/strapi': '^4.25.0 || ^6.0.0' } }),
+    });
+    const engine = createEngine(fs);
+    await engine.init(['/mono']);
+    const byRoot = Object.fromEntries(engine.getProjects().map((p) => [p.root, p]));
+    expect(byRoot['/mono/apps/cms']!.unsupportedVersion).toMatch(/^Strapi 6 isn't supported yet: DevKit reads this project as Strapi 5,/);
+    expect(byRoot['/mono/apps/old']!.version).toBe(4);
+    expect(byRoot['/mono/apps/old']!.unsupportedVersion).toMatch(/^Strapi 6 isn't supported yet: DevKit reads this project as Strapi 4,/);
+  });
 });

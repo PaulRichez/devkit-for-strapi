@@ -38,7 +38,8 @@ export function isStrapiPluginPackageJson(raw: string): boolean {
  * `@strapi/strapi`. Never assumes "workspace root = Strapi root". Prunes heavy
  * directories and the folders git ignores (a release build, a backup copy of the
  * app: every project twice otherwise), and bounds depth so large monorepos stay fast.
- * The folders passed are always walked: one git ignores is reached by passing it.
+ * The folders passed are always walked: one git ignores is reached by passing it. A
+ * folder holding its own repository (`.git`) is walked too, with its own rules only.
  */
 export async function discoverProjectRoots(fs: FileSystem, folders: string[]): Promise<string[]> {
   const roots: string[] = [];
@@ -52,7 +53,8 @@ export async function discoverProjectRoots(fs: FileSystem, folders: string[]): P
     } catch {
       return;
     }
-    let rules = inherited;
+    // A repository of its own (a clone inside another folder): git applies none of the outer rules there.
+    let rules = entries.some((e) => e.name === '.git') ? [] : inherited;
     if (entries.some((e) => e.type === FileType.File && e.name === '.gitignore')) {
       try {
         rules = [...inherited, ...parseGitignore(await fs.readFile(join(dir, '.gitignore')), dir)];
@@ -81,7 +83,7 @@ export async function discoverProjectRoots(fs: FileSystem, folders: string[]): P
     for (const e of entries) {
       if (e.type !== FileType.Directory || PRUNE.has(e.name)) continue;
       const sub = join(dir, e.name);
-      if (!isIgnoredDir(rules, sub)) await walk(sub, depth + 1, rules);
+      if (!isIgnoredDir(rules, sub) || (await fs.exists(join(sub, '.git')))) await walk(sub, depth + 1, rules);
     }
   };
 

@@ -35,7 +35,7 @@ import {
   updateReferencesForFile,
 } from './reference/references';
 import { resolveDefinition, resolveMember } from './resolve/resolver';
-import { forgetPluginReads, readInstalledPlugins } from './plugins/installed';
+import { findPackageDir, forgetPluginReads, readInstalledPlugins } from './plugins/installed';
 import { applyRewrites, clearInstalled, installedStamp, mergeInstalled } from './plugins/merge';
 import { forgetFileScans, inRewriteScope, type ProjectRewrites, rewritesKey, rewritesOfFile, scanProjectRewrites, unionRewrites } from './plugins/rewrites';
 import { diffSnapshots, extendSnapshot, takeSourceSnapshot } from './workspace/sourceSnapshot';
@@ -43,7 +43,7 @@ import { matchesAnyGlob } from './util/glob';
 import { withTimeout } from './util/timeout';
 import { asRecord, asString, safeParse } from './util/json';
 import { validateDocument } from './validate/validator';
-import { discoverProjectRoots, findStrapiRootUp } from './workspace/discovery';
+import { discoverProjectRoots, findStrapiRootUp, isStrapiPackageJson, isStrapiPluginPackageJson } from './workspace/discovery';
 import { detectVersion, unsupportedVersion } from './workspace/version';
 
 export interface StrapiEngine {
@@ -243,8 +243,9 @@ class Engine implements StrapiEngine {
 
   async addRoot(path: string): Promise<ProjectSummary[]> {
     const p = normalize(path);
-    // Already covered by a discovered project? Idempotent no-op.
-    if (this.projects.some((pr) => isPathInside(pr.root, p) || pr.root === p)) return this.getProjects();
+    // Already covered by a discovered project? Idempotent no-op — unless it is an app of its
+    // own the discovery passed over (in a folder git ignores, inside a plugin's repository).
+    if (this.projects.some((pr) => isPathInside(pr.root, p)) && !(await this.isUndiscoveredApp(p))) return this.getProjects();
 
     const stat = await this.fs.stat(p);
     const startDir = stat?.type === FileType.Directory ? p : dirname(p);
@@ -372,10 +373,12 @@ class Engine implements StrapiEngine {
     // Installed plugins and plugin rewrites are read in the background (loadInstalledInBackground):
     // until then, no plugin is verifiable.
     index.rewrittenPlugins = new Set(['*']);
-    // Exact installed version (package.json only declares a range) — best-effort.
+    // Exact installed version (package.json only declares a range), found as Node finds it
+    // (hoisted to a monorepo's root, say) — best-effort.
     let strapiVersion: string | undefined;
     try {
-      const installed = asRecord(safeParse(await this.fs.readFile(join(root, 'node_modules', '@strapi', 'strapi', 'package.json'))));
+      const dir = await findPackageDir(this.fs, root, '@strapi/strapi');
+      const installed = dir ? asRecord(safeParse(await this.fs.readFile(join(dir, 'package.json')))) : undefined;
       strapiVersion = installed ? asString(installed.version) : undefined;
     } catch {
       /* not installed / unreadable — the major from the declared range still stands */
@@ -395,13 +398,24 @@ class Engine implements StrapiEngine {
     };
   }
 
+  /** `dir` holds a Strapi app (not a plugin) that isn't one of the projects. */
+  private async isUndiscoveredApp(dir: string): Promise<boolean> {
+    if (this.projects.some((pr) => pr.root === dir)) return false;
+    try {
+      const raw = await this.fs.readFile(join(dir, 'package.json'));
+      return isStrapiPackageJson(raw) && !isStrapiPluginPackageJson(raw);
+    } catch {
+      return false;
+    }
+  }
+
   getProjects(): ProjectSummary[] {
     return this.projects.map((p) => ({
       root: p.root,
       version: p.version,
       ...(p.strapiVersion ? { strapiVersion: p.strapiVersion } : {}),
       ...(p.versionSignals.spec ? { declaredVersion: p.versionSignals.spec } : {}),
-      ...((u) => (u ? { unsupportedVersion: u } : {}))(unsupportedVersion(p.strapiVersion, p.versionSignals.packageMajor)),
+      ...((u) => (u ? { unsupportedVersion: u } : {}))(unsupportedVersion(p.strapiVersion, p.versionSignals.packageMajor, p.version)),
       counts: {
         contentTypes: p.index.contentTypes.size,
         components: p.index.components.size,

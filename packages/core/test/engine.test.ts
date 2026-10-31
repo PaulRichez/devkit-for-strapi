@@ -45,6 +45,23 @@ describe('engine (multi-project workspace)', () => {
     expect(again.length).toBe(2);
   });
 
+  it('addRoot reaches an app inside another project that discovery passed over (a folder git ignores)', async () => {
+    // A plugin's repository (itself a project: it declares @strapi/strapi) with a git-ignored playground app.
+    const engine = createEngine(
+      new MemoryFileSystem({
+        '/plugin/package.json': '{"name":"my-plugin","devDependencies":{"@strapi/strapi":"^5.0.0"}}',
+        '/plugin/.gitignore': 'playground\n',
+        '/plugin/playground/package.json': '{"dependencies":{"@strapi/strapi":"^5.0.0"}}',
+        '/plugin/playground/src/index.ts': 'export default {};',
+      }),
+    );
+    await engine.init(['/plugin']);
+    expect(engine.getProjects().map((p) => p.root)).toEqual(['/plugin']);
+    const added = await engine.addRoot('/plugin/playground');
+    expect(added.map((p) => p.root).sort()).toEqual(['/plugin', '/plugin/playground']);
+    expect((await engine.addRoot('/plugin/playground/src')).length).toBe(2); // inside it now: no change
+  });
+
   it('exposes the exact installed Strapi version + the declared range (#19)', async () => {
     const R = 'c:/ver';
     const engine = createEngine(

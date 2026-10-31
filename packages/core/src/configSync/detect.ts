@@ -15,6 +15,7 @@ import type { StrapiProject } from '../model/types';
 import { configModuleValue, envConfigFiles, findConfigFile } from '../plugins/config';
 import { StaticEvaluator, type Value } from '../plugins/evaluate';
 import { findPackageDir } from '../plugins/installed';
+import { escapeName, unescapeName } from './syncDir';
 
 export const CONFIG_SYNC_PACKAGE = 'strapi-plugin-config-sync';
 export const CONFIG_SYNC_PLUGIN = 'config-sync';
@@ -69,6 +70,26 @@ export interface ConfigSyncDetection {
   /** `config/env/<env>/plugins.*` files: they may change the options for that NODE_ENV. */
   envOverrides: string[];
   warnings: string[];
+}
+
+/**
+ * The `excludedConfig` entries written in one form only, for a name with `:` or `/`:
+ * config-sync tests the plain name (`::`) for its import, its export and the database
+ * side, and the escaped one (`##`, as in the file names) when it reads the sync files.
+ */
+function oneFormOnly(excluded: readonly string[]): string[] {
+  const covered = (key: string): boolean => excluded.some((opt) => key.startsWith(opt));
+  return excluded.flatMap((opt) => {
+    if (/[#$]/.test(opt)) {
+      const plain = unescapeName(opt);
+      return covered(plain) ? [] : [`excludedConfig \`${opt}\` is written as a file name: config-sync skips reading that file, but its import and export test the plain name, so they still handle the entry. Add \`${plain}\`.`];
+    }
+    if (/[:/]/.test(opt)) {
+      const file = escapeName(opt);
+      return covered(file) ? [] : [`excludedConfig \`${opt}\`: config-sync's import and export skip it, but the plugin reads the sync files by their escaped names, so the file stays in its diff. Add \`${file}\` to leave it out there too.`];
+    }
+    return [];
+  });
 }
 
 function safeJson(text: string): Record<string, unknown> | undefined {
@@ -191,7 +212,7 @@ async function readOptions(
         const how = kept.length
           ? `Strapi merges it with the plugin's defaults index by index, so ${kept.map((k) => `\`${k}\``).join(', ')} still ${kept.length === 1 ? 'applies' : 'apply'}`
           : "it replaces the plugin's defaults";
-        const gone = dropped.length ? `, but ${dropped.map((k) => `\`${k}\``).join(', ')} no longer ${dropped.length === 1 ? 'does' : 'do'}` : '';
+        const gone = dropped.length ? `${kept.length ? ', but' : ', so'} ${dropped.map((k) => `\`${k}\``).join(', ')} ${dropped.length === 1 ? 'is' : 'are'} no longer excluded` : '';
         const secrets = dropped.includes(GRANT_CONFIG)
           ? ` \`${GRANT_CONFIG}\` holds the login providers' settings, their OAuth client secrets included: an export writes them into config/sync, and into git with it. Keep it in excludedConfig.`
           : '';
@@ -202,6 +223,7 @@ async function readOptions(
       options.sources[key] = 'config';
     }
   }
+  warnings.push(...oneFormOnly(options.excludedConfig));
   if (cfg.open) warnings.push('The config-sync options may hold keys DevKit cannot see (a spread or a computed key).');
   return { found: true, options, disabled, ...at };
 }

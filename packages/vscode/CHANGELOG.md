@@ -54,12 +54,14 @@
 - With an entry open from the Database list — its database ↔ config/sync diff, or the
   one side it has — the editor's title bar has **Export from the Database** and
   **Import into the Database** for that entry, with the same confirmations as the list.
-  Edit the file in the diff, then import it.
+  Edit the file in the diff, then import it: unsaved changes are saved first (from the
+  list too), as the import reads the file on disk.
 
 **A Strapi newer than DevKit knows is said**
 
-- A project on Strapi 6 (installed, else declared) was read as Strapi 5 without a
-  word. It still is, and now says so: first among `project_info`'s notes (and
+- A project on Strapi 6 (installed — hoisted to a monorepo's root included — else
+  declared) was read as an earlier Strapi without a word. It still is, and now says so,
+  with the version it is read as: first among `project_info`'s notes (and
   `strapi.unsupported`), in `list_projects`, the Health view and the status bar's
   tooltip. Config Sync through the project's Strapi refuses it with its own error,
   instead of "install the project's dependencies".
@@ -69,13 +71,18 @@
 - Project discovery skips the folders your `.gitignore` files ignore: a release build or
   a backup copy of the app no longer shows every project twice (in the panel, the
   Config Sync view, the MCP's `list_projects`). A folder opened in the workspace, or
-  given to `add_project`, is still searched.
+  given to `add_project`, is still searched, and so is a folder holding a repository of
+  its own (a clone kept inside another), under its own `.gitignore` only.
 
 **Config Sync: excluded as the plugin excludes**
 
-- A sync file is shown `excluded` only when config-sync skips reading it: an
-  `excludedConfig` entry written with the plain name (`::`) excludes the database side
-  only, and the plugin still reads the file (it tests the escaped name, `##`).
+- A sync file is shown `excluded` when config-sync's import and export skip it: they
+  test the plain name (`::`). An `excludedConfig` entry written as the file name (`##`)
+  showed it excluded too, yet it only stops the plugin reading that file: the import
+  and the export still handle the entry.
+- An entry written in one form only is now said, with the other to add: `##` alone
+  for the reason above, `::` alone because the plugin still reads the file, and lists
+  it in its diff.
 - An `excludedConfig` as long as the plugin's defaults replaces them all: now said too
   (it was only said for a shorter list). When `core-store.plugin_users-permissions_grant`
   is no longer excluded, the warning says why it matters: it holds the login providers'
@@ -87,7 +94,8 @@
 - In a workspace without a Strapi project, the extension no longer offers its MCP
   server to the editor's agents (its tool definitions would ride along with every
   request for nothing) and shows no status bar item. Both appear as soon as a Strapi
-  project does, and go when the last one goes.
+  project does (once the first scan of the workspace ends), and go when the last one
+  goes.
 
 ## 0.2.3
 

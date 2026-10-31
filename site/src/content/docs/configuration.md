@@ -39,9 +39,12 @@ like `examples` matches a project in any folder of that name. A discovered proje
 whose path matches any pattern is ignored.
 
 The folders git ignores (your `.gitignore` files) are skipped without a setting: a
-release build or a backup copy of the app doesn't show every project twice. To work
-on a project inside one, open that folder itself (a workspace folder is always
-searched), or give its path to the MCP server's `add_project`.
+release build or a backup copy of the app doesn't show every project twice. A folder
+holding a repository of its own (a clone kept inside another folder) is searched,
+under its own `.gitignore` only. To work on a project inside an ignored folder, open
+that folder itself (a workspace folder is always searched), or give its path to the
+MCP server's `add_project` (in VS Code, the bundled server is offered once the
+workspace has a Strapi project).
 
 ## Commands
 

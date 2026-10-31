@@ -53,15 +53,15 @@ export const escapeName = (name: string): string => name.replace(/:/g, '#').repl
 export const syncFileName = (type: string, name: string): string => `${type}.${escapeName(name)}.json`;
 
 /**
- * Whether config-sync reads this sync file: its type isn't excluded, and `excludedConfig`
- * doesn't match its key as the plugin tests a file — with the name escaped as in the
- * file name (`core-store.plugin_content_manager_configuration_content_types##api##…`).
- * An option written with the plain name (`::`) excludes the database side only: the
- * plugin still reads the file.
+ * Whether config-sync's import and export handle this entry: its type isn't excluded,
+ * and `excludedConfig` doesn't match its key with the plain name, as they (and the
+ * database side) test it (`core-store.plugin_content_manager_configuration_content_types::api::…`).
+ * The plugin tests the escaped name (`##`) only when reading the sync files, for its
+ * diff: `detectConfigSync` warns about an option written in one form only.
  */
 export function isTracked(options: ConfigSyncOptions, type: string, name: string): boolean {
   if (options.excludedTypes.includes(type)) return false;
-  const key = `${type}.${escapeName(name)}`;
+  const key = `${type}.${name}`;
   return !options.excludedConfig.some((opt) => key.startsWith(opt));
 }
 

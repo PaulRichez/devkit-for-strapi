@@ -103,7 +103,7 @@ describe('config-sync, read from the files', () => {
     const { fs, project } = await load(FILES);
     const d = (await detectConfigSync(fs, project))!;
     expect(d.options.excludedConfig).toEqual(['core-store.plugin_upload_metrics', ...DEFAULT_EXCLUDED_CONFIG.slice(1)]);
-    expect(d.warnings.join(' ')).toContain('no longer does');
+    expect(d.warnings.join(' ')).toContain('but `core-store.plugin_users-permissions_grant` is no longer excluded.');
     expect(d.warnings.join(' ')).toContain('core-store.plugin_users-permissions_grant');
   });
 
@@ -190,30 +190,38 @@ describe('config-sync, the variants', () => {
     const five = "['core-store.plugin_upload_metrics', 'core-store.ee_information', 'core-store.strapi_content_types_schema', 'core-store.plugin_upload_api-folder', 'core-store.plugin_i18n']";
     const { fs, project } = await load(app(v5, { [`${ROOT}/config/plugins.js`]: `module.exports = { 'config-sync': { config: { excludedConfig: ${five} } } };` }));
     const w = (await detectConfigSync(fs, project))!.warnings.join(' ');
-    expect(w).toContain("it replaces the plugin's defaults, but `core-store.plugin_users-permissions_grant` no longer does");
+    expect(w).toContain("it replaces the plugin's defaults, so `core-store.plugin_users-permissions_grant` is no longer excluded.");
     expect(w).toContain('OAuth client secrets included: an export writes them into config/sync');
     const covered = await load(app(v5, { [`${ROOT}/config/plugins.js`]: `module.exports = { 'config-sync': { config: { excludedConfig: [${five.slice(1, -1)}, 'core-store.plugin_users-permissions'] } } };` }));
     expect((await detectConfigSync(covered.fs, covered.project))!.warnings.join(' ')).not.toContain('no longer');
   });
 
-  it('a file is excluded as the plugin reads it: by its escaped name — an option with the plain name excludes the database side only', async () => {
+  it('an entry is excluded as the import and the export test it (plain name); an option in one form only is said', async () => {
     const view = 'core-store.plugin_content_manager_configuration_content_types##api##article.article.json';
-    const plain = await load(
-      app(v5, {
-        [`${ROOT}/config/plugins.js`]: "module.exports = { 'config-sync': { config: { excludedConfig: ['core-store.plugin_content_manager_configuration_content_types::api::article'] } } };",
-        [`${ROOT}/config/sync/${view}`]: '{"key":"x"}',
-      }),
-    );
-    const d1 = (await detectConfigSync(plain.fs, plain.project))!;
-    expect((await readSyncDir(plain.fs, d1.syncDirPath, d1.options))[0]?.status).not.toBe('excluded');
-    const escaped = await load(
-      app(v5, {
-        [`${ROOT}/config/plugins.js`]: "module.exports = { 'config-sync': { config: { excludedConfig: ['core-store.plugin_content_manager_configuration_content_types##api##article'] } } };",
-        [`${ROOT}/config/sync/${view}`]: '{"key":"x"}',
-      }),
-    );
-    const d2 = (await detectConfigSync(escaped.fs, escaped.project))!;
-    expect((await readSyncDir(escaped.fs, d2.syncDirPath, d2.options))[0]?.status).toBe('excluded');
+    const withOptions = async (opts: string[]) => {
+      const { fs, project } = await load(
+        app(v5, {
+          [`${ROOT}/config/plugins.js`]: `module.exports = { 'config-sync': { config: { excludedConfig: ${JSON.stringify(opts)} } } };`,
+          [`${ROOT}/config/sync/${view}`]: '{"key":"x"}',
+        }),
+      );
+      const d = (await detectConfigSync(fs, project))!;
+      return { status: (await readSyncDir(fs, d.syncDirPath, d.options))[0]?.status, warnings: d.warnings.join(' ') };
+    };
+    const plain = 'core-store.plugin_content_manager_configuration_content_types::api::article';
+    const escaped = 'core-store.plugin_content_manager_configuration_content_types##api##article';
+    // `::`: the import and the export skip it — but the plugin still reads the file for its diff.
+    const p = await withOptions([plain]);
+    expect(p.status).toBe('excluded');
+    expect(p.warnings).toContain(`excludedConfig \`${plain}\`: config-sync's import and export skip it, but the plugin reads the sync files by their escaped names, so the file stays in its diff. Add \`${escaped}\``);
+    // `##`: only the reading of the file is skipped — the import and the export still handle it.
+    const e = await withOptions([escaped]);
+    expect(e.status).toBe('ok');
+    expect(e.warnings).toContain(`excludedConfig \`${escaped}\` is written as a file name: config-sync skips reading that file, but its import and export test the plain name, so they still handle the entry. Add \`${plain}\`.`);
+    // Both forms: excluded everywhere, nothing to say.
+    const both = await withOptions([plain, escaped]);
+    expect(both.status).toBe('excluded');
+    expect(both.warnings).not.toContain('excludedConfig `core-store.plugin_content');
   });
 
   it("says when it can't read the options, and assumes the plugin defaults", async () => {
