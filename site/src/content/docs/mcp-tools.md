@@ -3,7 +3,7 @@ title: MCP tool reference
 description: Every MCP tool an AI agent can call — read, analyse, and refactor a Strapi project with verified, real values.
 ---
 
-The MCP server exposes **37 stdio tools** (35 active + 2 deprecated aliases) so an AI agent works from your project's
+The MCP server exposes **35 stdio tools** so an AI agent works from your project's
 **real values** instead of grepping for them. Four layers: **Know** (read the truth),
 **Understand** (health & graph), **Config sync through your Strapi** (Pro), **Refactor**
 (plan → review → apply).
@@ -114,7 +114,6 @@ transactional, and **self-verifying** for broken refs afterward.
 | `apply_edits` | `planId` | ⚠️ **Writes.** Apply a reviewed plan. Verified against disk first; a changed file → nothing is written. |
 | `apply_rename` | `ref`, `newName`, `method?` | ⚠️ **Writes.** Convenience: plan + apply a rename in one call. Prefer `plan_rename_*` + `apply_edits` to review first. |
 
-> Deprecated aliases (kept for transition): `change_relation` → `plan_change_relation`, `rename_attribute` → `plan_rename_attribute`.
 
 **`configSync`** — with strapi-plugin-config-sync, the renames and moves
 (`plan_rename_*`, `plan_move*`, `plan_rename_attribute`, `extract_to_plugin`,

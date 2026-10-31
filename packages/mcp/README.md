@@ -20,7 +20,7 @@ failing build, in CI, or on Strapi v4.
 
 ## Tools
 
-35 stdio tools (plus 2 deprecated aliases) in four layers. The **read/analyse** tools are free except the data-model diagram; the **config-sync runtime** and **refactor** tools are Pro (without a licence they return a "Pro required" upsell).
+35 stdio tools in four layers. The **read/analyse** tools are free except the data-model diagram; the **config-sync runtime** and **refactor** tools are Pro (without a licence they return a "Pro required" upsell).
 
 **Know** — the project's truth *(free)*
 `server_info` (version, licence tier, which tools actually run) · `list_projects` · `project_info` (versions, plugins verified or not and why, counts, health) · `list_content_types` · `list_components` · `list_artifacts` · `get_schema` · `resolve` · `validate_reference` · `find_references` · `list_routes` (filters, and a route's pipeline in Strapi's order: middlewares, auth, policies, handler) · `refresh`

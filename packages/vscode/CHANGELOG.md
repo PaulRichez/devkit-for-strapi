@@ -33,6 +33,12 @@
   just its name, in Strapi's order (any other keeps its detail), and a step written in
   the route's own declaration doesn't repeat where that is. On foodadvisor, the
   pipeline of `GET /restaurants` goes from 8,387 characters to about 2,550.
+- Lighter tool definitions, which some clients send with every request: 33,374
+  characters instead of 47,973 (about 8,300 tokens instead of 12,000). The descriptions
+  say what each tool is for in fewer words; the server instructions keep the workflow.
+- The two aliases deprecated since the first release, `change_relation` and
+  `rename_attribute`, are gone: use `plan_change_relation` and `plan_rename_attribute`.
+  35 tools.
 
 ## 0.2.3
 

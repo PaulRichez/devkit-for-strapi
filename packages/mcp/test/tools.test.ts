@@ -43,13 +43,12 @@ describe('MCP tools (engine-backed handlers)', () => {
     registerTools(fakeServer, engine, fs, Promise.resolve());
   });
 
-  it('registers all thirty-seven tools (server_info + read + graph + diagram + config-sync (status, and the Pro diff/export/import) + move/extract/rename/schema/apply; schema helpers are plan_* + deprecated aliases)', () => {
+  it('registers all thirty-five tools (server_info + read + graph + diagram + config-sync (status, and the Pro diff/export/import) + move/extract/rename/schema/apply)', () => {
     expect([...handlers.keys()].sort()).toEqual(
       [
         'add_project',
         'apply_edits',
         'apply_rename',
-        'change_relation', // deprecated alias
         'config_sync_diff',
         'config_sync_export',
         'config_sync_import',
@@ -79,7 +78,6 @@ describe('MCP tools (engine-backed handlers)', () => {
         'plan_rename_method',
         'project_info',
         'refresh',
-        'rename_attribute', // deprecated alias
         'resolve',
         'server_info',
         'validate_reference',
@@ -265,10 +263,6 @@ describe('MCP tools (engine-backed handlers)', () => {
     expect(data.renamed).toBe(false);
   });
 
-  it.skip('keeps deprecated aliases working (change_relation → plan_change_relation)', async () => {
-    const data = await call('change_relation', { uid: 'api::page.page', field: 'title', newTarget: 'api::page.page', from: cmsARoot });
-    expect(data.changed).toBe(false); // same handler as plan_change_relation
-  });
 
   it.skip('create_plugin returns a contractual scaffold plan with warnings (J5)', async () => {
     const data = await call('create_plugin', { name: 'brand-new-plugin', from: cmsARoot });
@@ -385,8 +379,8 @@ describe('MCP Pro gate (licence)', () => {
     expect(data.applied).toBeUndefined();
   });
 
-  it('the deprecated change_relation alias is gated as well', async () => {
-    const data = await call('change_relation', { uid: 'api::page.page', field: 'x', newTarget: 'api::page.page', from: cmsA });
+  it('a schema helper is gated as well', async () => {
+    const data = await call('plan_change_relation', { uid: 'api::page.page', field: 'x', newTarget: 'api::page.page', from: cmsA });
     expect(data.proRequired).toBe(true);
   });
 

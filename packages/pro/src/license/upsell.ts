@@ -64,8 +64,6 @@ const TOOL_FEATURE: Record<string, string> = {
   extract_to_plugin: 'Extract to plugin',
   plan_change_relation: 'Schema edits',
   plan_rename_attribute: 'Schema edits',
-  change_relation: 'Schema edits', // deprecated alias of plan_change_relation
-  rename_attribute: 'Schema edits', // deprecated alias of plan_rename_attribute
   apply_edits: 'Safe apply',
   apply_rename: 'Safe apply',
   get_model_diagram: 'Relations diagram',

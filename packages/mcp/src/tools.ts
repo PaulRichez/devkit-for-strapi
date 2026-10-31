@@ -190,14 +190,8 @@ const tagFixture = <T extends { root: string }>(p: T): T & { fixture?: true } =>
 
 /** `from`/`project` selector shared by every project-scoped tool. */
 const selector = {
-  from: z
-    .string()
-    .optional()
-    .describe('A path inside the target project (e.g. the file you are editing). Disambiguates a multi-project workspace.'),
-  project: z
-    .string()
-    .optional()
-    .describe('A project name (its folder) or root path. Use when you have no file path in hand.'),
+  from: z.string().optional().describe('A path inside the project (e.g. the file you are editing), in a multi-project workspace.'),
+  project: z.string().optional().describe('A project name or root, when no path is at hand.'),
 };
 
 /** The refactor tools: whether the plan also updates the config/sync files the refactor concerns. */
@@ -206,7 +200,7 @@ const configSyncArg = {
     .boolean()
     .optional()
     .describe(
-      "With strapi-plugin-config-sync: also update the config/sync files this refactor concerns (roles' permissions, content-manager views) to the new names. Default: true (the strapiDevkit.configSync.followRefactors setting; DEVKIT_CONFIG_SYNC_FOLLOW_REFACTORS=0 for a standalone server). Pass false when config/sync is not yours to change here (exported from another environment). The plan's warnings say which sync files it updates, or leaves with the old names.",
+      "With config-sync: also update the config/sync files this refactor concerns (roles' permissions, content-manager views). Default: the user's setting, true unless turned off. false when config/sync isn't yours to change here. The warnings say which files.",
     ),
 };
 
@@ -392,14 +386,14 @@ export function registerTools(
 
   /** What a `ref` may be (shared by every tool taking one). */
   const REF_HELP =
-    'A Strapi reference: a content-type or component UID (api::article.article, shared.seo), a service / controller / policy / middleware ref (api::article.article, plugin::users-permissions.user, global::is-owner), or a route handler (api::article.article.find). `ref#method` targets one method.';
+    'A Strapi ref: a content-type or component UID (api::article.article, shared.seo), a service/controller/policy/middleware ref (plugin::users-permissions.user, global::is-owner) or a route handler (api::article.article.find); `ref#method` for one method.';
 
   reg(
     'server_info',
     {
       title: 'DevKit version, licence tier and which tools actually run',
       description:
-        'Identify the running DevKit server: its version, whether a Pro licence is active, how many tools are genuinely callable, the roots being indexed, and how current the index is (`freshness`). `tools/list` advertises the Pro tools too, but without a licence they return an upsell instead of running — this reports which ones will really work, so an agent stops guessing. Also the only way to name a version in a bug report: the version lives in the MCP handshake, which the client consumes and does not always display.',
+        'The running DevKit server: its version (the one to name in a bug report), the licence tier, which tools really run (without a licence the Pro tools answer an upsell), the indexed roots and how current the index is (`freshness`).',
     },
     async () => {
       const licensed = await isLicensed();
@@ -444,7 +438,7 @@ export function registerTools(
     {
       title: 'Describe one Strapi project (and why a plugin ref may be unverified)',
       description:
-        "Everything about one project before acting on it: Strapi version (installed / declared), TypeScript or JavaScript, package manager, API prefix, counts (APIs, content-types by kind, components, services, controllers, policies, middlewares, routes), every local and installed plugin with whether DevKit verifies refs into it and, if not, why (no node_modules, rewritten at boot by a project file, a src/extensions override, Enterprise-only code…), health (broken refs, refs into unverified plugins) and freshness. Call it to orient yourself in an unknown project, or when a plugin ref comes back `external`.",
+        "One project in full: Strapi version, TS or JS, package manager, API prefix, counts, every local and installed plugin with whether DevKit verifies refs into it (and if not, why), health and freshness. Call it to orient yourself, or when a plugin ref comes back `external`.",
       inputSchema: { ...selector },
     },
     async (args) => {
@@ -464,7 +458,7 @@ export function registerTools(
     {
       title: 'Register a Strapi project by path',
       description:
-        'Locate and index a Strapi project on demand from an ABSOLUTE path — either the project root, or any file/folder inside it (the server walks up to the project root; a folder is also scanned downward for monorepos). Use this when a tool returns `noProject`. Idempotent. Returns the projects now known (use a name/root with `from`/`project`).',
+        'Index a Strapi project from an ABSOLUTE path: its root or any file/folder inside it (a folder is also scanned downward, for monorepos). Use it when a tool returns `noProject`. Idempotent; returns the projects now known.',
       inputSchema: {
         path: z.string().describe('Absolute path to the Strapi project root, or to any file/folder inside it.'),
       },
@@ -492,9 +486,9 @@ export function registerTools(
     {
       title: 'Re-index projects from disk (full rescan)',
       description:
-        "Re-scan every discovered Strapi project from disk and rebuild the index from scratch. Rarely needed: before every call the server already compares the project files with the disk and re-indexes what was created, edited or deleted outside this session (manual edits, git checkout/pull, another tool), and re-reads installed plugins after an install. Use it to discover a project added since startup, after external edits on a project whose `freshness.diskTracking` is 'off' (too many files), or with `cold: true` to also drop the cached plugin reads and read every installed plugin from node_modules again (slower). Returns the projects with their `freshness`.",
+        "Rescan every project from disk and rebuild the index. Rarely needed: each call already re-indexes what changed on disk. For a project added since startup, or edits made outside on a project whose `freshness.diskTracking` is 'off'.",
       inputSchema: {
-        cold: z.boolean().optional().describe('Also drop the cached plugin reads: every installed plugin is read again from node_modules (default false).'),
+        cold: z.boolean().optional().describe('Also read every installed plugin again, ignoring the cache (slower; default false).'),
       },
     },
     async (args) => {
@@ -558,20 +552,18 @@ export function registerTools(
     {
       title: 'Data model diagram (Mermaid)',
       description:
-        "The project's data model as a Mermaid `erDiagram`: content-types (and, optionally, components) with their fields, one line per association (a bidirectional relation's two fields as one) with its cardinalities, media fields linked to the upload plugin's File, and the plugin types they link to. Read from the schemas, not from a running Strapi. Paste it in a README, a doc or an issue; `focus` narrows it to some types and their neighbours. With `strapiFields`, adds what Strapi gives every content-type (createdAt, updatedAt, publishedAt, createdBy/updatedBy → admin::user).",
+        "The data model as a Mermaid `erDiagram`, read from the schemas: content-types (optionally components) with their fields, one line per association with its cardinalities, media and the plugin types they link to. For a README, a doc or an issue.",
       inputSchema: {
         ...selector,
         components: z.boolean().optional().describe('Include components (default false).'),
-        allPlugins: z.boolean().optional().describe('Every installed plugin type, not only those the project links to (default false).'),
+        allPlugins: z.boolean().optional().describe('Every installed plugin type, not only those linked to (default false).'),
         media: z.boolean().optional().describe("Media fields → the upload plugin's File (default true)."),
-        strapiFields: z.boolean().optional().describe('The fields Strapi adds to every content-type (default false).'),
+        strapiFields: z.boolean().optional().describe('The fields Strapi adds: createdAt, updatedAt, publishedAt, createdBy/updatedBy (default false).'),
         focus: z.array(z.string()).optional().describe('Only these UIDs and the types they link to.'),
         hideCustomFields: z
           .union([z.boolean(), z.array(z.string())])
           .optional()
-          .describe(
-            'Leave out custom fields: true for all, or the custom-field names to leave out (e.g. a layout plugin\'s separators, listed under `customFields` in the answer). None by default: a custom field has a column like any other.',
-          ),
+          .describe('Leave out custom fields: true for all, or their names (listed under `customFields` in the answer). Default: none.'),
       },
     },
     async (args) => {
@@ -600,7 +592,7 @@ export function registerTools(
     {
       title: 'Get a content-type / component schema',
       description:
-        'Return the real attributes (fields, relations, components) of a content-type or component UID. Use this instead of guessing field names. Pass `uids` to fetch several at once.',
+        'The real attributes (fields, relations, components) of a content-type or component: use it instead of guessing field names.',
       inputSchema: {
         uid: z.string().optional().describe('A content-type or component UID.'),
         uids: z.array(z.string()).optional().describe('Several UIDs to fetch in one call.'),
@@ -624,7 +616,7 @@ export function registerTools(
     {
       title: 'Resolve a reference to its file(s)',
       description:
-        'Resolve a Strapi reference (UID / service / controller / policy / middleware / route handler) to its defining file(s), tagged by kind — installed plugins included (their files in node_modules).',
+        'The file(s) defining a Strapi ref, tagged by kind — installed plugins included (in node_modules).',
       inputSchema: { ref: z.string().describe(REF_HELP), ...selector },
     },
     async (args) => {
@@ -639,13 +631,13 @@ export function registerTools(
     {
       title: 'Validate a Strapi reference',
       description:
-        'Check whether a Strapi reference is real in the project. Returns valid | unknown (+ didYouMean) | external: a plugin DevKit cannot verify — not installed, not read completely (code that only runs in Strapi), rewritten at boot by the project, registered by a helper DevKit cannot follow, or still being read just after startup; project_info says which and why. Installed plugins DevKit reads completely are checked like your own code. Names are checked as Strapi registers them (an API file `hasAccess.js` is `has-access`; a plugin artifact is the key its index exports). `kind` checks one kind only — the verdict list_broken_refs and the editor use. Call this before writing a magic string.',
+        'Call this before writing a magic string: is this Strapi ref real in the project, as Strapi registers names (an API file `hasAccess.js` is `has-access`)? valid | unknown (+ didYouMean) | external: in a plugin DevKit cannot verify (project_info says why).',
       inputSchema: {
         ref: z.string().describe(REF_HELP),
         kind: z
           .enum(['content-type', 'component', 'service', 'controller', 'policy', 'middleware', 'method'])
           .optional()
-          .describe('Check the ref as this kind only (`method`: the service/controller a handler or a method call goes through).'),
+          .describe('Check it as this kind only (`method`: the service/controller a handler or method call goes through).'),
         ...selector,
       },
     },
@@ -661,13 +653,13 @@ export function registerTools(
     {
       title: 'Find references to a Strapi entity',
       description:
-        'List every call-site that references a UID / service / controller / handler (or `ref#method`) in the project\'s own code (src/, config/ and database/migrations; node_modules and build output are not searched) — a UID passed through a `const` counts at the call, a UID written as a plain value (a registry map, a config entry) counts as `[literal]`, a migration in a subfolder (never run) is marked archived. Returns the total first, then a page of references; `unresolvedCalls` lists the Strapi calls whose UID DevKit cannot read that may reach it too. Compact by default (`path:line:col [via]  snippet`, 1-based) — pass `compact: false` for full objects. Pass `refs` to query several at once. See coverage for the call forms indexed.',
+        'Every call-site of a ref (or `ref#method`) in the project\'s own code (src/, config/, database/migrations): the total, then a page of `path:line:col [via]  snippet` lines. A UID written as a plain value counts as `[literal]`; `unresolvedCalls` are the Strapi calls whose UID DevKit cannot read, which may reach it too.',
       inputSchema: {
         ref: z.string().optional().describe(REF_HELP),
-        refs: z.array(z.string()).optional().describe('Several refs to query in one call (batch).'),
-        compact: z.boolean().optional().describe('Compact one-line-per-hit output (default true). false → full objects.'),
-        limit: z.number().int().positive().optional().describe('Max references returned per ref (default 50).'),
-        offset: z.number().int().nonnegative().optional().describe('Skip this many references (pagination).'),
+        refs: z.array(z.string()).optional().describe('Several refs at once.'),
+        compact: z.boolean().optional().describe('One line per hit (default true); false for full objects.'),
+        limit: z.number().int().positive().optional().describe('Max references per ref (default 50).'),
+        offset: z.number().int().nonnegative().optional().describe('Skip this many (pagination).'),
         ...selector,
       },
     },
@@ -704,16 +696,14 @@ export function registerTools(
     {
       title: 'List HTTP routes',
       description:
-        'List a project\'s HTTP route table: method, path, mounted `fullPath` (API prefix included), handler, policies, middlewares, `public` (auth: false), `auth` when customized, and where each route is declared (`filePath`/`offset`). Covers the project\'s explicit routes, the auto-CRUD routes synthesized from createCoreRouter, and the routes local and installed plugins declare (`origin`), read from node_modules without booting Strapi; a local plugin whose routes are built by code DevKit cannot read comes in a block of its own (`unreadRoutes`: the file and line to read). Admin-panel routes are left out unless `admin: true`. Filter with `method`, `path` (a pattern, a part of it, or a concrete URL such as `/api/articles/12`) and `handler`. With `pipeline: true` (needs a filter, at most ' +
-        PIPELINE_MAX +
-        ' routes), each route also gets what a request goes through, in Strapi\'s order — the `config/middlewares` stack (once, in `globalMiddlewares`: a name alone is `ok`), auth, policies, route middlewares, handler — each step with a status: `ok`, `not-found-by-strapi` (it exists under another name Strapi won\'t try: Strapi throws at startup), `unknown`, `unverified`, `unread` or `inline`. Use it to explain a 401/403, or a startup error about a policy or middleware.',
+        "The HTTP route table — the project's routes, createCoreRouter's auto-CRUD and the plugins' (`origin`) — with method, mounted `fullPath`, handler, policies, middlewares, auth and where each is declared. With `pipeline: true`: what a request goes through, in Strapi's order, each step's status (`not-found-by-strapi`: Strapi throws at startup). Use it to explain a 401/403 or a startup error about a policy or middleware.",
       inputSchema: {
         ...selector,
-        plugins: z.boolean().optional().describe('Include routes declared by local and installed plugins (default true).'),
-        admin: z.boolean().optional().describe('Include admin-panel (`type: "admin"`) routes (default false).'),
-        method: z.string().optional().describe('Only routes of this HTTP method (e.g. `GET`).'),
-        path: z.string().optional().describe('Only routes whose path matches: the pattern (`/api/articles/:id`), a part of it, or a concrete URL it serves (`/api/articles/12`).'),
-        handler: z.string().optional().describe('Only routes whose handler (qualified, e.g. `api::article.article.find`) contains this.'),
+        plugins: z.boolean().optional().describe("Include the plugins' routes (default true)."),
+        admin: z.boolean().optional().describe('Include admin-panel routes (default false).'),
+        method: z.string().optional().describe('Only this HTTP method.'),
+        path: z.string().optional().describe('Only routes matching this pattern, a part of it, or a concrete URL (`/api/articles/12`).'),
+        handler: z.string().optional().describe('Only handlers containing this (`api::article.article.find`).'),
         pipeline: z.boolean().optional().describe(`Add each route's pipeline (needs method, path or handler; at most ${PIPELINE_MAX} routes).`),
       },
     },
@@ -769,9 +759,9 @@ export function registerTools(
     {
       title: 'Find unused Strapi entities/methods',
       description:
-        "List definitions with 0 Strapi references — service/controller methods never called via strapi.service()/route handlers, plus unused content-types, components, services, policies and middlewares. Static: counts Strapi refs only, so a method called **directly in TS** still appears — verify before deleting. `onlyArchivedCallers`: its only callers are migrations Strapi never runs; `requiredByPath`: live code loads its file by path (`require('../services/x')`), so its module is used. Use `file` for one file (else the whole app), `kinds` to narrow.",
+        "Definitions no Strapi ref reaches: methods, content-types, components, services, policies, middlewares. Only Strapi refs count, so a method called directly in TS still appears — verify before deleting. `onlyArchivedCallers`: only called by migrations Strapi never runs; `requiredByPath`: its file is loaded by path, so the module is used.",
       inputSchema: {
-        file: z.string().optional().describe('Restrict to one file; omit for the whole app.'),
+        file: z.string().optional().describe('Only this file (default: the whole app).'),
         kinds: z
           .array(z.enum(['method', 'content-type', 'component', 'service', 'policy', 'middleware']))
           .optional()
@@ -816,7 +806,7 @@ export function registerTools(
     {
       title: 'List indexed call forms',
       description:
-        'List the Strapi call forms the engine indexes (with a `via` tag + example) and the notable ones it does NOT index yet (`indexed: false`). Use this to know whether find_references/list_unused can be trusted for a given pattern, instead of assuming completeness.',
+        'The Strapi call forms DevKit indexes (`via` tag + example) and those it does not (`indexed: false`): whether find_references/list_unused can be trusted for a pattern.',
     },
     async () => {
       await ready;
@@ -829,7 +819,7 @@ export function registerTools(
     {
       title: 'Find references that point at nothing',
       description:
-        'List magic strings that resolve to no real entity — the inverse of list_unused, and the safety net after a move/rename (target: 0). Skips unverifiable external-plugin refs. Use after apply_edits to confirm nothing was left dangling.',
+        'Magic strings that point at nothing (refs into plugins DevKit cannot verify are skipped). After apply_edits, it should return none.',
       inputSchema: { ...selector },
     },
     async (args) => {
@@ -853,10 +843,10 @@ export function registerTools(
     {
       title: 'config-sync: its options and the files of its sync directory',
       description:
-        "For a project using strapi-plugin-config-sync, read from the files (Strapi is not started, the database is not read): the plugin's version, its options and where each comes from (a short `excludedConfig` is merged index by index with the plugin's defaults, as Strapi does: the warnings say which defaults are no longer excluded), the sync directory, and its files by status — `ok`, `excluded` by the options, `invalid` (not valid JSON: config-sync can't read it), or of a type not registered here. `files: true` lists them with readable names (\"View — Article\", \"Role Public\"); `key` returns one file's content. What the database holds is not known here.",
+        "strapi-plugin-config-sync, from the files only (no database): its version, its options and where each comes from (the warnings say which default exclusions a short `excludedConfig` drops), the sync directory and its files by status — `ok`, `excluded`, `invalid` (not JSON), or of a type not registered here.",
       inputSchema: {
-        key: z.string().max(400).optional().describe('One entry, `<type>.<name>`: user-role.public, core-store.plugin_content_manager_configuration_content_types::api::article.article.'),
-        files: z.boolean().optional().describe('List every file (key, readable label, status). Default: counts by status.'),
+        key: z.string().max(400).optional().describe('One file\'s content, by `<type>.<name>` (user-role.public).'),
+        files: z.boolean().optional().describe('List every file with a readable name and status (default: counts).'),
         ...selector,
       },
     },
@@ -998,17 +988,17 @@ export function registerTools(
     };
   };
   const RUNS_PROJECT =
-    "It runs the project's code: Strapi is loaded the way config-sync's own CLI does (no server, no port, no admin account), and a load does what a start of `strapi develop` does to the database (schema sync, pending migrations) — so only on a local development database: a remote one, a Strapi 4 database under Strapi 5 code, or a missing SQLite file are refused before Strapi's bootstrap (where it writes to the database).";
+    "It loads the project's Strapi the way config-sync's CLI does, which writes to the database as a `strapi develop` start does (schema sync, migrations): a local development database only — a remote one, or a Strapi 4 database under Strapi 5 code, is refused first.";
   const envArg = z.string().max(40).optional().describe('NODE_ENV for the run (default development).');
 
   reg(
     'config_sync_diff',
     {
       title: 'config-sync: the real diff between config/sync and the database',
-      description: `The diff config-sync's admin page shows, from the real plugin: each entry that differs between config/sync and the database — \`different\`, \`only-in-db\`, \`only-in-sync-dir\` — with what differs in a few words, and its \`likelyDirection\` (import | export | unknown) told from the file's git history: the database holding a past version of the file or another branch's → import; something git never had → export (changed in the admin); \`why\` gives the evidence (\`dbMatches\` the commit, with \`key\`). It includes what a start of Strapi changes on its own (a new field in a content-manager view, the super-admin's permissions…): after changing a schema, a controller or a route, these are the entries to export and commit with the code. With \`key\`, one entry: every difference, and both sides in full when they fit in one answer. ${RUNS_PROJECT} Takes a few seconds.`,
+      description: `The diff config-sync's admin page shows, from the real plugin: each entry that differs between config/sync and the database (\`different\`, \`only-in-db\`, \`only-in-sync-dir\`), what differs in a few words, and its \`likelyDirection\` (import | export | unknown) from the file's git history. It includes what a Strapi start changes by itself: after changing a schema, a controller or a route, export those entries and commit them with the code. ${RUNS_PROJECT} A few seconds.`,
       inputSchema: {
         key: z.string().max(400).optional().describe('One entry, `<type>.<name>`: every difference, and both sides when they fit.'),
-        type: z.string().max(200).optional().describe('Only the entries of one type (`admin-role`, `user-role`, `core-store`, `plugin_content_manager_configuration`…).'),
+        type: z.string().max(200).optional().describe('Only one type (`admin-role`, `user-role`, `core-store`…).'),
         env: envArg,
         ...selector,
       },
@@ -1073,7 +1063,7 @@ export function registerTools(
     'config_sync_export',
     {
       title: 'config-sync: export entries from the database into config/sync',
-      description: `Write entries from the database into config/sync with the plugin's own export — the exact form config-sync compares, so the files stop showing as different. Only entries that differ are exported; \`keys\` narrows it (default: every difference). An entry only in config/sync has its file deleted. Commit the files with the code that caused them. ${RUNS_PROJECT}`,
+      description: `Write entries from the database into config/sync with the plugin's own export, in the exact form config-sync compares. Only entries that differ; one only in config/sync has its file deleted. Commit the files with the code that caused them. ${RUNS_PROJECT}`,
       inputSchema: { keys: z.array(z.string().max(400)).max(500).optional().describe('The entries to export (default: every difference).'), env: envArg, ...selector },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
@@ -1084,7 +1074,7 @@ export function registerTools(
     'config_sync_import',
     {
       title: 'config-sync: import entries from config/sync into the database',
-      description: `Apply entries of config/sync to the database with the plugin's own import — a role's permissions, a content-manager view, a setting. \`keys\` is required: never everything at once. An entry only in the database is deleted from it. Afterwards, the entries still different are exported back (\`reexport\`, default true): the database's own form of what was just imported (a generated documentId…), so the diff converges. Refused with NODE_ENV=production. ${RUNS_PROJECT}`,
+      description: `Apply config/sync entries to the database with the plugin's own import (a role, a content-manager view, a setting). \`keys\` is required, never everything; an entry only in the database is deleted from it. The entries still different afterwards are exported back (\`reexport\`), so the diff converges. Refused with NODE_ENV=production. ${RUNS_PROJECT}`,
       inputSchema: {
         keys: z.array(z.string().max(400)).min(1).max(500).describe('The entries to import, `<type>.<name>`.'),
         reexport: z.boolean().optional().describe('Export back the entries still different afterwards (default true).'),
@@ -1101,7 +1091,7 @@ export function registerTools(
     {
       title: 'Find relation-field usages',
       description:
-        "Find where a content-type's relation fields are used by name in queries (populate / filters / where), nested levels included (`populate: { a: { populate: { b } } }`, `populate: ['a.b']`, `filters: { a: { b: … } }`, each level through the relation's target). Pass `field` for one relation, omit it for all. Indispensable before retargeting or removing a relation. Only real relation fields are matched — see coverage.",
+        "Where a content-type's relation fields are used by name in queries (populate, filters, where), nested levels included. Before retargeting or removing a relation.",
       inputSchema: {
         uid: z.string().describe('A content-type UID, e.g. api::article.article'),
         field: z.string().optional().describe('A relation field name; omit for all relations.'),
@@ -1127,7 +1117,7 @@ export function registerTools(
     {
       title: 'List refs by glob',
       description:
-        "List entity refs matching a glob — e.g. `plugin::billing.*` for a plugin's whole surface, `api::*` for all APIs, `*` for everything. Only `*` is special. Each result carries the kinds it resolves to.",
+        'Refs matching a glob (`plugin::billing.*`, `api::*`, `*`; only `*` is special), each with the kinds it resolves to.',
       inputSchema: { pattern: z.string().max(200).describe('Glob, e.g. plugin::billing.* or api::*'), ...selector },
     },
     async (args) => {
@@ -1142,10 +1132,10 @@ export function registerTools(
     {
       title: 'What a ref uses (outgoing edges)',
       description:
-        'List the refs that `ref` depends on — relations in its schema, services/controllers it calls, etc. Pass `transitive: true` to follow the chain. Half of the cut-analysis for modularization.',
+        'The refs `ref` uses: relations in its schema, services/controllers it calls…',
       inputSchema: {
         ref: z.string().describe(REF_HELP),
-        transitive: z.boolean().optional().describe('Follow dependencies recursively (default false).'),
+        transitive: z.boolean().optional().describe('Follow the chain (default false).'),
         ...selector,
       },
     },
@@ -1164,10 +1154,10 @@ export function registerTools(
     {
       title: 'What uses a ref (incoming edges)',
       description:
-        'List the refs that depend on `ref` — what would break if it moved or changed. Pass `transitive: true` to follow the chain. The other half of cut-analysis: which edges become cross-namespace if you extract a set.',
+        'The refs that use `ref`: what would break if it moved or changed.',
       inputSchema: {
         ref: z.string().describe(REF_HELP),
-        transitive: z.boolean().optional().describe('Follow dependents recursively (default false).'),
+        transitive: z.boolean().optional().describe('Follow the chain (default false).'),
         ...selector,
       },
     },
@@ -1186,11 +1176,11 @@ export function registerTools(
     {
       title: 'Plan a service/controller method rename (dry-run)',
       description:
-        'Compute the exact edits to rename a service/controller METHOD — its declaration, every `strapi.service(...).method()` call-site, and (for controllers) the action segment of route handlers. Dry-run: returns a plan (text edits + `planId`, + `warnings` when route permissions stored in the database are affected), writes nothing. Review, then apply with `apply_edits` (pass the `planId`).',
+        'Plan renaming a service/controller method: its declaration, every call-site and, for a controller, the route handlers. Writes nothing: review the plan, then `apply_edits` its `planId`.',
       inputSchema: {
-        ref: z.string().describe('The owning service/controller ref, e.g. api::page.notifier'),
-        method: z.string().describe('The current method name, e.g. notify'),
-        newName: z.string().describe('The new method name, e.g. announce'),
+        ref: z.string().describe('The service/controller ref (api::page.notifier).'),
+        method: z.string().describe('The current method name.'),
+        newName: z.string().describe('The new method name.'),
         ...configSyncArg,
         ...selector,
       },
@@ -1216,10 +1206,10 @@ export function registerTools(
     {
       title: 'Plan an entity rename (dry-run)',
       description:
-        'Compute the exact edits to rename a content-type / service / controller / policy / middleware / component: every magic-string call-site and route handler, plus the file/folder renames. Dry-run: returns a plan (edits + `planId`, + `warnings` listing the UIDs Strapi also stores in the database — permissions, media links, components — which the plan does not migrate; with config-sync, the plan also updates the sync files of those permissions and views unless `configSync: false`, and says which), writes nothing. Review, then apply with `apply_edits` (pass the `planId`).',
+        'Plan renaming a content-type, component, service, controller, policy or middleware: every call-site and route handler, and the files. The `warnings` list the UIDs Strapi also stores in the database, which the plan does not migrate. Writes nothing: review, then `apply_edits` its `planId`.',
       inputSchema: {
-        ref: z.string().describe('The entity UID/ref, e.g. api::product.product or shared.seo'),
-        newName: z.string().describe("The UID's new last segment, e.g. item (api::product.product → api::product.item, shared.seo → shared.item)"),
+        ref: z.string().describe('The UID or ref (api::product.product, shared.seo).'),
+        newName: z.string().describe("The new last segment: item makes api::product.product api::product.item."),
         ...configSyncArg,
         ...selector,
       },
@@ -1245,10 +1235,10 @@ export function registerTools(
     {
       title: 'Plan moving an artifact or content-type to another namespace (dry-run)',
       description:
-        'Compute the edits to move to another namespace (e.g. plugin::dst): a service/controller/policy/middleware, OR a content-type (its whole resource — content-type + service + controller + routes move together, relation `target`s repointed). Rewrites every call-site (full-UID forms, `strapi.plugin(...)` chains, route handlers) and relocates the files. Dry-run: returns a plan (+ `planId`, + `warnings`, incl. plugin content-type registration to verify), writes nothing. Apply with `apply_edits`. Refused all-or-nothing if unsafe.',
+        'Plan moving a service/controller/policy/middleware, or a content-type with its whole resource (service, controller, routes; relation targets repointed), to another namespace: every call-site rewritten, the files relocated. Refused whole if unsafe. Writes nothing: review, then `apply_edits`.',
       inputSchema: {
-        ref: z.string().describe('An artifact ref (plugin::src.helper) or a content-type UID (api::x.x)'),
-        toNamespace: z.string().describe('Destination namespace: plugin::dst or api::foo'),
+        ref: z.string().describe('An artifact ref (plugin::src.helper) or a content-type UID.'),
+        toNamespace: z.string().describe('plugin::dst or api::foo.'),
         ...configSyncArg,
         ...selector,
       },
@@ -1267,10 +1257,10 @@ export function registerTools(
     {
       title: 'Plan moving a set of artifacts/content-types to one namespace (dry-run)',
       description:
-        'Like plan_move but for several refs at once (artifacts and/or content-types), to the same destination — one coherent plan so the cluster\'s internal refs stay consistent in a single pass. Dry-run (+ `planId`, + `warnings`); apply with `apply_edits`. Refused all-or-nothing on any unsafe spec.',
+        'plan_move for several refs to one namespace, in one plan, so the refs between them stay right. Refused whole if any is unsafe.',
       inputSchema: {
-        refs: z.array(z.string()).describe('The artifact/content-type refs to move together.'),
-        toNamespace: z.string().describe('Destination namespace for all of them: plugin::dst or api::foo'),
+        refs: z.array(z.string()).describe('The refs to move together.'),
+        toNamespace: z.string().describe('plugin::dst or api::foo.'),
         ...configSyncArg,
         ...selector,
       },
@@ -1289,9 +1279,9 @@ export function registerTools(
     {
       title: 'Scaffold a new local plugin (dry-run)',
       description:
-        'Plan the files for a new local Strapi plugin (`src/plugins/<name>/package.json` + a `strapi-server.js` that registers its content-types, routes, services, controllers, policies and middlewares by folder), and enable it in `config/plugins` (created if missing, an entry inserted when its export is a literal object, else a warning says what to add). Dry-run (+ `planId`, + `warnings` to verify the server entry for your Strapi version); apply with `apply_edits`. Use extract_to_plugin to scaffold AND move artifacts in one plan.',
+        'Plan a new local plugin (package.json and a strapi-server.js that registers its folders) and its entry in `config/plugins` (else a warning says what to add). Writes nothing: review, then `apply_edits`.',
       inputSchema: {
-        name: z.string().describe('Plugin name, kebab-case, e.g. billing.'),
+        name: z.string().describe('Plugin name, kebab-case.'),
         ...selector,
       },
     },
@@ -1310,9 +1300,9 @@ export function registerTools(
     {
       title: 'Extract artifacts into a new plugin (dry-run)',
       description:
-        'Scaffold a new local plugin AND move a set of services/controllers/policies/middlewares into it, in ONE plan: plugin files created, every call-site rewritten, files relocated. Dry-run (+ `planId`, + `warnings`); apply with `apply_edits`. Refused all-or-nothing if scaffold or move is unsafe. The one-pass extraction primitive.',
+        'create_plugin and plan_move in one plan: a new local plugin, and these services/controllers/policies/middlewares moved into it. Refused whole if unsafe.',
       inputSchema: {
-        refs: z.array(z.string()).describe('Artifact refs to extract together.'),
+        refs: z.array(z.string()).describe('The refs to move into it.'),
         name: z.string().describe('New plugin name, kebab-case.'),
         ...configSyncArg,
         ...selector,
@@ -1344,53 +1334,58 @@ export function registerTools(
   );
 
   // Schema helpers are dry-runs (return a plan, write nothing) → `plan_` prefix so
-  // the permission classifier treats them like the other planners (only apply_edits
-  // writes). Old names kept as deprecated aliases for the transition.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const changeRelationHandler = async (args: any): Promise<CallToolResult> => {
-    await ready;
-    await engine.whenReferencesReady();
-    const p = pick(engine, args, roots());
-    if ('result' in p) return p.result;
-    return schemaResult(p.project, await planChangeRelation(fs, p.project, args.uid, args.field, args.newTarget), 'changed');
-  };
-  const changeRelationSchema = {
-    uid: z.string().describe('The content-type UID, e.g. api::article.article'),
-    field: z.string().describe('The relation attribute name, e.g. author'),
-    newTarget: z.string().describe('The new target content-type UID, e.g. api::user.user'),
-    ...selector,
-  };
-  const changeRelationDesc =
-    "Change the `target` of a content-type's relation field to another content-type, editing schema.json precisely. Dry-run: returns a plan (+ `planId`), writes nothing; apply with `apply_edits`. Refused if the field isn't a relation or the new target is unknown (external plugin → warning); a bidirectional relation warns about its now-orphaned inverse field.";
-  reg('plan_change_relation', { title: 'Plan retargeting a relation field (dry-run)', description: changeRelationDesc, inputSchema: changeRelationSchema }, changeRelationHandler);
-  reg('change_relation', { title: '[deprecated → plan_change_relation]', description: `Deprecated alias of plan_change_relation. ${changeRelationDesc}`, inputSchema: changeRelationSchema }, changeRelationHandler);
+  // the permission classifier treats them like the other planners (only apply_edits writes).
+  reg(
+    'plan_change_relation',
+    {
+      title: 'Plan retargeting a relation field (dry-run)',
+      description:
+        "Plan changing the `target` of a content-type's relation field in schema.json. Refused if the field isn't a relation or the target is unknown; warns about a bidirectional relation's orphaned inverse. Writes nothing: review, then `apply_edits`.",
+      inputSchema: {
+        uid: z.string().describe('The content-type UID.'),
+        field: z.string().describe('The relation field.'),
+        newTarget: z.string().describe('The new target content-type UID.'),
+        ...selector,
+      },
+    },
+    async (args) => {
+      await ready;
+      await engine.whenReferencesReady();
+      const p = pick(engine, args, roots());
+      if ('result' in p) return p.result;
+      return schemaResult(p.project, await planChangeRelation(fs, p.project, args.uid, args.field, args.newTarget), 'changed');
+    },
+  );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const renameAttributeHandler = async (args: any): Promise<CallToolResult> => {
-    await ready;
-    await engine.whenReferencesReady();
-    const p = pick(engine, args, roots());
-    if ('result' in p) return p.result;
-    return schemaResult(p.project, await planRenameAttribute(fs, p.project, args.uid, args.oldName, args.newName), 'renamed', args.configSync);
-  };
-  const renameAttributeSchema = {
-    uid: z.string().describe('The content-type UID.'),
-    oldName: z.string().describe('Current attribute name.'),
-    newName: z.string().describe('New attribute name.'),
-    ...configSyncArg,
-    ...selector,
-  };
-  const renameAttributeDesc =
-    'Rename an attribute in schema.json, plus (for a RELATION) its populate/filters usages by name via the relation-field index. ⚠️ Does NOT rewrite object/data-access usages (`entity.field`, `data: { field }`, destructuring, populated results) — those are untyped property access we cannot rewrite without guessing; the result always warns to review them by hand. NOT a complete field rename. Dry-run (+ `planId`); apply with `apply_edits`.';
-  reg('plan_rename_attribute', { title: 'Plan a content-type attribute rename — schema + relation query-keys only (dry-run)', description: renameAttributeDesc, inputSchema: renameAttributeSchema }, renameAttributeHandler);
-  reg('rename_attribute', { title: '[deprecated → plan_rename_attribute]', description: `Deprecated alias of plan_rename_attribute. ${renameAttributeDesc}`, inputSchema: renameAttributeSchema }, renameAttributeHandler);
+  reg(
+    'plan_rename_attribute',
+    {
+      title: 'Plan a content-type attribute rename — schema + relation query-keys only (dry-run)',
+      description:
+        'Plan renaming an attribute in schema.json and, for a relation, its populate/filters usages. NOT a complete field rename: object access (`entity.field`, `data: { field }`, destructuring) is not rewritten — the warnings say to review it by hand. Writes nothing: review, then `apply_edits`.',
+      inputSchema: {
+        uid: z.string().describe('The content-type UID.'),
+        oldName: z.string().describe('Current attribute name.'),
+        newName: z.string().describe('New attribute name.'),
+        ...configSyncArg,
+        ...selector,
+      },
+    },
+    async (args) => {
+      await ready;
+      await engine.whenReferencesReady();
+      const p = pick(engine, args, roots());
+      if ('result' in p) return p.result;
+      return schemaResult(p.project, await planRenameAttribute(fs, p.project, args.uid, args.oldName, args.newName), 'renamed', args.configSync);
+    },
+  );
 
   reg(
     'apply_edits',
     {
       title: 'Apply a reviewed plan to disk (contractual)',
       description:
-        'Apply a plan returned by any plan_* tool, create_plugin or extract_to_plugin, by its `planId`: exactly the reviewed plan. It is verified against disk first — if any touched file changed since it was computed, nothing is written (the changed paths are returned). ⚠️ Modifies files on disk.',
+        '⚠️ Writes files: applies exactly the reviewed plan (plan_*, create_plugin, extract_to_plugin) by its `planId`. If a file it touches changed since, nothing is written.',
       inputSchema: {
         planId: z.string().describe('The planId from a plan_* result.'),
       },
@@ -1437,11 +1432,11 @@ export function registerTools(
     {
       title: 'Rename a Strapi entity or method (writes files)',
       description:
-        'Convenience: plan + apply a rename in one call. An entity (omit `method`) or a service/controller method (pass `method`). Rewrites every call-site + route handler and renames the files/folders. ⚠️ Modifies files on disk. Prefer plan_rename_* then apply_edits when you want to review first.',
+        '⚠️ Writes files: plan_rename_* and apply_edits in one call, without review. Prefer those two to review first.',
       inputSchema: {
         ref: z.string().describe(REF_HELP),
-        newName: z.string().describe("The new method name (with `method`), else the UID's new last segment (api::product.product + item → api::product.item)."),
-        method: z.string().optional().describe('Pass to rename a method; omit to rename the entity.'),
+        newName: z.string().describe("The new method name, or the UID's new last segment."),
+        method: z.string().optional().describe('The method to rename; omit to rename the entity.'),
         ...configSyncArg,
         ...selector,
       },
