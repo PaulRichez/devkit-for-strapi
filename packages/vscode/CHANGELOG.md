@@ -49,6 +49,13 @@
   `rename_attribute`, are gone: use `plan_change_relation` and `plan_rename_attribute`.
   35 tools.
 
+**Out of the way where there is no Strapi**
+
+- In a workspace without a Strapi project, the extension no longer offers its MCP
+  server to the editor's agents (its tool definitions would ride along with every
+  request for nothing) and shows no status bar item. Both appear as soon as a Strapi
+  project does, and go when the last one goes.
+
 ## 0.2.3
 
 **Local plugins read where they were left unverified**

@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { planRename } from 'devkit-for-strapi-pro';
+import type { DevkitExports } from '../extension';
 
 /** The open-source build ships a stub of the Pro rename engine: the rename tests run against the real one only. */
 const HAS_PRO_ENGINE = (() => {
@@ -57,6 +58,13 @@ function posOf(doc: vscode.TextDocument, needle: string, inner = 2): vscode.Posi
 suite('Strapi DevKit — integration (Extension Host)', () => {
   suiteSetup(async () => {
     await vscode.extensions.getExtension('paul-richez.devkit-for-strapi')?.activate();
+  });
+
+  test('a workspace with Strapi projects gets the MCP server and the status bar item', async () => {
+    const presence = (await vscode.extensions.getExtension<DevkitExports>('paul-richez.devkit-for-strapi')!.activate())!.presence;
+    await presence.ready;
+    assert.strictEqual(await presence.mcpServers(), 1);
+    assert.strictEqual(presence.statusShown(), true);
   });
 
   test('go-to-definition: service UID → service file (whole UID is one link)', async () => {

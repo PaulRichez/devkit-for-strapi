@@ -15,6 +15,12 @@ export default defineConfig([
     workspaceFolder: '../test-fixtures/fixtures/panel-app',
     mocha: { ui: 'tdd', timeout: 30000 },
   },
+  {
+    label: 'no-project',
+    files: 'out/test/noProject/*.test.js',
+    workspaceFolder: '../test-fixtures/fixtures/not-strapi',
+    mocha: { ui: 'tdd', timeout: 30000 },
+  },
   // Opt-in: Config Sync through the project's Strapi (Pro) on a disposable app with its
   // node_modules and a database in step with config/sync. It writes to that app.
   ...(process.env.DEVKIT_CONFIG_SYNC_VSCODE_APP

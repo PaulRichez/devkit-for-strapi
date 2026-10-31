@@ -21,10 +21,11 @@ Open a Strapi project and it works immediately.
 
 ## Verify it's active
 
-A status bar item appears at the **bottom-left**: `DevKit for Strapi: N`, where `N`
-is the number of Strapi projects detected in your workspace. If it shows `0`, the
-workspace has no recognizable Strapi project (or it's excluded — see
-[Configuration](/configuration/)).
+A status bar item appears at the **bottom-left** with your project's Strapi version
+(`Strapi 5.12`), or `DevKit: 2 projects` when the workspace holds several. If it
+doesn't appear, the workspace has no recognizable Strapi project (or it's excluded —
+see [Configuration](/configuration/)): in such a workspace DevKit stays out of the
+status bar and doesn't offer its MCP server to your agent.
 
 DevKit adds a few commands to the Command Palette — the two you’ll use right after install:
 

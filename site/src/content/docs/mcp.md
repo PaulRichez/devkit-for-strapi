@@ -36,7 +36,8 @@ app doesn’t: mid-migration, on a failing build, in CI, or on a Strapi v4 proje
 In **VS Code, Cursor, Windsurf and Antigravity** the server is **bundled in the
 extension and auto-registered** with the editor's MCP support. Install the
 extension and your agent can use the tools immediately — no config, no separate
-install.
+install. It is offered in a workspace that holds a Strapi project, not elsewhere:
+there its tool definitions would only weigh on every agent request.
 
 On editors without the MCP-provider API (e.g. **VSCodium**), install the extension
 for the editor features and wire the standalone server below for your agent.

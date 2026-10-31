@@ -1,0 +1,8 @@
+{
+  "name": "not-strapi",
+  "private": true,
+  "description": "A Node project that is not a Strapi app: DevKit offers nothing here.",
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}

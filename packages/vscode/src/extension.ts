@@ -30,6 +30,8 @@ export interface DevkitExports {
   views: { routes: RoutesProvider; model: ModelProvider; health: HealthProvider; plugins: PluginsProvider; configSync: ConfigSyncProvider };
   /** Config Sync through the project's Strapi (Pro): its state per project, export and import without the confirmations (tests). */
   configSyncDb: ConfigSyncDb;
+  /** Whether the workspace got DevKit's presence: the MCP servers it offers, the status bar item shown (tests). */
+  presence: { mcpServers: () => Promise<number>; statusShown: () => boolean; ready: Promise<void> };
 }
 
 function workspaceFolderPaths(): string[] {
@@ -40,31 +42,32 @@ function workspaceFolderPaths(): string[] {
  * Offer the bundled MCP server (`dist/mcp.js`) to MCP clients (e.g. Copilot
  * agent mode) — same engine as the extension, exposed to agents. Spawned via
  * VS Code's own Node (Electron-as-node), so it needs no separate install; the
- * workspace folders are passed so it indexes the same projects.
+ * workspace folders are passed so it indexes the same projects. Only in a
+ * workspace with a Strapi project: elsewhere its tool definitions would ride along
+ * with every agent request for nothing. `refresh` re-offers it (the projects changed).
  */
-function registerMcpServer(context: vscode.ExtensionContext, license: LicenseManager): void {
-  if (typeof vscode.lm?.registerMcpServerDefinitionProvider !== 'function') return;
+function registerMcpServer(
+  context: vscode.ExtensionContext,
+  license: LicenseManager,
+  hasProject: () => Promise<boolean>,
+): { refresh: () => void; definitions: () => Promise<vscode.McpServerDefinition[]> } {
+  const definitions = async (): Promise<vscode.McpServerDefinition[]> => {
+    if (!(await hasProject())) return [];
+    // Forward the editor's licence key so the bundled MCP gates its Pro tools
+    // with the same key entered here — set once, unlocks both surfaces.
+    // The runtime settings too: the bundled server runs config-sync the way the editor does.
+    const env: Record<string, string> = { ELECTRON_RUN_AS_NODE: '1', ...runtimeEnv() };
+    const key = await license.getKey();
+    if (key) env.DEVKIT_LICENSE_KEY = key;
+    return [new vscode.McpStdioServerDefinition('DevKit for Strapi', process.execPath, [context.asAbsolutePath('dist/mcp.js'), ...workspaceFolderPaths()], env)];
+  };
+  if (typeof vscode.lm?.registerMcpServerDefinitionProvider !== 'function') return { refresh: () => undefined, definitions };
   const didChange = new vscode.EventEmitter<void>();
   context.subscriptions.push(
     didChange,
     vscode.lm.registerMcpServerDefinitionProvider('strapiDevkit.mcp', {
       onDidChangeMcpServerDefinitions: didChange.event,
-      provideMcpServerDefinitions: async () => {
-        // Forward the editor's licence key so the bundled MCP gates its Pro tools
-        // with the same key entered here — set once, unlocks both surfaces.
-        // The runtime settings too: the bundled server runs config-sync the way the editor does.
-        const env: Record<string, string> = { ELECTRON_RUN_AS_NODE: '1', ...runtimeEnv() };
-        const key = await license.getKey();
-        if (key) env.DEVKIT_LICENSE_KEY = key;
-        return [
-          new vscode.McpStdioServerDefinition(
-            'DevKit for Strapi',
-            process.execPath,
-            [context.asAbsolutePath('dist/mcp.js'), ...workspaceFolderPaths()],
-            env,
-          ),
-        ];
-      },
+      provideMcpServerDefinitions: definitions,
     }),
     // Re-offer with the new folder set, or when the licence key changes.
     vscode.workspace.onDidChangeWorkspaceFolders(() => didChange.fire()),
@@ -73,6 +76,7 @@ function registerMcpServer(context: vscode.ExtensionContext, license: LicenseMan
       if (e.affectsConfiguration('strapiDevkit.runtime') || e.affectsConfiguration('strapiDevkit.configSync')) didChange.fire();
     }),
   );
+  return { refresh: () => didChange.fire(), definitions };
 }
 
 export function activate(context: vscode.ExtensionContext): DevkitExports | undefined {
@@ -143,7 +147,13 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
   registerFollow(context, engine, modelView, routesView);
   const diagram = registerDiagram(context, engine, modelView, license.isLicensed);
   registerWorkspaceSymbols(context, engine);
-  context.subscriptions.push(healthView.provider.onDidCount((n) => updateStatus(engine, status, n)));
+  // Shown only in a workspace with a Strapi project (or while re-reading one, or on a failure).
+  let statusShown = false;
+  context.subscriptions.push(
+    healthView.provider.onDidCount((n) => {
+      statusShown = updateStatus(engine, status, n);
+    }),
+  );
   const diagnostics = registerDiagnostics(context, engine);
   registerCompletionProvider(context, engine);
 
@@ -162,7 +172,7 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
     void configSync.all().then((all) => setContext('strapiDevkit.configSync', all.length > 0));
     diagram.refresh();
     diagnostics.revalidateAll(); // the index changed → refresh open files
-    updateStatus(engine, status, healthView.provider.count); // counts include installed plugins once they land
+    statusShown = updateStatus(engine, status, healthView.provider.count); // counts include installed plugins once they land
     setContext('strapiDevkit.hasProject', engine.getProjects().length > 0);
     setContext('strapiDevkit.pluginsLoading', pluginsLoading(engine));
   });
@@ -181,7 +191,6 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
     vscode.commands.registerCommand('strapiDevkit.open', (filePath: string, offset?: number) => openAt(filePath, offset ?? 0)),
   );
 
-  registerMcpServer(context, license);
   registerOfferNotice(
     context,
     license.isLicensed,
@@ -200,9 +209,13 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
 
     output.appendLine(`[init] scanning ${folders.length} workspace folder(s):`);
     for (const f of folders) output.appendLine(`  - ${f}`);
-    status.text = '$(sync~spin) DevKit for Strapi';
-    status.tooltip = 'DevKit for Strapi is scanning the workspace…';
-    status.show();
+    // A workspace not known to hold a Strapi project gets no status bar item while it is scanned.
+    if (engine.getProjects().length) {
+      status.text = '$(sync~spin) DevKit for Strapi';
+      status.tooltip = 'DevKit for Strapi is scanning the workspace…';
+      status.show();
+      statusShown = true;
+    }
 
     try {
       engine.setExcludes(vscode.workspace.getConfiguration('strapiDevkit').get<string[]>('exclude', []));
@@ -216,12 +229,29 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
       output.show(true);
       status.text = '$(error) DevKit for Strapi';
       status.tooltip = 'DevKit for Strapi failed to initialize — click for details.';
+      status.show();
+      statusShown = true;
       void vscode.window.showErrorMessage(`DevKit for Strapi init failed: ${String(err)}`);
     }
   };
 
   const ready = applyFolders();
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => void applyFolders()));
+
+  // The MCP server only where there is a Strapi project — decided once the scan is done,
+  // and offered again when a project appears or the last one goes.
+  const mcp = registerMcpServer(context, license, async () => {
+    await ready;
+    return engine.getProjects().length > 0;
+  });
+  let hadProject = false;
+  context.subscriptions.push(
+    bus.event(() => {
+      const has = engine.getProjects().length > 0;
+      if (has !== hadProject) mcp.refresh();
+      hadProject = has;
+    }),
+  );
 
   // Editing the exclude list re-discovers projects without a reload.
   context.subscriptions.push(
@@ -243,24 +273,29 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
     vscode.commands.registerCommand('strapiDevkit.enterLicenseKey', () => license.enterKey()),
     vscode.commands.registerCommand('strapiDevkit.clearLicenseKey', () => license.clearKey()),
   );
-  return { views: { routes: routesView.provider, model: modelView.provider, health: healthView.provider, plugins: pluginsView.provider, configSync: configSyncView.provider }, configSyncDb };
+  return {
+    views: { routes: routesView.provider, model: modelView.provider, health: healthView.provider, plugins: pluginsView.provider, configSync: configSyncView.provider },
+    configSyncDb,
+    presence: { mcpServers: async () => (await mcp.definitions()).length, statusShown: () => statusShown, ready },
+  };
 }
 
 export function deactivate(): void {
   /* nothing to clean up beyond context.subscriptions */
 }
 
-/** `$(database) Strapi 5.48 · ⚠ 2` — the project, its problems, and how current DevKit's view of it is. */
-function updateStatus(engine: StrapiEngine, status: vscode.StatusBarItem, problems = 0): void {
+/**
+ * `$(database) Strapi 5.48 · ⚠ 2` — the project, its problems, and how current DevKit's
+ * view of it is; nothing in a workspace without a Strapi project. Whether it is shown.
+ */
+function updateStatus(engine: StrapiEngine, status: vscode.StatusBarItem, problems = 0): boolean {
   const projects = engine.getProjects();
   const loading = projects.some((p) => p.freshness.pluginsLoading);
   const icon = loading ? '$(sync~spin)' : '$(database)';
   const version = (p: (typeof projects)[number]): string => p.strapiVersion ?? p.declaredVersion?.replace(/^[\^~>=<\s]+/, '') ?? `v${p.version}`;
   if (!projects.length) {
-    status.text = '$(database) DevKit for Strapi';
-    status.tooltip = 'DevKit for Strapi — no Strapi project found in this workspace. Click to open the panel.';
-    status.show();
-    return;
+    status.hide();
+    return false;
   }
   const label = projects.length === 1 ? `Strapi ${version(projects[0]!)}` : `DevKit: ${projects.length} projects`;
   status.text = `${icon} ${label}${problems ? ` · $(warning) ${problems}` : ''}`;
@@ -275,6 +310,7 @@ function updateStatus(engine: StrapiEngine, status: vscode.StatusBarItem, proble
   md.appendMarkdown('[Open the panel](command:workbench.view.extension.strapiDevkit) · [Check the whole project](command:strapiDevkit.health.validateAll) · [Projects](command:strapiDevkit.showProjects) · [Rescan](command:strapiDevkit.rescan)');
   status.tooltip = md;
   status.show();
+  return true;
 }
 
 /** Batch + debounce watcher events into a single incremental engine update. */
