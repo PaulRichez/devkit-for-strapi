@@ -360,7 +360,13 @@ function registerFileWatcher(context: vscode.ExtensionContext, engine: StrapiEng
   watcher.onDidCreate(onChange);
   watcher.onDidChange(onChange);
   watcher.onDidDelete(onDelete);
-  context.subscriptions.push(watcher);
+  // A deleted folder is reported alone, not the files it held: passed on when it held a
+  // project or indexed files (not every deletion: Strapi's own temporary files come and go).
+  const folders = vscode.workspace.createFileSystemWatcher('**/*', true, true, false);
+  folders.onDidDelete((uri) => {
+    if (engine.indexesUnder(paths.normalize(uri.fsPath))) onDelete(uri);
+  });
+  context.subscriptions.push(watcher, folders);
 }
 
 function registerCommands(

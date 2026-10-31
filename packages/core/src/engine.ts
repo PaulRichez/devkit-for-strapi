@@ -74,6 +74,11 @@ export interface StrapiEngine {
   projectForFile(filePath: string): StrapiProject | undefined;
   /** Incremental update from watcher events. */
   onFilesChanged(changed: string[], deleted: string[]): Promise<void>;
+  /**
+   * Whether a project, or a file the index was built from, lies under `dir`: a deleted
+   * folder is reported alone, not the files it held, and is then re-read as a whole.
+   */
+  indexesUnder(dir: string): boolean;
   getDefinitions(filePath: string, offset: number, sourceText: string): Promise<TargetLocation[]>;
   /**
    * Source range of the whole magic string / member call under the cursor, so a
@@ -606,11 +611,18 @@ class Engine implements StrapiEngine {
     return this.serialize(() => this.onFilesChangedImpl(changed, deleted));
   }
 
+  indexesUnder(dir: string): boolean {
+    const d = normalize(dir);
+    const under = `${d}/`;
+    return this.projects.some((pr) => pr.root === d || pr.root.startsWith(under) || [...pr.index.fileDefs.keys()].some((f) => f.startsWith(under)));
+  }
+
   private async onFilesChangedImpl(changed: string[], deleted: string[]): Promise<void> {
     const changedN = changed.map(normalize);
     const deletedN = deleted.map(normalize);
-    // A package.json change can add/remove a project or flip its version.
-    if ([...changedN, ...deletedN].some((p) => basename(p) === 'package.json')) {
+    // A package.json change can add/remove a project or flip its version; a deleted
+    // folder that held a project or indexed files is re-read as a whole.
+    if ([...changedN, ...deletedN].some((p) => basename(p) === 'package.json') || deletedN.some((d) => this.indexesUnder(d))) {
       await this.rescanImpl();
       return;
     }

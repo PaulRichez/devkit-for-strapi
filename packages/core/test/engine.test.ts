@@ -109,4 +109,33 @@ describe('engine (multi-project workspace)', () => {
     await engine.onFilesChanged([`${root}/frontend/package.json`], []);
     expect(engine.getProjects().length).toBe(2);
   });
+
+  it('a deleted folder, reported alone, takes its project or its content-types with it', async () => {
+    const ct = (api: string): Record<string, string> => ({
+      [`/ws/cms/src/api/${api}/content-types/${api}/schema.json`]: JSON.stringify({ kind: 'collectionType', info: { singularName: api, pluralName: `${api}s` }, attributes: {} }),
+    });
+    const files = {
+      '/ws/cms/package.json': '{"dependencies":{"@strapi/strapi":"^5.0.0"}}',
+      ...ct('article'),
+      ...ct('page'),
+      '/ws/other/package.json': '{"dependencies":{"@strapi/strapi":"^5.0.0"}}',
+    };
+    const fs = new MemoryFileSystem(files);
+    const engine = createEngine(fs);
+    await engine.init(['/ws']);
+    const remove = (dir: string): void => {
+      for (const f of Object.keys(files)) if (f.startsWith(`${dir}/`)) fs.delete(f);
+    };
+
+    expect(engine.indexesUnder('/ws/cms/src/api/article')).toBe(true);
+    expect(engine.indexesUnder('/ws/cms/.tmp')).toBe(false); // nothing DevKit read: not passed on
+    remove('/ws/cms/src/api/article');
+    await engine.onFilesChanged([], ['/ws/cms/src/api/article']);
+    expect([...engine.allProjects().find((p) => p.root === '/ws/cms')!.index.contentTypes.keys()]).toEqual(['api::page.page']);
+
+    expect(engine.indexesUnder('/ws/other')).toBe(true);
+    remove('/ws/other');
+    await engine.onFilesChanged([], ['/ws/other']);
+    expect(engine.getProjects().map((p) => p.root)).toEqual(['/ws/cms']);
+  });
 });
