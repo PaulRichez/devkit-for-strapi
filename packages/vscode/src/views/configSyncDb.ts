@@ -17,6 +17,7 @@ import {
 } from 'devkit-for-strapi-pro';
 import * as vscode from 'vscode';
 import { withOffer } from '../offer';
+import { setContext } from './panel';
 
 /**
  * config-sync against the database (Pro): the project's own Strapi, loaded the way the
@@ -267,14 +268,57 @@ export function failureText(f: RuntimeFailure | { message: string; kind?: undefi
   return { title: f.message, todo: runtimeHint(f.kind) };
 }
 
-export function registerConfigSyncDb(context: vscode.ExtensionContext, db: ConfigSyncDb, rootOf: (node?: unknown) => Promise<string | undefined>): void {
+/** An entry open in an editor: its project and key. */
+export interface OpenEntry {
+  root: string;
+  key: string;
+}
+
+/**
+ * The commands, and the entry open in the editor — a database ↔ config/sync diff, the
+ * database side alone, or the file alone opened from the Database list — so the
+ * editor's title can export or import it (`strapiDevkit.configSyncEntryOpen`).
+ * Returns what the active editor holds (tests).
+ */
+export function registerConfigSyncDb(context: vscode.ExtensionContext, db: ConfigSyncDb, rootOf: (node?: unknown) => Promise<string | undefined>): () => OpenEntry | undefined {
   type EntryNode = { kind: 'dbEntry'; root: string; entry: ConfigSyncDbEntry };
+  /** Sync files opened alone from the Database list (an entry only in config/sync). */
+  const openedFiles = new Map<string, OpenEntry>();
+  const fromDbUri = (u: vscode.Uri): OpenEntry => ({ root: paths.normalize(u.query), key: decodeURIComponent(paths.basename(u.path, '.json')) });
+  const openEntry = (uri: vscode.Uri | undefined): OpenEntry | undefined => {
+    if (!uri) return undefined;
+    if (uri.scheme === DB_SCHEME) return fromDbUri(uri);
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        const input = tab.input;
+        if (input instanceof vscode.TabInputTextDiff && input.original.scheme === DB_SCHEME && input.modified.toString() === uri.toString()) return fromDbUri(input.original);
+      }
+    }
+    return uri.scheme === 'file' ? openedFiles.get(paths.normalize(uri.fsPath)) : undefined;
+  };
+  const activeUri = (): vscode.Uri | undefined => {
+    const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+    return input instanceof vscode.TabInputTextDiff ? input.modified : input instanceof vscode.TabInputText ? input.uri : undefined;
+  };
+  const active = (): OpenEntry | undefined => openEntry(activeUri());
+  const updateKey = (): void => setContext('strapiDevkit.configSyncEntryOpen', active() !== undefined);
+
+  /** The entries a command acts on: tree nodes, or the entry of the editor whose title it was run from. */
   const asEntries = (node: unknown, nodes?: unknown[]): { root: string; entries: ConfigSyncDbEntry[] } | undefined => {
+    if (node instanceof vscode.Uri) {
+      const open = openEntry(node);
+      if (!open) return undefined;
+      const entry = db.entries(open.root).find((e) => e.key === open.key);
+      if (!entry) void vscode.window.showInformationMessage(`DevKit for Strapi: ${open.key} — config/sync and the database agreed at the last comparison. Compare again if it changed since.`);
+      return entry ? { root: open.root, entries: [entry] } : undefined;
+    }
     const all = (nodes?.length ? nodes : [node]).filter((n): n is EntryNode => (n as EntryNode)?.kind === 'dbEntry');
     if (!all.length) return undefined;
     return { root: all[0]!.root, entries: all.filter((n) => n.root === all[0]!.root).map((n) => n.entry) };
   };
   context.subscriptions.push(
+    vscode.window.tabGroups.onDidChangeTabs(updateKey),
+    vscode.window.tabGroups.onDidChangeTabGroups(updateKey),
     vscode.workspace.registerTextDocumentContentProvider(DB_SCHEME, db),
     vscode.commands.registerCommand('strapiDevkit.configSync.compare', async (node?: unknown, opts?: { noPrompt?: boolean }) => {
       const found = await rootOf(node);
@@ -285,8 +329,11 @@ export function registerConfigSyncDb(context: vscode.ExtensionContext, db: Confi
       const file = vscode.Uri.file(paths.join(syncDir ?? paths.join(root, 'config/sync'), `${escapeName(entry.key)}.json`));
       const left = dbUri(root, entry.key, file.fsPath);
       if (entry.state === 'only-in-db') await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(left), { preview: true });
-      else if (entry.state === 'only-in-sync-dir') await vscode.window.showTextDocument(file, { preview: true });
-      else await vscode.commands.executeCommand('vscode.diff', left, file, `${entry.key}: database ↔ config/sync`, { preview: true });
+      else if (entry.state === 'only-in-sync-dir') {
+        openedFiles.set(paths.normalize(file.fsPath), { root: paths.normalize(root), key: entry.key });
+        await vscode.window.showTextDocument(file, { preview: true });
+      } else await vscode.commands.executeCommand('vscode.diff', left, file, `${entry.key}: database ↔ config/sync`, { preview: true });
+      updateKey();
     }),
     vscode.commands.registerCommand('strapiDevkit.configSync.export', async (node?: unknown, nodes?: unknown[]) => {
       const sel = asEntries(node, nodes);
@@ -312,4 +359,6 @@ export function registerConfigSyncDb(context: vscode.ExtensionContext, db: Confi
       if (picked?.length) await db.import(root, picked.map((p) => p.entry));
     }),
   );
+  updateKey();
+  return active;
 }

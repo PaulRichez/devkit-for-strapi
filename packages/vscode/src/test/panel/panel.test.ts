@@ -1,7 +1,9 @@
 import * as assert from 'node:assert';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { paths } from 'devkit-for-strapi-core';
 import type { DevkitExports } from '../../extension';
+import { dbUri } from '../../views/configSyncDb';
 
 // The DevKit panel on the `panel-app` fixture: routes with a pipeline (and a short
 // global policy Strapi won't find), incoming relations, an orphan component, a local plugin.
@@ -287,5 +289,16 @@ suite('DevKit panel', () => {
     assert.strictEqual(descOf(r, await auth('GET /api/articles/:id')), 'synced: public');
     // `auth: false`: the roles don't decide, nothing is said.
     assert.strictEqual(descOf(r, await auth('GET /api/articles')), '');
+  });
+
+  test('config sync: a database ↔ config/sync diff is an entry its editor title can export or import; another file is not', async () => {
+    const exp = (await vscode.extensions.getExtension<DevkitExports>('paul-richez.devkit-for-strapi')!.activate())!;
+    const file = vscode.Uri.file(path.join(ws, 'config', 'sync', 'user-role.authenticated.json'));
+    await vscode.commands.executeCommand('vscode.diff', dbUri(ws, 'user-role.authenticated', file.fsPath), file, 'user-role.authenticated: database ↔ config/sync');
+    const open = await until(async () => exp.configSyncEditorEntry(), (v) => v !== undefined, 20);
+    assert.deepStrictEqual(open, { root: paths.normalize(ws), key: 'user-role.authenticated' });
+    await vscode.window.showTextDocument(vscode.Uri.file(path.join(ws, 'package.json')));
+    assert.strictEqual(exp.configSyncEditorEntry(), undefined);
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
   });
 });

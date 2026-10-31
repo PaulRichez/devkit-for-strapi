@@ -92,6 +92,10 @@ and PostgreSQL) and on Strapi 4.26 with 1.2.6 (JavaScript, on SQLite).
   and said. With config-sync's `soft` option,
   the plugin leaves the entries already in the database as they are: DevKit says
   which, and keeps their files.
+- **From the diff itself**: with an entry open — its diff, or the one side it has —
+  the editor's title bar has the same **Export** and **Import** buttons, for that
+  entry. Partial changes stay by hand: edit the file in the diff (the right side is
+  the real file), then import it.
 - **For your agent**: `config_sync_diff`, `config_sync_export`, `config_sync_import`.
   The loop: change the code, `config_sync_diff`, export the entries the change
   caused, commit them with the code. To change a role or a content-manager view:

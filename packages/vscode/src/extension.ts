@@ -15,7 +15,7 @@ import { registerFollow } from './views/follow';
 import { RefreshBus, setContext } from './views/panel';
 import { registerConfigSyncDiagnostics } from './providers/configSyncDiagnostics';
 import { ConfigSyncCache, type ConfigSyncProvider, registerConfigSyncView } from './views/configSync';
-import { ConfigSyncDb, registerConfigSyncDb, runtimeEnv } from './views/configSyncDb';
+import { ConfigSyncDb, type OpenEntry, registerConfigSyncDb, runtimeEnv } from './views/configSyncDb';
 import { type HealthProvider, registerHealthView } from './views/health';
 import { type ModelProvider, registerModelView } from './views/model';
 import { type PluginsProvider, registerPluginsView } from './views/plugins';
@@ -30,6 +30,8 @@ export interface DevkitExports {
   views: { routes: RoutesProvider; model: ModelProvider; health: HealthProvider; plugins: PluginsProvider; configSync: ConfigSyncProvider };
   /** Config Sync through the project's Strapi (Pro): its state per project, export and import without the confirmations (tests). */
   configSyncDb: ConfigSyncDb;
+  /** The config-sync entry open in the active editor, which its title can export or import (tests). */
+  configSyncEditorEntry: () => OpenEntry | undefined;
   /** Whether the workspace got DevKit's presence: the MCP servers it offers, the status bar item shown (tests). */
   presence: { mcpServers: () => Promise<number>; statusShown: () => boolean; ready: Promise<void> };
 }
@@ -121,7 +123,7 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
   const healthView = registerHealthView(context, engine, fs, configSync);
   const configSyncDb = new ConfigSyncDb(context, license.isLicensed);
   const configSyncView = registerConfigSyncView(context, engine, configSync, configSyncDb);
-  registerConfigSyncDb(context, configSyncDb, async (node) => {
+  const configSyncEditorEntry = registerConfigSyncDb(context, configSyncDb, async (node) => {
     const root = typeof node === 'string' ? node : (node as { root?: string } | undefined)?.root;
     if (root) return root;
     // From the palette (or a view button with nothing selected): a project that uses config-sync —
@@ -276,6 +278,7 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
   return {
     views: { routes: routesView.provider, model: modelView.provider, health: healthView.provider, plugins: pluginsView.provider, configSync: configSyncView.provider },
     configSyncDb,
+    configSyncEditorEntry,
     presence: { mcpServers: async () => (await mcp.definitions()).length, statusShown: () => statusShown, ready },
   };
 }

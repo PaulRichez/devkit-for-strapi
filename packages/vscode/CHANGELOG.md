@@ -49,6 +49,13 @@
   `rename_attribute`, are gone: use `plan_change_relation` and `plan_rename_attribute`.
   35 tools.
 
+**Config Sync: export or import from the diff (Pro)**
+
+- With an entry open from the Database list — its database ↔ config/sync diff, or the
+  one side it has — the editor's title bar has **Export from the Database** and
+  **Import into the Database** for that entry, with the same confirmations as the list.
+  Edit the file in the diff, then import it.
+
 **Out of the way where there is no Strapi**
 
 - In a workspace without a Strapi project, the extension no longer offers its MCP

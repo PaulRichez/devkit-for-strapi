@@ -428,6 +428,18 @@
       }
     ],
     "menus": {
+      "editor/title": [
+        {
+          "command": "strapiDevkit.configSync.export",
+          "when": "strapiDevkit.configSyncEntryOpen",
+          "group": "navigation@1"
+        },
+        {
+          "command": "strapiDevkit.configSync.import",
+          "when": "strapiDevkit.configSyncEntryOpen",
+          "group": "navigation@2"
+        }
+      ],
       "view/title": [
         {
           "command": "strapiDevkit.routes.refresh",
