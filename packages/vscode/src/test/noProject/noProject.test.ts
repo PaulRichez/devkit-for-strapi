@@ -38,8 +38,7 @@ suite('No Strapi project in the workspace', () => {
       assert.strictEqual(await presence.mcpServers(), 1);
       assert.strictEqual(presence.statusShown(), true);
     } finally {
-      // The package.json first: the watcher reports files, a deleted folder may come alone.
-      fs.rmSync(path.join(dir, 'package.json'), { force: true });
+      // The whole folder at once, as a user removes an app.
       fs.rmSync(dir, { recursive: true, force: true });
     }
     const after = presence.mcpRefreshes();
