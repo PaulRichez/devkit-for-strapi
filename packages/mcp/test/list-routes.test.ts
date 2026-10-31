@@ -45,10 +45,16 @@ describe('list_routes: filters and pipeline', () => {
 
   it("explains a route: Strapi's order, and a policy Strapi won't find under its short name", async () => {
     const data = await call({ method: 'POST', path: '/api/articles/7/publish', pipeline: true });
-    expect(data.globalMiddlewares.steps.map((s: { name: string; status: string }) => `${s.name}:${s.status}`)).toEqual(['strapi::errors:unverified', 'global::request-id:ok']);
+    // The global stack in order: a middleware Strapi finds is just its name, any other its detail.
+    const [errors, requestId] = data.globalMiddlewares.steps;
+    expect(errors).toMatchObject({ name: 'strapi::errors', status: 'unverified' });
+    expect(errors.phase).toBeUndefined();
+    expect(requestId).toBe('global::request-id');
     const steps = data.routes[0].pipeline.map((s: { phase: string; status: string }) => `${s.phase}:${s.status}`);
     expect(steps).toEqual(['auth:ok', 'policy:not-found-by-strapi', 'handler:ok']);
     expect(data.routes[0].pipeline[1].ref).toBe('global::is-owner');
+    // A step written in the route's own declaration doesn't repeat where that is.
+    expect(data.routes[0].pipeline[0].declaredAt).toBeUndefined();
   });
 
   it('says when auth is off for a route', async () => {

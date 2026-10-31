@@ -706,7 +706,7 @@ export function registerTools(
       description:
         'List a project\'s HTTP route table: method, path, mounted `fullPath` (API prefix included), handler, policies, middlewares, `public` (auth: false), `auth` when customized, and where each route is declared (`filePath`/`offset`). Covers the project\'s explicit routes, the auto-CRUD routes synthesized from createCoreRouter, and the routes local and installed plugins declare (`origin`), read from node_modules without booting Strapi; a local plugin whose routes are built by code DevKit cannot read comes in a block of its own (`unreadRoutes`: the file and line to read). Admin-panel routes are left out unless `admin: true`. Filter with `method`, `path` (a pattern, a part of it, or a concrete URL such as `/api/articles/12`) and `handler`. With `pipeline: true` (needs a filter, at most ' +
         PIPELINE_MAX +
-        ' routes), each route also gets what a request goes through, in Strapi\'s order — the `config/middlewares` stack (once, in `globalMiddlewares`), auth, policies, route middlewares, handler — each step with a status: `ok`, `not-found-by-strapi` (it exists under another name Strapi won\'t try: Strapi throws at startup), `unknown`, `unverified`, `unread` or `inline`. Use it to explain a 401/403, or a startup error about a policy or middleware.',
+        ' routes), each route also gets what a request goes through, in Strapi\'s order — the `config/middlewares` stack (once, in `globalMiddlewares`: a name alone is `ok`), auth, policies, route middlewares, handler — each step with a status: `ok`, `not-found-by-strapi` (it exists under another name Strapi won\'t try: Strapi throws at startup), `unknown`, `unverified`, `unread` or `inline`. Use it to explain a 401/403, or a startup error about a policy or middleware.',
       inputSchema: {
         ...selector,
         plugins: z.boolean().optional().describe('Include routes declared by local and installed plugins (default true).'),
@@ -745,8 +745,21 @@ export function registerTools(
         const access = s.phase === 'auth' ? routeAccessForRoute(r, synced) : undefined;
         return access ? { ...s, syncedRoles: { action: access.action, allowed: access.allowed, denied: access.denied, note: 'According to the config/sync role files: the database may differ until they are imported.' } } : s;
       };
-      const piped = routes.map((r) => ({ ...r, pipeline: routePipeline(p.project, r, global).steps.filter((s) => s.phase !== 'global-middleware').map((s) => withAccess(r, s)) }));
-      const stack = routes[0] ? routePipeline(p.project, routes[0], global).steps.filter((s) => s.phase === 'global-middleware') : [];
+      /** A step as answered: no `phase` in the global stack, no `declaredAt` when it is the route's own declaration. */
+      const detail = (s: PipelineStep & { syncedRoles?: unknown }, r?: RouteInfo): Record<string, unknown> => {
+        const out: Record<string, unknown> = { ...s };
+        if (!r) delete out.phase;
+        if (r && s.declaredAt?.filePath === r.filePath && s.declaredAt?.offset === r.offset) delete out.declaredAt;
+        return out;
+      };
+      const piped = routes.map((r) => ({ ...r, pipeline: routePipeline(p.project, r, global).steps.filter((s) => s.phase !== 'global-middleware').map((s) => detail(withAccess(r, s), r)) }));
+      // The global stack in Strapi's order: a middleware Strapi finds is its name (`file` says
+      // where the stack is written); any other comes with its detail.
+      const stack = routes[0]
+        ? routePipeline(p.project, routes[0], global)
+            .steps.filter((s) => s.phase === 'global-middleware')
+            .map((s) => (s.status === 'ok' ? s.name : detail(s)))
+        : [];
       return answer({ globalMiddlewares: { status: global.status, file: global.file, envFiles: global.envFiles, steps: stack }, routes: piped });
     },
   );

@@ -17,17 +17,22 @@
   the renames, new files and deletes, and a summary — paths relative to the project.
   The exact edits and the files' fingerprints stay with the server under the `planId`.
   On foodadvisor, renaming `api::restaurant.restaurant` answers 2,161 characters,
-  warnings included, where the raw plan alone took 5,657. A plan too long for one answer shows its last files as
-  counts and says so; `apply_edits` still applies all of it.
+  warnings included, where the raw plan alone took 5,657. A plan too long for one
+  answer shows its last files as counts and says so; `apply_edits` still applies all
+  of it.
 - `apply_edits` takes a `planId` only: it applies a plan DevKit computed this session,
   never a plan object handed in. Its answer, and `apply_rename`'s, give paths relative
   to the project.
 - Every answer names files relative to the project and gives its `root` once, when its
   files all lie in one project (several projects: kept absolute). On foodadvisor,
   `find_references` goes from 1,502 to 1,077 characters, `list_routes` from 34,132 to
-  30,450, its pipeline for one route from 8,387 to 6,356.
+  30,450.
 - `list_routes` answers `{ routes }`, as it already did with `pipeline: true`, instead
   of a bare list.
+- `list_routes` with `pipeline: true` is compact: a global middleware Strapi finds is
+  just its name, in Strapi's order (any other keeps its detail), and a step written in
+  the route's own declaration doesn't repeat where that is. On foodadvisor, the
+  pipeline of `GET /restaurants` goes from 8,387 characters to about 2,550.
 
 ## 0.2.3
 
