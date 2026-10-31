@@ -71,6 +71,17 @@
   Config Sync view, the MCP's `list_projects`). A folder opened in the workspace, or
   given to `add_project`, is still searched.
 
+**Config Sync: excluded as the plugin excludes**
+
+- A sync file is shown `excluded` only when config-sync skips reading it: an
+  `excludedConfig` entry written with the plain name (`::`) excludes the database side
+  only, and the plugin still reads the file (it tests the escaped name, `##`).
+- An `excludedConfig` as long as the plugin's defaults replaces them all: now said too
+  (it was only said for a shorter list). When `core-store.plugin_users-permissions_grant`
+  is no longer excluded, the warning says why it matters: it holds the login providers'
+  settings, their OAuth client secrets included, which an export writes into
+  config/sync and git.
+
 **Out of the way where there is no Strapi**
 
 - In a workspace without a Strapi project, the extension no longer offers its MCP

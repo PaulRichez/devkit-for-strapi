@@ -20,6 +20,8 @@ export const CONFIG_SYNC_PACKAGE = 'strapi-plugin-config-sync';
 export const CONFIG_SYNC_PLUGIN = 'config-sync';
 /** The plugin's default (1.x and 3.x). */
 export const DEFAULT_SYNC_DIR = 'config/sync/';
+/** The users-permissions login providers (their OAuth client secrets): excluded by default. */
+const GRANT_CONFIG = 'core-store.plugin_users-permissions_grant';
 /** The plugin's default `excludedConfig` (1.x and 3.x). */
 export const DEFAULT_EXCLUDED_CONFIG = [
   'core-store.plugin_users-permissions_grant',
@@ -178,15 +180,22 @@ async function readOptions(
       // Strapi merges a plugin's config with `fp.defaultsDeep(default, user)`
       // (@strapi/core/dist/loaders/plugins/index.js): arrays are merged index by index,
       // so a user list shorter than the default keeps the default's tail.
+      // A list as long as the defaults replaces them all — said too when one goes.
       const user = value as string[];
       options.excludedConfig = DEFAULT_EXCLUDED_CONFIG.length > user.length ? [...user, ...DEFAULT_EXCLUDED_CONFIG.slice(user.length)] : [...user];
       options.sources.excludedConfig = 'config';
-      if (DEFAULT_EXCLUDED_CONFIG.length > user.length) {
-        const kept = DEFAULT_EXCLUDED_CONFIG.slice(user.length);
-        const dropped = DEFAULT_EXCLUDED_CONFIG.slice(0, user.length).filter((d) => !user.includes(d));
-        warnings.push(
-          `excludedConfig has ${user.length} entr${user.length === 1 ? 'y' : 'ies'}: Strapi merges it with the plugin's defaults index by index, so ${kept.map((k) => `\`${k}\``).join(', ')} still ${kept.length === 1 ? 'applies' : 'apply'}${dropped.length ? `, but ${dropped.map((k) => `\`${k}\``).join(', ')} no longer ${dropped.length === 1 ? 'does' : 'do'}` : ''}.`,
-        );
+      const kept = DEFAULT_EXCLUDED_CONFIG.slice(user.length);
+      // A default is still excluded when an entry is a prefix of it, as the plugin matches.
+      const dropped = DEFAULT_EXCLUDED_CONFIG.filter((d) => !options.excludedConfig.some((opt) => d.startsWith(opt)));
+      if (kept.length || dropped.length) {
+        const how = kept.length
+          ? `Strapi merges it with the plugin's defaults index by index, so ${kept.map((k) => `\`${k}\``).join(', ')} still ${kept.length === 1 ? 'applies' : 'apply'}`
+          : "it replaces the plugin's defaults";
+        const gone = dropped.length ? `, but ${dropped.map((k) => `\`${k}\``).join(', ')} no longer ${dropped.length === 1 ? 'does' : 'do'}` : '';
+        const secrets = dropped.includes(GRANT_CONFIG)
+          ? ` \`${GRANT_CONFIG}\` holds the login providers' settings, their OAuth client secrets included: an export writes them into config/sync, and into git with it. Keep it in excludedConfig.`
+          : '';
+        warnings.push(`excludedConfig has ${user.length} entr${user.length === 1 ? 'y' : 'ies'}: ${how}${gone}.${secrets}`);
       }
     } else {
       (options as unknown as Record<string, unknown>)[key] = value;

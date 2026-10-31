@@ -53,14 +53,16 @@ export const escapeName = (name: string): string => name.replace(/:/g, '#').repl
 export const syncFileName = (type: string, name: string): string => `${type}.${escapeName(name)}.json`;
 
 /**
- * Whether config-sync tracks this entry: its type isn't excluded, and `excludedConfig`
- * doesn't match its key. The plugin tests the file side with the escaped name and the
- * database side with the plain one, so either match excludes it.
+ * Whether config-sync reads this sync file: its type isn't excluded, and `excludedConfig`
+ * doesn't match its key as the plugin tests a file — with the name escaped as in the
+ * file name (`core-store.plugin_content_manager_configuration_content_types##api##…`).
+ * An option written with the plain name (`::`) excludes the database side only: the
+ * plugin still reads the file.
  */
 export function isTracked(options: ConfigSyncOptions, type: string, name: string): boolean {
   if (options.excludedTypes.includes(type)) return false;
-  const keys = [`${type}.${escapeName(name)}`, `${type}.${name}`];
-  return !options.excludedConfig.some((opt) => keys.some((k) => k.startsWith(opt)));
+  const key = `${type}.${escapeName(name)}`;
+  return !options.excludedConfig.some((opt) => key.startsWith(opt));
 }
 
 /** The types the plugin registers in this project (undefined: not known yet, e.g. plugins still loading). */

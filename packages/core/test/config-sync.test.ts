@@ -186,6 +186,36 @@ describe('config-sync, the variants', () => {
     expect(await readSyncDir(fs, d.syncDirPath, d.options)).toEqual([]);
   });
 
+  it("a long excludedConfig replaces the defaults: said, and why dropping the login providers' entry matters; an entry that is a prefix of a default keeps it", async () => {
+    const five = "['core-store.plugin_upload_metrics', 'core-store.ee_information', 'core-store.strapi_content_types_schema', 'core-store.plugin_upload_api-folder', 'core-store.plugin_i18n']";
+    const { fs, project } = await load(app(v5, { [`${ROOT}/config/plugins.js`]: `module.exports = { 'config-sync': { config: { excludedConfig: ${five} } } };` }));
+    const w = (await detectConfigSync(fs, project))!.warnings.join(' ');
+    expect(w).toContain("it replaces the plugin's defaults, but `core-store.plugin_users-permissions_grant` no longer does");
+    expect(w).toContain('OAuth client secrets included: an export writes them into config/sync');
+    const covered = await load(app(v5, { [`${ROOT}/config/plugins.js`]: `module.exports = { 'config-sync': { config: { excludedConfig: [${five.slice(1, -1)}, 'core-store.plugin_users-permissions'] } } };` }));
+    expect((await detectConfigSync(covered.fs, covered.project))!.warnings.join(' ')).not.toContain('no longer');
+  });
+
+  it('a file is excluded as the plugin reads it: by its escaped name — an option with the plain name excludes the database side only', async () => {
+    const view = 'core-store.plugin_content_manager_configuration_content_types##api##article.article.json';
+    const plain = await load(
+      app(v5, {
+        [`${ROOT}/config/plugins.js`]: "module.exports = { 'config-sync': { config: { excludedConfig: ['core-store.plugin_content_manager_configuration_content_types::api::article'] } } };",
+        [`${ROOT}/config/sync/${view}`]: '{"key":"x"}',
+      }),
+    );
+    const d1 = (await detectConfigSync(plain.fs, plain.project))!;
+    expect((await readSyncDir(plain.fs, d1.syncDirPath, d1.options))[0]?.status).not.toBe('excluded');
+    const escaped = await load(
+      app(v5, {
+        [`${ROOT}/config/plugins.js`]: "module.exports = { 'config-sync': { config: { excludedConfig: ['core-store.plugin_content_manager_configuration_content_types##api##article'] } } };",
+        [`${ROOT}/config/sync/${view}`]: '{"key":"x"}',
+      }),
+    );
+    const d2 = (await detectConfigSync(escaped.fs, escaped.project))!;
+    expect((await readSyncDir(escaped.fs, d2.syncDirPath, d2.options))[0]?.status).toBe('excluded');
+  });
+
   it("says when it can't read the options, and assumes the plugin defaults", async () => {
     const { fs, project } = await load(app(v5, { [`${ROOT}/config/plugins.js`]: "module.exports = { 'config-sync': { config: makeOptions() } };" }));
     const d = (await detectConfigSync(fs, project))!;
