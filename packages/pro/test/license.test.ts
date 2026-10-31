@@ -5,6 +5,7 @@ import {
   isProTool,
   proRequired,
   proToolNames,
+  proUrl,
   resolveLicense,
   type CachedLicense,
   type LicenseCache,
@@ -148,6 +149,13 @@ describe('proRequired upsell', () => {
     expect(currentOffer(at('2026-11-30T23:00:00Z'))).toBeUndefined(); // 1 Dec 00:00 in Paris
     expect(proRequired('apply_edits', at('2026-11-28T12:00:00Z')).offer).toContain('Black Friday');
     expect(proRequired('apply_edits', at('2026-10-31T12:00:00Z'))).not.toHaveProperty('offer');
+  });
+
+  it('the Pro page link says where the click comes from (and the offer while it runs), nothing else', () => {
+    const at = (iso: string): number => Date.parse(iso);
+    expect(proUrl('vscode', 'upsell', at('2026-10-31T12:00:00Z'))).toBe('https://devkit-for-strapi.paulrichez.fr/pro/?utm_source=vscode&utm_medium=upsell');
+    expect(proUrl('vscode', 'notice', at('2026-11-28T12:00:00Z'))).toBe('https://devkit-for-strapi.paulrichez.fr/pro/?utm_source=vscode&utm_medium=notice&utm_campaign=black-friday-2026');
+    expect(proRequired('apply_edits', at('2026-10-31T12:00:00Z')).getPro).toBe('https://devkit-for-strapi.paulrichez.fr/pro/?utm_source=mcp&utm_medium=upsell');
   });
 
   it('gates every plan_*/apply_* tool but no read tool', () => {

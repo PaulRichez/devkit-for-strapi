@@ -7,7 +7,7 @@ import {
   configSyncImport,
   type ConfigSyncDbEntry,
   type ConfigSyncWriteData,
-  GET_PRO_URL,
+  proUrl,
   type RuntimeFailure,
   type RuntimeOptions,
   type RuntimeResult,
@@ -137,7 +137,7 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
           'Get Pro',
         );
         if (pick === 'Enter License Key') await vscode.commands.executeCommand('strapiDevkit.enterLicenseKey');
-        if (pick === 'Get Pro') await vscode.env.openExternal(vscode.Uri.parse(GET_PRO_URL));
+        if (pick === 'Get Pro') await vscode.env.openExternal(vscode.Uri.parse(proUrl('vscode')));
       }
       return false;
     }

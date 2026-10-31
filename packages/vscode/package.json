@@ -36,7 +36,7 @@
     "url": "https://github.com/PaulRichez/devkit-for-strapi/issues"
   },
   "qna": "https://github.com/PaulRichez/devkit-for-strapi/issues",
-  "homepage": "https://devkit-for-strapi.paulrichez.fr",
+  "homepage": "https://devkit-for-strapi.paulrichez.fr/?utm_source=extension-page&utm_medium=homepage",
   "main": "./dist/extension.js",
   "activationEvents": [
     "onStartupFinished",
@@ -776,7 +776,7 @@
           {
             "id": "agent",
             "title": "Give your AI agent the same knowledge",
-            "description": "The bundled MCP server answers your agent from the project itself.\n[MCP setup](https://devkit-for-strapi.paulrichez.fr/mcp/)",
+            "description": "The bundled MCP server answers your agent from the project itself.\n[MCP setup](https://devkit-for-strapi.paulrichez.fr/mcp/?utm_source=vscode&utm_medium=walkthrough)",
             "media": {
               "markdown": "assets/walkthrough/agent.md"
             }

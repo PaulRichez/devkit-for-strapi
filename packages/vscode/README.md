@@ -8,7 +8,7 @@ Works in VS Code and its forks (Cursor, Windsurf, Google Antigravity). Same engi
 a bundled **MCP server**, so your AI agent answers from the same truth — one deterministic lookup
 instead of grepping your project.
 
-📖 Full docs & guides → **[devkit-for-strapi.paulrichez.fr](https://devkit-for-strapi.paulrichez.fr)**
+📖 Full docs & guides → **[devkit-for-strapi.paulrichez.fr](https://devkit-for-strapi.paulrichez.fr/?utm_source=extension-page&utm_medium=readme)**
 
 ![DevKit for Strapi — accurate Strapi magic-string support in your editor](https://devkit-for-strapi.paulrichez.fr/screenshots/hero.png)
 
@@ -101,8 +101,8 @@ The agent answers from your real `schema.json` — not from a guess.
 The path is **optional** — without it the server uses the client's `roots` capability, then the cwd.
 Passing it is the most reliable: it's indexed at startup, so the first tool call already works.
 
-→ See [For your AI agent (MCP)](https://devkit-for-strapi.paulrichez.fr/mcp/) and the
-[tool reference](https://devkit-for-strapi.paulrichez.fr/mcp-tools/).
+→ See [For your AI agent (MCP)](https://devkit-for-strapi.paulrichez.fr/mcp/?utm_source=extension-page&utm_medium=readme) and the
+[tool reference](https://devkit-for-strapi.paulrichez.fr/mcp-tools/?utm_source=extension-page&utm_medium=readme).
 
 ## Pro — the refactoring engine
 
@@ -137,7 +137,7 @@ One key unlocks both the editor and the MCP Pro tools; the panel's views stay fr
 activation**, then works **offline** (no telemetry, no code leaving your machine).
 14-day money-back.
 
-→ **[Get Pro & activation guide](https://devkit-for-strapi.paulrichez.fr/pro/)**.
+→ **[Get Pro & activation guide](https://devkit-for-strapi.paulrichez.fr/pro/?utm_source=extension-page&utm_medium=readme)**.
 Activate in-editor with **DevKit for Strapi: Enter License Key** (stored in the OS
 keychain, never `settings.json`); the key is forwarded to the bundled MCP server too.
 
@@ -177,7 +177,8 @@ keychain, never `settings.json`); the key is forwarded to the bundled MCP server
 
 DevKit reads your project files **locally** and answers from them. No telemetry, no
 network call to a backend — your code never leaves your machine. (A Pro licence key is
-validated once with the payment provider on activation, then cached offline.)
+validated once with the payment provider on activation, then cached offline.) Links to
+the DevKit site say where they come from (a `utm_source` tag), never who you are.
 
 ## Trademark
 

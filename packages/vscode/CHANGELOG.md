@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+**Links say where they come from**
+
+- The links to the DevKit site — from the extension's Pro messages and offer notice, the
+  MCP server's Pro-required answers, the walkthrough, the store pages and the READMEs —
+  carry a `utm_source` tag (and the offer's `utm_campaign` while it runs), so the site's
+  analytics can tell which ones people follow. Never who you are or anything about your
+  project.
+
 ## 0.2.4
 
 **Black Friday**

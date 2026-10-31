@@ -54,6 +54,16 @@ export function currentOffer(now: number = Date.now()): Offer | undefined {
   return OFFERS.find((o) => now >= o.start && now < o.end)?.offer;
 }
 
+/**
+ * The Pro page, saying where the click comes from (`utm_source`: the editor or the MCP
+ * server; `utm_medium`: a Pro message or the offer's notice; `utm_campaign`: the offer
+ * running) — so the site's analytics can tell. Nothing about the user or the project.
+ */
+export function proUrl(source: 'vscode' | 'mcp', medium: 'upsell' | 'notice' = 'upsell', now: number = Date.now()): string {
+  const offer = currentOffer(now);
+  return `${GET_PRO_URL}?utm_source=${source}&utm_medium=${medium}${offer ? `&utm_campaign=${offer.id}` : ''}`;
+}
+
 /** Every Pro tool (writes, refactors, the data-model diagram), mapped to the capability it belongs to. */
 const TOOL_FEATURE: Record<string, string> = {
   plan_rename_method: 'Propagated rename',
@@ -91,7 +101,7 @@ export function proRequired(tool: string, now: number = Date.now()): ProUpsell {
     feature,
     tool,
     message: `${feature} is a DevKit for Strapi Pro feature — reading and analysing your project stays free, changing it is Pro.`,
-    getPro: GET_PRO_URL,
+    getPro: proUrl('mcp', 'upsell', now),
     activate: ACTIVATE_HINT,
     ...(offer ? { offer: offer.text } : {}),
   };

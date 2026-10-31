@@ -73,4 +73,4 @@ Install the **[DevKit for Strapi](https://marketplace.visualstudio.com/items?ite
 The read/analyse tools are **free (MIT)**. The Pro refactor tools (`plan_*` / `apply_*`,
 `create_plugin`, `extract_to_plugin`) require a licence key. The bundled `LICENSE` covers both:
 **MIT** for the free parts, **PolyForm Shield 1.0.0** for the Pro engine. Get Pro:
-<https://devkit-for-strapi.paulrichez.fr/pro/>
+<https://devkit-for-strapi.paulrichez.fr/pro/?utm_source=npm&utm_medium=readme>

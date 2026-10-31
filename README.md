@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://devkit-for-strapi.paulrichez.fr">Docs</a> ·
+  <a href="https://devkit-for-strapi.paulrichez.fr/?utm_source=github&utm_medium=readme">Docs</a> ·
   <a href="https://marketplace.visualstudio.com/items?itemName=paul-richez.devkit-for-strapi">Install for VS Code</a> ·
   <a href="https://open-vsx.org/extension/paul-richez/devkit-for-strapi">Cursor / Windsurf</a> ·
   <a href="https://www.npmjs.com/package/devkit-for-strapi-mcp">MCP server on npm</a>
@@ -233,4 +233,4 @@ The **Pro write/refactor engine** (propagated rename, move/extract, schema edits
 engine is licensed under **PolyForm Shield 1.0.0** and is bundled into the **published** VS Code
 extension and MCP server, so those distributed artifacts are governed by `MIT AND
 PolyForm-Shield-1.0.0`. Building from this repository produces the **free tier**; Pro features return a
-"Pro required" upsell. Get Pro: <https://devkit-for-strapi.paulrichez.fr/pro/>.
+"Pro required" upsell. Get Pro: <https://devkit-for-strapi.paulrichez.fr/pro/?utm_source=github&utm_medium=readme>.

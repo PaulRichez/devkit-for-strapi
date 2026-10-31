@@ -11,7 +11,7 @@ import {
   touchedPaths,
   type WorkspaceEdit,
 } from 'devkit-for-strapi-core';
-import { GET_PRO_URL, planChangeRelation, planCreatePlugin, planMove, planRename, planRenameAttribute } from 'devkit-for-strapi-pro';
+import { planChangeRelation, planCreatePlugin, planMove, planRename, planRenameAttribute, proUrl } from 'devkit-for-strapi-pro';
 import * as vscode from 'vscode';
 import { toVscodeWorkspaceEdit } from '../conv';
 import { withOffer } from '../offer';
@@ -82,7 +82,7 @@ export function registerRefactorCommands(
       'Get Pro',
     );
     if (pick === 'Enter License Key') await vscode.commands.executeCommand('strapiDevkit.enterLicenseKey');
-    if (pick === 'Get Pro') await vscode.env.openExternal(vscode.Uri.parse(GET_PRO_URL));
+    if (pick === 'Get Pro') await vscode.env.openExternal(vscode.Uri.parse(proUrl('vscode')));
   };
 
   /** The plan reads the disk: save this project's modified files first (and re-index them). */

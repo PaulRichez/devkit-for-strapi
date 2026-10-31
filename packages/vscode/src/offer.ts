@@ -1,4 +1,4 @@
-import { currentOffer, GET_PRO_URL } from 'devkit-for-strapi-pro';
+import { currentOffer, proUrl } from 'devkit-for-strapi-pro';
 import * as vscode from 'vscode';
 
 /**
@@ -40,7 +40,7 @@ export function registerOfferNotice(
     if (shown(offer.id)) return; // another window showed it meanwhile
     await context.globalState.update(SHOWN_KEY, { id: offer.id, at: Date.now() });
     const pick = await vscode.window.showInformationMessage(`${offer.text} One-time purchase.`, 'See Pro');
-    if (pick === 'See Pro') await vscode.env.openExternal(vscode.Uri.parse(GET_PRO_URL));
+    if (pick === 'See Pro') await vscode.env.openExternal(vscode.Uri.parse(proUrl('vscode', 'notice')));
   };
 
   // Checked again every hour: a session can run into the offer's first day.
