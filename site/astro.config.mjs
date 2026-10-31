@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import { ATTRIBUTION_SCRIPT } from './src/attribution.mjs';
 import { OFFER_SCRIPT } from './src/offer.mjs';
 
 // Hosted on a free subdomain of the existing paulrichez.fr (no new domain to buy).
@@ -65,6 +66,8 @@ export default defineConfig({
         },
         // Shows the Black Friday price on its dates only (the Pro page's note).
         { tag: 'script', content: OFFER_SCRIPT },
+        // Carries where the visit comes from to Polar's checkout links.
+        { tag: 'script', content: ATTRIBUTION_SCRIPT },
       ],
       customCss: ['./src/styles/theme.css'],
       lastUpdated: true,

@@ -6,6 +6,7 @@
 // Starlight docs theme is untouched).
 
 import vscodeManifest from '../../../packages/vscode/package.json';
+import { ATTRIBUTION_SCRIPT } from '../attribution.mjs';
 import { OFFER_SCRIPT } from '../offer.mjs';
 
 const VSCODE_MARKETPLACE =
@@ -151,6 +152,7 @@ const faqs = [
     </script>
     <!-- The Black Friday price, on its dates only. -->
     <script is:inline set:html={OFFER_SCRIPT}></script>
+    <script is:inline set:html={ATTRIBUTION_SCRIPT}></script>
   </head>
   <body>
     <div class="offer-bar" data-offer-show hidden>

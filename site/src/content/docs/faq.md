@@ -8,7 +8,10 @@ description: Common questions about DevKit for Strapi.
 No. **Your code never leaves your machine** — DevKit reads your project files
 locally and answers from them, with **no telemetry**. The one exception is a
 [Pro](/pro/) licence: on activation the licence **key** (never your code) is
-checked once against the Polar licensing API, then DevKit works offline.
+checked once against the Polar licensing API, then DevKit works offline. On this
+site, the checkout links carry where your visit came from (its `utm_` tags, or the
+referring site), which Polar keeps with the payment; it is remembered for the browser
+tab only, with no cookie — never who you are.
 
 ## Does it run my project’s code?
 
