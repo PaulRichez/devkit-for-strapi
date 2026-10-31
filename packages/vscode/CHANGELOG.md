@@ -64,6 +64,13 @@
   tooltip. Config Sync through the project's Strapi refuses it with its own error,
   instead of "install the project's dependencies".
 
+**Projects git ignores are not found twice**
+
+- Project discovery skips the folders your `.gitignore` files ignore: a release build or
+  a backup copy of the app no longer shows every project twice (in the panel, the
+  Config Sync view, the MCP's `list_projects`). A folder opened in the workspace, or
+  given to `add_project`, is still searched.
+
 **Out of the way where there is no Strapi**
 
 - In a workspace without a Strapi project, the extension no longer offers its MCP

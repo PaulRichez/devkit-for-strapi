@@ -1,6 +1,7 @@
 import { type FileSystem, FileType } from '../fs/FileSystem';
 import { dirname, isPathInside, join, normalize } from '../fs/paths';
 import { asRecord, asString, safeParse } from '../util/json';
+import { type IgnoreRule, isIgnoredDir, parseGitignore } from './gitignore';
 
 const PRUNE = new Set([
   'node_modules',
@@ -35,19 +36,29 @@ export function isStrapiPluginPackageJson(raw: string): boolean {
 /**
  * Discover Strapi project roots by content — scanning every package.json for
  * `@strapi/strapi`. Never assumes "workspace root = Strapi root". Prunes heavy
- * directories and bounds depth so large monorepos stay fast.
+ * directories and the folders git ignores (a release build, a backup copy of the
+ * app: every project twice otherwise), and bounds depth so large monorepos stay fast.
+ * The folders passed are always walked: one git ignores is reached by passing it.
  */
 export async function discoverProjectRoots(fs: FileSystem, folders: string[]): Promise<string[]> {
   const roots: string[] = [];
   const seen = new Set<string>();
 
-  const walk = async (dir: string, depth: number): Promise<void> => {
+  const walk = async (dir: string, depth: number, inherited: readonly IgnoreRule[]): Promise<void> => {
     if (depth > MAX_DEPTH) return;
     let entries;
     try {
       entries = await fs.readDirectory(dir);
     } catch {
       return;
+    }
+    let rules = inherited;
+    if (entries.some((e) => e.type === FileType.File && e.name === '.gitignore')) {
+      try {
+        rules = [...inherited, ...parseGitignore(await fs.readFile(join(dir, '.gitignore')), dir)];
+      } catch {
+        // unreadable .gitignore — walk as if it weren't there
+      }
     }
 
     if (entries.some((e) => e.type === FileType.File && e.name === 'package.json')) {
@@ -68,14 +79,14 @@ export async function discoverProjectRoots(fs: FileSystem, folders: string[]): P
     }
 
     for (const e of entries) {
-      if (e.type === FileType.Directory && !PRUNE.has(e.name)) {
-        await walk(join(dir, e.name), depth + 1);
-      }
+      if (e.type !== FileType.Directory || PRUNE.has(e.name)) continue;
+      const sub = join(dir, e.name);
+      if (!isIgnoredDir(rules, sub)) await walk(sub, depth + 1, rules);
     }
   };
 
   for (const folder of folders) {
-    await walk(normalize(folder), 0);
+    await walk(normalize(folder), 0, []);
   }
   return roots;
 }

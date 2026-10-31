@@ -38,6 +38,11 @@ Patterns are glob-matched against each discovered project’s path; a bare segme
 like `examples` matches a project in any folder of that name. A discovered project
 whose path matches any pattern is ignored.
 
+The folders git ignores (your `.gitignore` files) are skipped without a setting: a
+release build or a backup copy of the app doesn't show every project twice. To work
+on a project inside one, open that folder itself (a workspace folder is always
+searched), or give its path to the MCP server's `add_project`.
+
 ## Commands
 
 From the Command Palette (`Ctrl/Cmd+Shift+P`):
