@@ -45,6 +45,31 @@ describe('answers name files relative to their project', () => {
     expect(JSON.parse((r.content[1] as { text: string }).text)).toEqual({ unreadRoutes: [{ file: 'src/plugins/x/strapi-server.js' }] });
   });
 
+  it('a root that is also a URL segment (`/app`, `/api` in a container) never touches a route URL nor a path where it is not the start', () => {
+    const r = withRelativePaths(
+      answer({
+        routes: [
+          { method: 'GET', path: '/app/status', fullPath: '/api/app/status', filePath: '/app/src/api/app/routes/app.js' },
+          { method: 'GET', path: '/settings', fullPath: '/api/app/settings', filePath: '/app/src/api/app/routes/app.js' },
+        ],
+        matching: ['GET /app/status'],
+        note: 'declared in /app/src/api/app/routes/app.js',
+      }),
+      ['/app'],
+    );
+    expect(read(r)).toEqual({
+      root: '/app',
+      routes: [
+        { method: 'GET', path: '/app/status', fullPath: '/api/app/status', filePath: 'src/api/app/routes/app.js' },
+        { method: 'GET', path: '/settings', fullPath: '/api/app/settings', filePath: 'src/api/app/routes/app.js' },
+      ],
+      matching: ['GET /app/status'],
+      note: 'declared in src/api/app/routes/app.js',
+    });
+    const api = withRelativePaths(answer({ routes: [{ method: 'GET', path: '/articles', fullPath: '/api/articles', filePath: '/api/src/api/article/routes/article.js' }] }), ['/api']);
+    expect(read(api)).toEqual({ root: '/api', routes: [{ method: 'GET', path: '/articles', fullPath: '/api/articles', filePath: 'src/api/article/routes/article.js' }] });
+  });
+
   it('an answer already giving this project as `root` keeps it once', () => {
     const r = withRelativePaths(answer({ root: A, file: `${A}/x.ts` }), [A]);
     expect(read(r)).toEqual({ root: A, file: 'x.ts' });

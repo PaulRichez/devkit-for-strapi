@@ -190,7 +190,7 @@ describe('MCP tools (engine-backed handlers)', () => {
 
   it('list_content_types returns real UIDs for the selected project (F1)', async () => {
     const data = await call('list_content_types', { from: cmsARoot });
-    expect(data.map((c: { uid: string }) => c.uid)).toContain('api::page.page');
+    expect(data.contentTypes.map((c: { uid: string }) => c.uid)).toContain('api::page.page');
   });
 
   it('get_schema returns the real schema (F1)', async () => {
@@ -308,6 +308,15 @@ describe('MCP tools (engine-backed handlers)', () => {
     expect(data.ambiguous).toBe(true);
     expect(data.candidates.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('a relative `from` with several projects: never guessed, read under the one `project` names', async () => {
+    const guessed = await call('project_info', { from: 'src/api/page/content-types/page/schema.json' });
+    expect(guessed.ambiguous).toBe(true);
+    expect(guessed.message).toMatch(/`from` is relative/);
+    const named = await call('project_info', { from: 'src/api/page/content-types/page/schema.json', project: 'cms-a' });
+    expect(named.ambiguous).toBeUndefined();
+    expect(named.root).toBe(cmsARoot);
+  });
 });
 
 describe('MCP tools with zero discovered projects', () => {
@@ -386,7 +395,7 @@ describe('MCP Pro gate (licence)', () => {
 
   it('read/analyse tools still work unlicensed', async () => {
     const data = await call('list_content_types', { from: cmsA });
-    expect(data.map((c: { uid: string }) => c.uid)).toContain('api::page.page');
+    expect(data.contentTypes.map((c: { uid: string }) => c.uid)).toContain('api::page.page');
   });
 });
 
@@ -428,6 +437,27 @@ describe('feedback v2 #19, #21, #23 through the tools', () => {
   it('list_unused: a service loaded by path says so', async () => {
     const res = JSON.parse(((await raw('list_unused', { kinds: ['service'] })).content[0] as { text: string }).text);
     expect(res.unused.find((u: { ref: string }) => u.ref === 'api::bar.helper').requiredByPath).toEqual(['src/index.js']); // relative to `root`
+  });
+
+  it('a path copied from an answer (relative to its `root`) works as `file` and as `from`', async () => {
+    const json = async (name: string, args: unknown): Promise<any> => JSON.parse(((await raw(name, args)).content[0] as { text: string }).text); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const abs = await json('list_unused', { file: `${R}/src/api/bar/services/helper.js` });
+    const rel = await json('list_unused', { file: 'src/api/bar/services/helper.js' });
+    expect(abs.unused.length).toBeGreaterThan(0);
+    expect(rel.unused).toEqual(abs.unused);
+    const info = await json('project_info', { from: 'src/api/bar/services/helper.js' });
+    expect(info.ambiguous).toBeUndefined();
+    expect(info.root).toBe(R);
+  });
+
+  it('the list tools answer an object, so their files are relative to a `root` too', async () => {
+    const text = async (name: string): Promise<string> => ((await raw(name, {})).content[0] as { text: string }).text;
+    for (const [tool, key] of [['list_content_types', 'contentTypes'], ['list_artifacts', 'artifacts']] as const) {
+      const data = JSON.parse(await text(tool));
+      expect(Array.isArray(data[key])).toBe(true);
+      expect(data.root).toBe(R);
+      expect(await text(tool)).not.toContain(`"${R}/`);
+    }
   });
 
   it('list_routes: a local plugin whose routes are unread comes in a block of its own, the table unchanged', async () => {

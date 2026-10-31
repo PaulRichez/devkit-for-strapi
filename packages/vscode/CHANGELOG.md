@@ -16,26 +16,35 @@
   (`25: "api::restaurant.restaurant" → "api::restaurant.eatery"`), grouped by file, with
   the renames, new files and deletes, and a summary — paths relative to the project.
   The exact edits and the files' fingerprints stay with the server under the `planId`.
-  On foodadvisor, renaming `api::restaurant.restaurant` answers 2,161 characters,
-  warnings included, where the raw plan alone took 5,657. A plan too long for one
-  answer shows its last files as counts and says so; `apply_edits` still applies all
-  of it.
+  On foodadvisor, renaming `api::restaurant.restaurant` answers 2,247 characters,
+  warnings included, where the raw plan alone took 5,657.
+- An edit over several lines — a `config/sync` file a refactor rewrites whole — shows
+  the lines it changes (`100: "…api::alert.alert…" → "…api::alert.notice…"`), and says
+  when it changes the file's line endings.
+- A plan too long for one answer still fits: the last files' edits become counts, then
+  new files lose their content, then renames past what fits are counted, and the
+  answer says what it left out; `apply_edits` still applies all of it.
 - `apply_edits` takes a `planId` only: it applies a plan DevKit computed this session,
   never a plan object handed in. Its answer, and `apply_rename`'s, give paths relative
   to the project.
 - Every answer names files relative to the project and gives its `root` once, when its
-  files all lie in one project (several projects: kept absolute). On foodadvisor,
-  `find_references` goes from 1,502 to 1,077 characters, `list_routes` from 34,132 to
-  30,450.
-- `list_routes` answers `{ routes }`, as it already did with `pipeline: true`, instead
-  of a bare list.
+  files all lie in one project (several projects: kept absolute); a route's URL is never
+  touched. On foodadvisor, `find_references` goes from 1,502 to 1,077 characters,
+  `list_routes` from 34,132 to 30,450.
+- A path copied from an answer works as input: `from`, and `list_unused`'s `file`, take
+  a path relative to the project root (with several projects, `from` needs `project` to
+  say which; it is never guessed).
+- `list_routes`, `list_content_types`, `list_components` and `list_artifacts` answer an
+  object (`{ routes }`, `{ contentTypes }`, `{ components }`, `{ artifacts }`) instead of
+  a bare list, as `list_routes` already did with `pipeline: true`.
 - `list_routes` with `pipeline: true` is compact: a global middleware Strapi finds is
   just its name, in Strapi's order (any other keeps its detail), and a step written in
   the route's own declaration doesn't repeat where that is. On foodadvisor, the
   pipeline of `GET /restaurants` goes from 8,387 characters to about 2,550.
-- Lighter tool definitions, which some clients send with every request: 33,374
-  characters instead of 47,973 (about 8,300 tokens instead of 12,000). The descriptions
-  say what each tool is for in fewer words; the server instructions keep the workflow.
+- Lighter tool definitions, which some clients send with every request: 34,390
+  characters instead of 49,365 in 0.2.3 (about 8,600 tokens instead of 12,300). The
+  descriptions say what each tool is for in fewer words; the server instructions keep
+  the workflow.
 - The two aliases deprecated since the first release, `change_relation` and
   `rename_attribute`, are gone: use `plan_change_relation` and `plan_rename_attribute`.
   35 tools.

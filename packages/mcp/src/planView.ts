@@ -21,7 +21,7 @@ export interface PlanView {
   creates?: Record<string, string>;
   deletes?: string[];
   warnings?: string[];
-  /** Set when the answer leaves part of the plan out (the planId still applies all of it). */
+  /** Set when the answer leaves part of the plan out, saying what (the planId still applies all of it). */
   shortened?: string;
 }
 
@@ -40,24 +40,53 @@ function lineStarts(text: string): number[] {
   return starts;
 }
 
-/** One file's edits as review lines, in file order — exact duplicates once, as the applier does. */
-function editLines(content: string | undefined, edits: TextEditOp[]): string[] {
+const span = (from: number, to: number): string => (to > from ? `${from}-${to}` : `${from}`);
+
+/**
+ * A multi-line edit (a whole sync file rewritten, a block inserted) as the lines it
+ * really changes — not its first characters — and a line saying when it changes the
+ * line endings. `first`: the 1-based line the old text starts on.
+ */
+function changedLines(first: number, old: string, next: string): string[] {
+  const a = old.split(/\r?\n/);
+  const b = next.split(/\r?\n/);
+  const crlf = (s: string): boolean => s.includes('\r\n');
+  const eol = crlf(old) !== crlf(next) && old.includes('\n') && next.includes('\n') ? [`${span(first, first + a.length - 1)}: line endings ${crlf(old) ? 'CRLF → LF' : 'LF → CRLF'}`] : [];
+  if (a.length === b.length) {
+    const out: string[] = [];
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) out.push(`${first + i}: ${quote(a[i]!)} → ${quote(b[i]!)}`);
+    return out.length || eol.length ? [...out, ...eol] : [`${span(first, first + a.length - 1)}: unchanged`];
+  }
+  // Lines added or removed: the block between the first and the last lines both keep.
+  let p = 0;
+  while (p < a.length && p < b.length && a[p] === b[p]) p++;
+  let s = 0;
+  while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+  const oldBlock = a.slice(p, a.length - s).join('\n');
+  const newBlock = b.slice(p, b.length - s).join('\n');
+  return [`${span(first + p, Math.max(first + p, first + a.length - 1 - s))}: ${quote(oldBlock)} → ${quote(newBlock)}`, ...eol];
+}
+
+/** One file's edits as review lines, in file order — exact duplicates once, as the applier does — and how many edits. */
+function editLines(content: string | undefined, edits: TextEditOp[]): { lines: string[]; count: number } {
   const starts = content === undefined ? [] : lineStarts(content);
   const offset = (p: TextEditOp['start']): number => (starts[p.line] ?? content?.length ?? 0) + p.character;
   const seen = new Set<string>();
-  return [...edits]
+  const unique = [...edits]
     .sort((a, b) => a.start.line - b.start.line || a.start.character - b.start.character)
     .filter((e) => {
       const key = `${e.start.line}:${e.start.character}:${e.end.line}:${e.end.character}:${e.newText}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
-    })
-    .map((e) => {
-      const lines = e.end.line > e.start.line ? `${e.start.line + 1}-${e.end.line + 1}` : `${e.start.line + 1}`;
-      const old = content === undefined ? '(file unreadable)' : quote(content.slice(offset(e.start), offset(e.end)));
-      return `${lines}: ${old} → ${quote(e.newText)}`;
     });
+  const lines = unique.flatMap((e) => {
+    if (content === undefined) return [`${span(e.start.line + 1, e.end.line + 1)}: (file unreadable) → ${quote(e.newText)}`];
+    const old = content.slice(offset(e.start), offset(e.end));
+    if (old.includes('\n') || e.newText.includes('\n')) return changedLines(e.start.line + 1, old, e.newText);
+    return [`${e.start.line + 1}: ${quote(old)} → ${quote(e.newText)}`];
+  });
+  return { lines, count: unique.length };
 }
 
 /** The review view of a plan, within `max` characters (files past it are counted, not listed). */
@@ -72,12 +101,14 @@ export async function planView(
   for (const e of plan.textEdits) byFile.set(e.filePath, [...(byFile.get(e.filePath) ?? []), e]);
 
   const edits: Record<string, string[]> = {};
+  const editsIn = new Map<string, number>();
   let editCount = 0;
   for (const [file, list] of byFile) {
     const content = await fs.readFile(file).catch(() => undefined);
-    const lines = editLines(content, list);
-    editCount += lines.length;
+    const { lines, count } = editLines(content, list);
+    editCount += count;
     edits[relativeTo(root, file)] = lines;
+    editsIn.set(relativeTo(root, file), count);
   }
 
   const renames = plan.fileRenames.map((r) => `${relativeTo(root, r.from)} → ${relativeTo(root, r.to)}`);
@@ -102,21 +133,49 @@ export async function planView(
     ...(warnings?.length ? { warnings } : {}),
   };
 
-  // Too long for one answer: whole files while they fit, then the rest as counts,
-  // with room left for the note that says so.
-  let size = JSON.stringify(view, null, 2).length;
+  // Too long for one answer: left out step by step, each step said, with room kept for
+  // the note — the last files' edits become counts, then new files lose their content,
+  // then renames past what fits, then the counted files themselves.
+  // Sizes are tracked as parts are cut (a part alone is printed less indented than in
+  // the view, so what is subtracted is a little less than what goes: the estimate errs
+  // high) and measured again between steps.
+  const sizeOf = (): number => JSON.stringify(view, null, 2).length;
+  const part = (v: unknown): number => JSON.stringify(v, null, 2).length;
+  let size = sizeOf();
   if (size <= max) return view;
-  const room = max - 300;
+  const room = max - 600;
+  const left: string[] = [];
   const files = Object.keys(edits);
   let counted = 0;
   for (let i = files.length - 1; i >= 0 && size > room; i--) {
     const f = files[i]!;
-    const n = edits[f]!.length;
-    size -= JSON.stringify(edits[f], null, 2).length;
-    edits[f] = [`${count(n, 'edit')}, not shown: too long for one answer`];
-    size += JSON.stringify(edits[f], null, 2).length;
+    size -= part(edits[f]);
+    edits[f] = [`${count(editsIn.get(f) ?? 0, 'edit')}, not shown`];
+    size += part(edits[f]);
     counted++;
   }
-  view.shortened = `${count(counted, 'file')} shown as a count only: the answer would be too long. apply_edits applies the whole plan, those files included (git diff shows their edits once applied).`;
+  if (counted) left.push(`the edits of ${count(counted, 'file')} (counted only)`);
+  size = sizeOf();
+  if (size > room && view.creates) {
+    view.creates = Object.fromEntries(Object.entries(view.creates).map(([p, c]) => [p, `(${c.length} chars, not shown)`]));
+    left.push("the new files' content");
+    size = sizeOf();
+  }
+  if (size > room && view.renames) {
+    const all = view.renames;
+    let kept = all.length;
+    while (kept > 0 && size > room) size -= part(all[--kept]) + 6;
+    view.renames = [...all.slice(0, kept), `… ${all.length - kept} more`];
+    left.push(count(all.length - kept, 'rename'));
+    size = sizeOf();
+  }
+  let dropped = 0;
+  for (let i = files.length - 1; i >= 0 && size > room; i--) {
+    size -= part(files[i]) + part(edits[files[i]!]) + 4;
+    delete edits[files[i]!];
+    dropped++;
+  }
+  if (dropped) left.push(`${count(dropped, 'file')} not even named`);
+  if (left.length) view.shortened = `Too long for one answer, so left out: ${left.join('; ')}. apply_edits applies the whole plan (git diff shows all of it once applied).`;
   return view;
 }

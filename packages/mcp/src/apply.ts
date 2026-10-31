@@ -17,7 +17,7 @@ function lineStarts(text: string): number[] {
  * Apply text edits to one file's content (right-to-left so offsets don't shift).
  * Drops exact duplicates and **refuses overlapping ranges** (throws): applying
  * overlapping edits would silently corrupt the file. A hard safety boundary
- * independent of whichever planner — or hand-built `plan` — produced the edits.
+ * independent of whichever planner produced the edits.
  */
 function applyTextEdits(content: string, edits: TextEditOp[]): string {
   const starts = lineStarts(content);

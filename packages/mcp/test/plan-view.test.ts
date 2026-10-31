@@ -78,9 +78,47 @@ describe('plan view (what a plan_* tool answers)', () => {
     const view = await planView(fs, ROOT, { planId: 'p5', textEdits: many, fileRenames: [] }, undefined, 4_000);
     expect(JSON.stringify(view, null, 2).length).toBeLessThanOrEqual(4_000);
     expect(view.edits['src/f0.ts']![0]).toMatch(/^1: \(file unreadable\) → "y{200}"$/);
-    expect(view.edits['src/f29.ts']).toEqual(['1 edit, not shown: too long for one answer']);
+    expect(view.edits['src/f29.ts']).toEqual(['1 edit, not shown']);
     expect(view.summary).toBe('30 edits in 30 files');
-    expect(view.shortened).toMatch(/shown as a count only.*apply_edits applies the whole plan/);
+    expect(view.shortened).toMatch(/left out: the edits of \d+ files \(counted only\)\. apply_edits applies the whole plan/);
+  });
+
+  it('a whole sync file rewritten in one edit shows the lines it changes, and a change of line endings', async () => {
+    const sync = `${ROOT}/config/sync/user-role.public.json`;
+    files[sync] = '{\r\n  "action": "api::restaurant.restaurant.find",\r\n  "role": "public"\r\n}';
+    const view = await planView(
+      fs,
+      ROOT,
+      { planId: 'p6', textEdits: [edit(sync, 0, 0, 3, 1, '{\n  "action": "api::restaurant.eatery.find",\n  "role": "public"\n}')], fileRenames: [] },
+      undefined,
+      40_000,
+    );
+    expect(view.edits['config/sync/user-role.public.json']).toEqual([
+      '2: "  \\"action\\": \\"api::restaurant.restaurant.find\\"," → "  \\"action\\": \\"api::restaurant.eatery.find\\","',
+      '1-4: line endings CRLF → LF',
+    ]);
+    expect(view.summary).toBe('1 edit in 1 file'); // one edit, however many lines it changes
+  });
+
+  it('lines added: the block between the lines both sides keep', async () => {
+    const cfg = `${ROOT}/config/plugins.js`;
+    files[cfg] = 'module.exports = {\n  a: {},\n};\n';
+    const view = await planView(fs, ROOT, { planId: 'p7', textEdits: [edit(cfg, 0, 0, 2, 2, 'module.exports = {\n  a: {},\n  b: { enabled: true },\n};')], fileRenames: [] }, undefined, 40_000);
+    expect(view.edits['config/plugins.js']).toEqual(['3: "" → "  b: { enabled: true },"']);
+  });
+
+  it('a plan far too long — 800 files, or 600 renames alone — still fits, and says exactly what it leaves out', async () => {
+    const wide = Array.from({ length: 800 }, (_, i) => edit(`${ROOT}/src/api/a${i}/services/s${i}.ts`, 0, 0, 0, 0, 'z'.repeat(100)));
+    const v1 = await planView(fs, ROOT, { planId: 'p8', textEdits: wide, fileRenames: [] }, undefined, 40_000);
+    expect(JSON.stringify(v1, null, 2).length).toBeLessThanOrEqual(40_000);
+    expect(v1.summary).toBe('800 edits in 800 files');
+    expect(v1.shortened).toMatch(/the edits of \d+ files \(counted only\); \d+ files not even named/);
+    const renames = Array.from({ length: 600 }, (_, i) => ({ from: `${ROOT}/src/api/long-folder-name-${i}/services/x.ts`, to: `${ROOT}/src/api/long-folder-name-${i}/services/y.ts` }));
+    const v2 = await planView(fs, ROOT, { planId: 'p9', textEdits: [], fileRenames: renames }, undefined, 40_000);
+    expect(JSON.stringify(v2, null, 2).length).toBeLessThanOrEqual(40_000);
+    expect(v2.renames!.at(-1)).toMatch(/^… \d+ more$/);
+    expect(v2.shortened).toMatch(/left out: \d+ renames\./);
+    expect(v2.shortened).not.toMatch(/files/);
   });
 
   it('a path outside the root stays absolute', () => {

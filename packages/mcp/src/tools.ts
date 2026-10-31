@@ -73,7 +73,7 @@ import {
 import { z } from 'zod';
 import { applyWorkspaceEdit, type ApplyResult } from './apply';
 import { planView } from './planView';
-import { relativeTo, withRelativePaths } from './relativePaths';
+import { relativeTo, underRoot, withRelativePaths } from './relativePaths';
 import { saveRootsCache } from './rootsCache';
 import { VERSION } from './version';
 
@@ -190,7 +190,7 @@ const tagFixture = <T extends { root: string }>(p: T): T & { fixture?: true } =>
 
 /** `from`/`project` selector shared by every project-scoped tool. */
 const selector = {
-  from: z.string().optional().describe('A path inside the project (e.g. the file you are editing), in a multi-project workspace.'),
+  from: z.string().optional().describe('A path inside the project (the file you are editing; relative to its root with `project`), in a multi-project workspace.'),
   project: z.string().optional().describe('A project name or root, when no path is at hand.'),
 };
 
@@ -227,7 +227,23 @@ function pick(
   sel: { from?: string; project?: string },
   roots: readonly string[],
 ): { project: StrapiProject } | { result: CallToolResult } {
-  const s = selectProject(engine.allProjects(), sel);
+  const projects = engine.allProjects();
+  // A relative `from` (copied from an answer, relative to its `root`): under the project
+  // `project` names, or the only one — never a guess between several.
+  if (sel.from && !paths.isAbsolute(sel.from) && projects.length > 0) {
+    const base = sel.project ? selectProject(projects, { project: sel.project }) : projects.length === 1 ? { project: projects[0]! } : undefined;
+    if (!base || !('project' in base)) {
+      return {
+        result: json({
+          ambiguous: true,
+          message: '`from` is relative and several projects are indexed: pass it absolute (joined to the `root` of the answer it came from), or add `project` (a name below).',
+          candidates: (base && 'candidates' in base ? base.candidates : projects.map((p) => ({ name: paths.basename(p.root), root: p.root }))).map(tagFixture),
+        }),
+      };
+    }
+    sel = { from: underRoot(base.project.root, sel.from) };
+  }
+  const s = selectProject(projects, sel);
   if ('project' in s) return { project: s.project };
   // Zero discovered projects is *not* ambiguity — saying "multiple … candidates: []"
   // (the old behaviour) is a lie. Tell the truth and surface where we looked, since
@@ -511,7 +527,7 @@ export function registerTools(
     async (args) => {
       await ready;
       const p = pick(engine, args, roots());
-      return 'result' in p ? p.result : json(listContentTypes(p.project));
+      return 'result' in p ? p.result : json({ contentTypes: listContentTypes(p.project) });
     },
   );
 
@@ -525,7 +541,7 @@ export function registerTools(
     async (args) => {
       await ready;
       const p = pick(engine, args, roots());
-      return 'result' in p ? p.result : json(listComponents(p.project));
+      return 'result' in p ? p.result : json({ components: listComponents(p.project) });
     },
   );
 
@@ -543,7 +559,7 @@ export function registerTools(
     async (args) => {
       await ready;
       const p = pick(engine, args, roots());
-      return 'result' in p ? p.result : json(listArtifacts(p.project, args.kind));
+      return 'result' in p ? p.result : json({ artifacts: listArtifacts(p.project, args.kind) });
     },
   );
 
@@ -653,7 +669,7 @@ export function registerTools(
     {
       title: 'Find references to a Strapi entity',
       description:
-        'Every call-site of a ref (or `ref#method`) in the project\'s own code (src/, config/, database/migrations): the total, then a page of `path:line:col [via]  snippet` lines. A UID written as a plain value counts as `[literal]`; `unresolvedCalls` are the Strapi calls whose UID DevKit cannot read, which may reach it too.',
+        'Every call-site of a ref (or `ref#method`) in the project\'s own code (src/, config/, database/migrations): the total, then a page of `path:line:col [via]  snippet` lines (1-based). A UID written as a plain value counts as `[literal]`; `unresolvedCalls` are the Strapi calls whose UID DevKit cannot read, which may reach it too.',
       inputSchema: {
         ref: z.string().optional().describe(REF_HELP),
         refs: z.array(z.string()).optional().describe('Several refs at once.'),
@@ -761,7 +777,7 @@ export function registerTools(
       description:
         "Definitions no Strapi ref reaches: methods, content-types, components, services, policies, middlewares. Only Strapi refs count, so a method called directly in TS still appears — verify before deleting. `onlyArchivedCallers`: only called by migrations Strapi never runs; `requiredByPath`: its file is loaded by path, so the module is used.",
       inputSchema: {
-        file: z.string().optional().describe('Only this file (default: the whole app).'),
+        file: z.string().optional().describe('Only this file, absolute or relative to the project root (default: the whole app).'),
         kinds: z
           .array(z.enum(['method', 'content-type', 'component', 'service', 'policy', 'middleware']))
           .optional()
@@ -774,7 +790,7 @@ export function registerTools(
       await engine.whenReferencesReady();
       const p = pick(engine, args, roots());
       if ('result' in p) return p.result;
-      const all = listUnused(p.project, { kinds: args.kinds, file: args.file });
+      const all = listUnused(p.project, { kinds: args.kinds, file: args.file === undefined ? undefined : underRoot(p.project.root, args.file) });
       const unresolved = all.length ? unresolvedNote(p.project, [...new Set(all.map((u) => (u.kind === 'method' ? 'method' : u.kind)))], all.map((u) => u.ref)) : undefined;
       // Within one answer: each item names a few files (and how many), and when the list
       // still doesn't fit, the first items — said, with how to narrow it.
