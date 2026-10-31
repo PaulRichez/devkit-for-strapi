@@ -19,7 +19,7 @@ export { parseSchemaFile } from './index/schema';
 export { parseComponentFile } from './index/components';
 export { extractControllerActions } from './index/actions';
 export { discoverProjectRoots, isStrapiPackageJson } from './workspace/discovery';
-export { detectVersion, parseMajor } from './workspace/version';
+export { detectVersion, LATEST_KNOWN_MAJOR, parseMajor, unsupportedVersion } from './workspace/version';
 export { analyzeAt, collectReferences } from './analyze/callSite';
 export { isKebabCase, normalizeApiName } from './index/loaderNames';
 export { readLocalPluginRegistry, type CollectionRead, type LocalPluginRegistry, type RegistryEntry } from './plugins/localRegistry';

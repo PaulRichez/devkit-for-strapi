@@ -56,6 +56,14 @@
   **Import into the Database** for that entry, with the same confirmations as the list.
   Edit the file in the diff, then import it.
 
+**A Strapi newer than DevKit knows is said**
+
+- A project on Strapi 6 (installed, else declared) was read as Strapi 5 without a
+  word. It still is, and now says so: first among `project_info`'s notes (and
+  `strapi.unsupported`), in `list_projects`, the Health view and the status bar's
+  tooltip. Config Sync through the project's Strapi refuses it with its own error,
+  instead of "install the project's dependencies".
+
 **Out of the way where there is no Strapi**
 
 - In a workspace without a Strapi project, the extension no longer offers its MCP

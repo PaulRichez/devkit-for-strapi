@@ -7,8 +7,10 @@
 export type RuntimeStep = 'start' | 'compile' | 'config' | 'register' | 'check' | 'bootstrap' | 'command';
 
 export type RuntimeErrorKind =
-  /** @strapi/strapi is not installed (no node_modules), or not Strapi 4 / 5. */
+  /** @strapi/strapi is not installed (no node_modules). */
   | 'no-strapi'
+  /** An installed Strapi other than 4 or 5 (Strapi 6…): not loaded. */
+  | 'unsupported-strapi'
   /** strapi-plugin-config-sync is not installed, or not enabled. */
   | 'plugin-missing'
   /** No Node to run the project with (the `nodePath` setting, or `node` on the PATH). */

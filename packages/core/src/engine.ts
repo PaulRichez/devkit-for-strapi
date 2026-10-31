@@ -44,7 +44,7 @@ import { withTimeout } from './util/timeout';
 import { asRecord, asString, safeParse } from './util/json';
 import { validateDocument } from './validate/validator';
 import { discoverProjectRoots, findStrapiRootUp } from './workspace/discovery';
-import { detectVersion } from './workspace/version';
+import { detectVersion, unsupportedVersion } from './workspace/version';
 
 export interface StrapiEngine {
   /**
@@ -401,6 +401,7 @@ class Engine implements StrapiEngine {
       version: p.version,
       ...(p.strapiVersion ? { strapiVersion: p.strapiVersion } : {}),
       ...(p.versionSignals.spec ? { declaredVersion: p.versionSignals.spec } : {}),
+      ...((u) => (u ? { unsupportedVersion: u } : {}))(unsupportedVersion(p.strapiVersion, p.versionSignals.packageMajor)),
       counts: {
         contentTypes: p.index.contentTypes.size,
         components: p.index.components.size,

@@ -8,6 +8,19 @@ export function parseMajor(spec: string | undefined): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
+/** The newest Strapi major DevKit knows: a later one is read as it — and said. */
+export const LATEST_KNOWN_MAJOR = 5;
+
+/**
+ * A sentence when the project's Strapi (the installed version, else the declared
+ * range) is newer than DevKit knows — read as the latest it knows — else undefined.
+ */
+export function unsupportedVersion(installed: string | undefined, declaredMajor: number | undefined): string | undefined {
+  const major = parseMajor(installed) ?? declaredMajor;
+  if (major === undefined || major <= LATEST_KNOWN_MAJOR) return undefined;
+  return `Strapi ${major} isn't supported yet: DevKit reads this project as Strapi ${LATEST_KNOWN_MAJOR}, so some names, routes or checks may be wrong.`;
+}
+
 export interface VersionResult {
   version: StrapiVersion;
   signals: VersionSignals;

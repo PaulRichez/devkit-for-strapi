@@ -515,6 +515,8 @@ export interface ProjectSummary {
   strapiVersion?: string;
   /** The `@strapi/strapi` range declared in package.json (e.g. `^4.25.1`). */
   declaredVersion?: string;
+  /** Set when the project's Strapi is newer than DevKit knows (Strapi 6…): what that means. */
+  unsupportedVersion?: string;
   counts: {
     contentTypes: number;
     components: number;

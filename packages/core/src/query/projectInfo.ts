@@ -41,7 +41,8 @@ export interface PluginInfo {
 export interface ProjectInfo {
   name: string;
   root: string;
-  strapi: { major: number; installed?: string; declared?: string };
+  /** `unsupported`: the project's Strapi is newer than DevKit knows (Strapi 6…), read as Strapi 5 — what that means. */
+  strapi: { major: number; installed?: string; declared?: string; unsupported?: string };
   language: 'typescript' | 'javascript';
   packageManager?: 'npm' | 'yarn' | 'pnpm' | 'bun';
   /** `@strapi/strapi` is installed: installed plugins can be read and verified. */
@@ -264,11 +265,18 @@ export async function projectInfo(
     if (warnings.includes(IMPORT_ON_BOOTSTRAP_WARNING)) notes.push(IMPORT_ON_BOOTSTRAP_WARNING);
   }
   if (summary.freshness.diskTracking === 'off') notes.push('Too many files to compare with the disk on each call: call refresh after editing files outside this session.');
+  // First: it qualifies every other answer about this project.
+  if (summary.unsupportedVersion) notes.unshift(summary.unsupportedVersion);
 
   return {
     name: basename(root),
     root,
-    strapi: { major: project.version, ...(installedVersion ? { installed: installedVersion } : {}), ...(project.versionSignals.spec ? { declared: project.versionSignals.spec } : {}) },
+    strapi: {
+      major: project.version,
+      ...(installedVersion ? { installed: installedVersion } : {}),
+      ...(project.versionSignals.spec ? { declared: project.versionSignals.spec } : {}),
+      ...(summary.unsupportedVersion ? { unsupported: summary.unsupportedVersion } : {}),
+    },
     language: (await isFile(join(root, 'tsconfig.json'))) ? 'typescript' : 'javascript',
     ...(packageManager ? { packageManager } : {}),
     nodeModules,

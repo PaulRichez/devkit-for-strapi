@@ -47,6 +47,7 @@ type Node = TreeNode &
   (
     | { kind: 'project'; root: string }
     | { kind: 'summary'; root: string; info: ProjectInfo }
+    | { kind: 'unsupported'; root: string; note: string }
     | { kind: 'group'; root: string; group: 'broken' | 'startup' | 'configSync' | 'unverified' | 'unused' | 'plugins' }
     | { kind: 'syncFile'; root: string; file: SyncFileEntry }
     | { kind: 'broken'; root: string; ref: BrokenRef & { didYouMean?: string } }
@@ -232,6 +233,7 @@ export class HealthProvider extends CachedTree<Node> {
     if (!r) return [];
     const out: Node[] = [];
     if (r.info) out.push({ kind: 'summary', id: `health|${root}|summary`, root, info: r.info });
+    if (r.info?.strapi.unsupported) out.push({ kind: 'unsupported', id: `health|${root}|unsupported`, root, note: r.info.strapi.unsupported });
     if (r.broken.length) out.push({ kind: 'group', id: `health|${root}|broken`, root, group: 'broken' });
     if (r.startup.length) out.push({ kind: 'group', id: `health|${root}|startup`, root, group: 'startup' });
     if (!r.broken.length && !r.startup.length) out.push({ kind: 'ok', id: `health|${root}|ok`, root });
@@ -255,6 +257,16 @@ export class HealthProvider extends CachedTree<Node> {
       }
       case 'summary':
         return this.summaryItem(n.id, n.info);
+      case 'unsupported': {
+        // "Strapi 6 isn't supported yet: DevKit reads this project as Strapi 5, …"
+        const [label, rest] = n.note.split(/: (.*)/s);
+        const item = new vscode.TreeItem(label ?? n.note, vscode.TreeItemCollapsibleState.None);
+        item.id = n.id;
+        if (rest) item.description = rest;
+        item.iconPath = new vscode.ThemeIcon('warning', new vscode.ThemeColor('problemsWarningIcon.foreground'));
+        item.tooltip = n.note;
+        return item;
+      }
       case 'ok': {
         const item = new vscode.TreeItem('No broken reference found', vscode.TreeItemCollapsibleState.None);
         item.id = n.id;

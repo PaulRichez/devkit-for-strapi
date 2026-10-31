@@ -7,6 +7,7 @@ import type { RuntimeErrorKind } from './types';
 
 const HINTS: Record<RuntimeErrorKind, string> = {
   'no-strapi': 'Install the project\'s dependencies (npm install, yarn or pnpm install), then retry.',
+  'unsupported-strapi': "DevKit runs config-sync through Strapi 4 and 5 only: this version isn't supported yet. Use config-sync's own CLI or admin page meanwhile.",
   'plugin-missing': 'Install strapi-plugin-config-sync and enable it in config/plugins, then retry.',
   'node-missing': 'Install Node, or set "strapiDevkit.runtime.nodePath" (DEVKIT_NODE for the MCP server) to the Node the project uses.',
   'native-module': 'Run with the Node the project was installed with ("strapiDevkit.runtime.nodePath" / DEVKIT_NODE), or reinstall the dependencies with this one.',

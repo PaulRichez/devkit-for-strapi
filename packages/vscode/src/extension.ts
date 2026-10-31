@@ -308,6 +308,7 @@ function updateStatus(engine: StrapiEngine, status: vscode.StatusBarItem, proble
   for (const p of projects) {
     const c = p.counts;
     md.appendMarkdown(`$(folder) **${paths.basename(p.root)}** — Strapi ${version(p)} · ${c.contentTypes} content-types · ${c.components} components${p.freshness.pluginsLoading ? ' · reading installed plugins…' : ''}\n\n`);
+    if (p.unsupportedVersion) md.appendMarkdown(`$(warning) ${p.unsupportedVersion}\n\n`);
   }
   md.appendMarkdown(problems ? `$(warning) ${problems} problem${problems === 1 ? '' : 's'} Strapi would hit (broken references, names it won't find)\n\n` : '$(pass) No broken reference found\n\n');
   md.appendMarkdown('[Open the panel](command:workbench.view.extension.strapiDevkit) · [Check the whole project](command:strapiDevkit.health.validateAll) · [Projects](command:strapiDevkit.showProjects) · [Rescan](command:strapiDevkit.rescan)');
