@@ -89,6 +89,12 @@
   settings, their OAuth client secrets included, which an export writes into
   config/sync and git.
 
+**A folder deleted at once is gone**
+
+- Deleting a folder in one go — an app, a content-type's folder — left DevKit with what
+  it held until a reload: the editor reports the folder alone, not the files inside.
+  The projects and definitions it held now go with it.
+
 **Out of the way where there is no Strapi**
 
 - In a workspace without a Strapi project, the extension no longer offers its MCP
