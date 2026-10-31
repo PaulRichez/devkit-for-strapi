@@ -215,7 +215,9 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
     if (!list.length) return undefined;
     if (!noPrompt) {
       const lines = list.map((e) => `${e.key} — ${e.state === 'only-in-sync-dir' ? 'file deleted (not in the database)' : e.state === 'only-in-db' ? 'file created' : 'file rewritten'}`);
-      const ok = await vscode.window.showWarningMessage(`Export ${list.length} entr${list.length === 1 ? 'y' : 'ies'} from the database into config/sync?`, { modal: true, detail: lines.join('\n') }, 'Export');
+      const dirty = unsavedSyncFiles(root, list.map((e) => e.key));
+      const kept = dirty.length ? `\n\nUnsaved changes in ${names(dirty)} aren't saved: the export changes the file on disk, and the editor keeps them unsaved.` : '';
+      const ok = await vscode.window.showWarningMessage(`Export ${list.length} entr${list.length === 1 ? 'y' : 'ies'} from the database into config/sync?`, { modal: true, detail: `${lines.join('\n')}${kept}` }, 'Export');
       if (ok !== 'Export') return undefined;
     }
     // With the states confirmed: an entry that changed since the comparison is left alone.
@@ -229,11 +231,20 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
 
   async import(root: string, entries: ConfigSyncDbEntry[], noPrompt = false): Promise<RuntimeResult<ConfigSyncWriteData> | undefined> {
     if (!entries.length || !(await this.allowed(root, noPrompt))) return undefined;
+    // The import reads the files on disk: what the editor holds unsaved is saved first.
+    const dirty = unsavedSyncFiles(root, entries.map((e) => e.key));
     if (!noPrompt) {
       const env = runtimeSettings().env ?? 'development';
       const lines = entries.map((e) => `${e.key} — ${e.state === 'only-in-db' ? 'DELETED from the database (no file)' : e.state === 'only-in-sync-dir' ? 'created in the database' : 'updated in the database'}`);
-      const ok = await vscode.window.showWarningMessage(`Import ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} into the ${env} database?`, { modal: true, detail: `${lines.join('\n')}\n\nAfterwards, the entries still different are exported back in the database's own form.` }, 'Import');
+      const saved = dirty.length ? `\n\nUnsaved changes in ${names(dirty)} are saved first.` : '';
+      const ok = await vscode.window.showWarningMessage(`Import ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} into the ${env} database?`, { modal: true, detail: `${lines.join('\n')}${saved}\n\nAfterwards, the entries still different are exported back in the database's own form.` }, 'Import');
       if (ok !== 'Import') return undefined;
+    }
+    for (const doc of dirty) {
+      if (!(await doc.save())) {
+        if (!noPrompt) void vscode.window.showErrorMessage(`DevKit for Strapi: ${paths.basename(doc.uri.fsPath)} couldn't be saved — nothing imported.`);
+        return undefined;
+      }
     }
     // With the states confirmed: an entry that changed since the comparison (its file deleted by a
     // checkout: the same import would delete it from the database) is left alone.
@@ -254,6 +265,14 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
     return s?.kind === 'done' ? s.result.data.entries : [];
   }
 }
+
+/** Open editors holding unsaved changes to these entries' sync files (a run reads and writes the files on disk). */
+export function unsavedSyncFiles(root: string, keys: readonly string[]): vscode.TextDocument[] {
+  const files = new Set(keys.map((k) => `${escapeName(k)}.json`));
+  return vscode.workspace.textDocuments.filter((d) => d.isDirty && d.uri.scheme === 'file' && files.has(paths.basename(paths.normalize(d.uri.fsPath))) && paths.isPathInside(root, d.uri.fsPath));
+}
+
+const names = (docs: vscode.TextDocument[]): string => docs.map((d) => paths.basename(paths.normalize(d.uri.fsPath))).join(', ');
 
 /** The outcome of an export or an import, with what the plugin or DevKit warned about. */
 function say(message: string, warnings: string[]): void {
@@ -296,19 +315,37 @@ export function registerConfigSyncDb(context: vscode.ExtensionContext, db: Confi
     }
     return uri.scheme === 'file' ? openedFiles.get(paths.normalize(uri.fsPath)) : undefined;
   };
-  const activeUri = (): vscode.Uri | undefined => {
+  /** The active editor's entry: only one DevKit opened (a plain editor or a Git diff of the same file isn't one). */
+  const active = (): OpenEntry | undefined => {
     const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
-    return input instanceof vscode.TabInputTextDiff ? input.modified : input instanceof vscode.TabInputText ? input.uri : undefined;
+    if (input instanceof vscode.TabInputTextDiff) return input.original.scheme === DB_SCHEME ? fromDbUri(input.original) : undefined;
+    if (!(input instanceof vscode.TabInputText)) return undefined;
+    return input.uri.scheme === DB_SCHEME ? fromDbUri(input.uri) : input.uri.scheme === 'file' ? openedFiles.get(paths.normalize(input.uri.fsPath)) : undefined;
   };
-  const active = (): OpenEntry | undefined => openEntry(activeUri());
-  const updateKey = (): void => setContext('strapiDevkit.configSyncEntryOpen', active() !== undefined);
+  const updateKey = (): void => {
+    // A file opened from the Database list counts while it stays open.
+    const open = new Set(vscode.window.tabGroups.all.flatMap((g) => g.tabs.flatMap((t) => (t.input instanceof vscode.TabInputText ? [paths.normalize(t.input.uri.fsPath)] : []))));
+    for (const file of openedFiles.keys()) if (!open.has(file)) openedFiles.delete(file);
+    setContext('strapiDevkit.configSyncEntryOpen', active() !== undefined);
+  };
 
   /** The entries a command acts on: tree nodes, or the entry of the editor whose title it was run from. */
-  const asEntries = (node: unknown, nodes?: unknown[]): { root: string; entries: ConfigSyncDbEntry[] } | undefined => {
+  const asEntries = async (node: unknown, nodes?: unknown[]): Promise<{ root: string; entries: ConfigSyncDbEntry[] } | undefined> => {
     if (node instanceof vscode.Uri) {
       const open = openEntry(node);
-      if (!open) return undefined;
-      const entry = db.entries(open.root).find((e) => e.key === open.key);
+      if (!open) {
+        void vscode.window.showInformationMessage('DevKit for Strapi: this editor holds no entry opened from the Config Sync view\'s Database list.');
+        return undefined;
+      }
+      const s = db.state(open.root);
+      if (s?.kind !== 'done') {
+        // A diff restored with the window, or a comparison running or failed: no state to act on.
+        if (!(await db.isLicensed())) await db.allowed(open.root);
+        else if (s?.kind === 'running') void vscode.window.showInformationMessage(`DevKit for Strapi: ${paths.basename(open.root)} — a run is in progress. Try again once it ends.`);
+        else if ((await vscode.window.showInformationMessage(`DevKit for Strapi: ${open.key} — compare config/sync with the database first: what to export or import comes from a comparison.`, 'Compare')) === 'Compare') await db.compare(open.root);
+        return undefined;
+      }
+      const entry = s.result.data.entries.find((e) => e.key === open.key);
       if (!entry) void vscode.window.showInformationMessage(`DevKit for Strapi: ${open.key} — config/sync and the database agreed at the last comparison. Compare again if it changed since.`);
       return entry ? { root: open.root, entries: [entry] } : undefined;
     }
@@ -330,13 +367,14 @@ export function registerConfigSyncDb(context: vscode.ExtensionContext, db: Confi
       const left = dbUri(root, entry.key, file.fsPath);
       if (entry.state === 'only-in-db') await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(left), { preview: true });
       else if (entry.state === 'only-in-sync-dir') {
-        openedFiles.set(paths.normalize(file.fsPath), { root: paths.normalize(root), key: entry.key });
         await vscode.window.showTextDocument(file, { preview: true });
+        // Once its tab is there: a tab change before it would drop it as closed.
+        openedFiles.set(paths.normalize(file.fsPath), { root: paths.normalize(root), key: entry.key });
       } else await vscode.commands.executeCommand('vscode.diff', left, file, `${entry.key}: database ↔ config/sync`, { preview: true });
       updateKey();
     }),
     vscode.commands.registerCommand('strapiDevkit.configSync.export', async (node?: unknown, nodes?: unknown[]) => {
-      const sel = asEntries(node, nodes);
+      const sel = await asEntries(node, nodes);
       if (sel) await db.export(sel.root, sel.entries);
     }),
     vscode.commands.registerCommand('strapiDevkit.configSync.exportAll', async (node?: unknown) => {
@@ -344,7 +382,7 @@ export function registerConfigSyncDb(context: vscode.ExtensionContext, db: Confi
       if (root) await db.export(root, undefined);
     }),
     vscode.commands.registerCommand('strapiDevkit.configSync.import', async (node?: unknown, nodes?: unknown[]) => {
-      const sel = asEntries(node, nodes);
+      const sel = await asEntries(node, nodes);
       if (sel) await db.import(sel.root, sel.entries);
     }),
     vscode.commands.registerCommand('strapiDevkit.configSync.importPick', async (node?: unknown) => {

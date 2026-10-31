@@ -95,7 +95,8 @@ and PostgreSQL) and on Strapi 4.26 with 1.2.6 (JavaScript, on SQLite).
 - **From the diff itself**: with an entry open — its diff, or the one side it has —
   the editor's title bar has the same **Export** and **Import** buttons, for that
   entry. Partial changes stay by hand: edit the file in the diff (the right side is
-  the real file), then import it.
+  the real file), then import it. The import reads the file on disk, so unsaved
+  changes to it are saved first.
 - **For your agent**: `config_sync_diff`, `config_sync_export`, `config_sync_import`.
   The loop: change the code, `config_sync_diff`, export the entries the change
   caused, commit them with the code. To change a role or a content-manager view:

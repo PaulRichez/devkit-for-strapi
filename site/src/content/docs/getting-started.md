@@ -22,7 +22,8 @@ Open a Strapi project and it works immediately.
 ## Verify it's active
 
 A status bar item appears at the **bottom-left** with your project's Strapi version
-(`Strapi 5.12`), or `DevKit: 2 projects` when the workspace holds several. If it
+(`Strapi 5.12`), or `DevKit: 2 projects` when the workspace holds several. It shows
+once the first scan of the workspace ends (a few seconds in a large monorepo). If it
 doesn't appear, the workspace has no recognizable Strapi project (or it's excluded —
 see [Configuration](/configuration/)): in such a workspace DevKit stays out of the
 status bar and doesn't offer its MCP server to your agent.

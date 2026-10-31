@@ -32,8 +32,8 @@ export interface DevkitExports {
   configSyncDb: ConfigSyncDb;
   /** The config-sync entry open in the active editor, which its title can export or import (tests). */
   configSyncEditorEntry: () => OpenEntry | undefined;
-  /** Whether the workspace got DevKit's presence: the MCP servers it offers, the status bar item shown (tests). */
-  presence: { mcpServers: () => Promise<number>; statusShown: () => boolean; ready: Promise<void> };
+  /** Whether the workspace got DevKit's presence: the MCP servers it offers, how often it told the editor to ask again, the status bar item shown (tests). */
+  presence: { mcpServers: () => Promise<number>; mcpRefreshes: () => number; statusShown: () => boolean; ready: Promise<void> };
 }
 
 function workspaceFolderPaths(): string[] {
@@ -52,7 +52,7 @@ function registerMcpServer(
   context: vscode.ExtensionContext,
   license: LicenseManager,
   hasProject: () => Promise<boolean>,
-): { refresh: () => void; definitions: () => Promise<vscode.McpServerDefinition[]> } {
+): { refresh: () => void; definitions: () => Promise<vscode.McpServerDefinition[]>; refreshes: () => number } {
   const definitions = async (): Promise<vscode.McpServerDefinition[]> => {
     if (!(await hasProject())) return [];
     // Forward the editor's licence key so the bundled MCP gates its Pro tools
@@ -63,8 +63,13 @@ function registerMcpServer(
     if (key) env.DEVKIT_LICENSE_KEY = key;
     return [new vscode.McpStdioServerDefinition('DevKit for Strapi', process.execPath, [context.asAbsolutePath('dist/mcp.js'), ...workspaceFolderPaths()], env)];
   };
-  if (typeof vscode.lm?.registerMcpServerDefinitionProvider !== 'function') return { refresh: () => undefined, definitions };
+  if (typeof vscode.lm?.registerMcpServerDefinitionProvider !== 'function') return { refresh: () => undefined, definitions, refreshes: () => 0 };
   const didChange = new vscode.EventEmitter<void>();
+  let refreshes = 0;
+  const refresh = (): void => {
+    refreshes++;
+    didChange.fire();
+  };
   context.subscriptions.push(
     didChange,
     vscode.lm.registerMcpServerDefinitionProvider('strapiDevkit.mcp', {
@@ -72,13 +77,13 @@ function registerMcpServer(
       provideMcpServerDefinitions: definitions,
     }),
     // Re-offer with the new folder set, or when the licence key changes.
-    vscode.workspace.onDidChangeWorkspaceFolders(() => didChange.fire()),
-    license.onDidChange(() => didChange.fire()),
+    vscode.workspace.onDidChangeWorkspaceFolders(refresh),
+    license.onDidChange(refresh),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('strapiDevkit.runtime') || e.affectsConfiguration('strapiDevkit.configSync')) didChange.fire();
+      if (e.affectsConfiguration('strapiDevkit.runtime') || e.affectsConfiguration('strapiDevkit.configSync')) refresh();
     }),
   );
-  return { refresh: () => didChange.fire(), definitions };
+  return { refresh, definitions, refreshes: () => refreshes };
 }
 
 export function activate(context: vscode.ExtensionContext): DevkitExports | undefined {
@@ -279,7 +284,7 @@ function activateImpl(context: vscode.ExtensionContext): DevkitExports | undefin
     views: { routes: routesView.provider, model: modelView.provider, health: healthView.provider, plugins: pluginsView.provider, configSync: configSyncView.provider },
     configSyncDb,
     configSyncEditorEntry,
-    presence: { mcpServers: async () => (await mcp.definitions()).length, statusShown: () => statusShown, ready },
+    presence: { mcpServers: async () => (await mcp.definitions()).length, mcpRefreshes: mcp.refreshes, statusShown: () => statusShown, ready },
   };
 }
 

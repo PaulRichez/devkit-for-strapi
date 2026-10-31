@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { paths } from 'devkit-for-strapi-core';
 import type { DevkitExports } from '../../extension';
-import { dbUri } from '../../views/configSyncDb';
+import { dbUri, unsavedSyncFiles } from '../../views/configSyncDb';
 
 // The DevKit panel on the `panel-app` fixture: routes with a pipeline (and a short
 // global policy Strapi won't find), incoming relations, an orphan component, a local plugin.
@@ -299,6 +299,23 @@ suite('DevKit panel', () => {
     assert.deepStrictEqual(open, { root: paths.normalize(ws), key: 'user-role.authenticated' });
     await vscode.window.showTextDocument(vscode.Uri.file(path.join(ws, 'package.json')));
     assert.strictEqual(exp.configSyncEditorEntry(), undefined);
+    // The same sync file in a plain editor is not the entry: its title has no buttons.
+    await vscode.window.showTextDocument(file, { preview: false });
+    assert.strictEqual(exp.configSyncEditorEntry(), undefined);
     await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+  });
+
+  test('config sync: unsaved changes to an entry\'s sync file are found (an import saves them first)', async () => {
+    const file = vscode.Uri.file(path.join(ws, 'config', 'sync', 'user-role.public.json'));
+    const editor = await vscode.window.showTextDocument(file);
+    assert.deepStrictEqual(unsavedSyncFiles(ws, ['user-role.public']), []);
+    await editor.edit((e) => e.insert(new vscode.Position(0, 0), ' '));
+    try {
+      assert.deepStrictEqual(unsavedSyncFiles(ws, ['user-role.public']).map((d) => d.uri.fsPath), [file.fsPath]);
+      assert.deepStrictEqual(unsavedSyncFiles(ws, ['user-role.authenticated']), []);
+    } finally {
+      await vscode.commands.executeCommand('workbench.action.files.revert');
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    }
   });
 });
