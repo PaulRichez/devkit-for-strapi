@@ -6,7 +6,7 @@
  *
  * An option DevKit cannot read for certain (`env(...)`, a spread, an unknown import)
  * is `unresolved` and the plugin default is assumed — said, never dressed up as a fact. Checked against config-sync 3.2.0
- * (`dist/server/index.js`: defaults, `syncDir` concatenated with file names).
+ * and 3.3.0 (`dist/server/index.js`: defaults, `syncDir` concatenated with file names).
  */
 
 import type { FileSystem } from '../fs/FileSystem';
@@ -73,20 +73,38 @@ export interface ConfigSyncDetection {
 }
 
 /**
- * The `excludedConfig` entries written in one form only, for a name with `:` or `/`:
- * config-sync tests the plain name (`::`) for its import, its export and the database
- * side, and the escaped one (`##`, as in the file names) when it reads the sync files.
+ * Whether this config-sync matches `excludedConfig` against the plain name (`::`)
+ * everywhere: from 3.3.0. Before (1.x included), its reading of the sync files tested
+ * the escaped name (`##`, as in the file names) and the rest the plain one. Undefined:
+ * no version to tell.
  */
-function oneFormOnly(excluded: readonly string[]): string[] {
+function plainNameEverywhere(version: string | undefined): boolean | undefined {
+  const m = version?.match(/^(\d+)\.(\d+)/);
+  if (!m) return undefined;
+  const maj = Number(m[1]);
+  return maj > 3 || (maj === 3 && Number(m[2]) >= 3);
+}
+
+/**
+ * The `excludedConfig` entries written in one form only, for a name with `:` or `/`, as
+ * the installed config-sync matches them: the plain name (`::`) for its import, its
+ * export and the database side, and before 3.3.0 the escaped one (`##`) when it reads
+ * the sync files.
+ */
+function oneFormOnly(excluded: readonly string[], version: string | undefined): string[] {
   const covered = (key: string): boolean => excluded.some((opt) => key.startsWith(opt));
+  const plainEverywhere = plainNameEverywhere(version);
   return excluded.flatMap((opt) => {
     if (/[#$]/.test(opt)) {
       const plain = unescapeName(opt);
-      return covered(plain) ? [] : [`excludedConfig \`${opt}\` is written as a file name: config-sync skips reading that file, but its import and export test the plain name, so they still handle the entry. Add \`${plain}\`.`];
+      if (covered(plain)) return [];
+      if (plainEverywhere) return [`excludedConfig \`${opt}\` is written as a file name: config-sync ${version} matches the plain name only, so it excludes nothing. Write \`${plain}\` instead.`];
+      if (plainEverywhere === false) return [`excludedConfig \`${opt}\` is written as a file name: config-sync skips reading that file, but its import and export test the plain name, so they still handle the entry. Add \`${plain}\`.`];
+      return [`excludedConfig \`${opt}\` is written as a file name: config-sync's import and export test the plain name (from 3.3.0, its reading of the files too). Add \`${plain}\`.`];
     }
-    if (/[:/]/.test(opt)) {
+    if (/[:/]/.test(opt) && plainEverywhere === false) {
       const file = escapeName(opt);
-      return covered(file) ? [] : [`excludedConfig \`${opt}\`: config-sync's import and export skip it, but the plugin reads the sync files by their escaped names, so the file stays in its diff. Add \`${file}\` to leave it out there too.`];
+      return covered(file) ? [] : [`excludedConfig \`${opt}\`: config-sync's import and export skip it, but the plugin reads the sync files by their escaped names, so the file stays in its diff. Add \`${file}\` to leave it out there too (config-sync 3.3.0 matches the plain name there as well).`];
     }
     return [];
   });
@@ -223,7 +241,6 @@ async function readOptions(
       options.sources[key] = 'config';
     }
   }
-  warnings.push(...oneFormOnly(options.excludedConfig));
   if (cfg.open) warnings.push('The config-sync options may hold keys DevKit cannot see (a spread or a computed key).');
   return { found: true, options, disabled, ...at };
 }
@@ -268,6 +285,8 @@ export async function detectConfigSync(fs: FileSystem, project: StrapiProject): 
   const versionMismatch = targetsStrapi !== undefined && targetsStrapi !== project.version;
   if (versionMismatch) warnings.push(`${CONFIG_SYNC_PACKAGE}@${installedVersion ?? declaredRange} is for Strapi ${targetsStrapi}; this project is Strapi ${project.version}.`);
   if (declaredRange && !installedVersion) warnings.push(`${CONFIG_SYNC_PACKAGE} is declared but not installed.`);
+  // How an excludedConfig entry matches depends on the installed version.
+  warnings.push(...oneFormOnly(options.excludedConfig, installedVersion));
   // The plugin writes `${syncDir}${type}.${name}.json`: without a trailing slash, syncDir prefixes file names.
   if (!options.syncDir.endsWith('/')) warnings.push(`syncDir "${options.syncDir}" has no trailing slash: the plugin prefixes the file names with it instead of using a folder.`);
   if (options.importOnBootstrap && !disabled) warnings.push(IMPORT_ON_BOOTSTRAP_WARNING);

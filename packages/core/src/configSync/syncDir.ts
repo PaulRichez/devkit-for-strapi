@@ -2,8 +2,11 @@
  * The sync directory (`config/sync/*.json`), read the way config-sync reads it
  * (`getAllConfigFromFiles`, 1.x and 3.x): `<type>.<name>.json`, the name stored with
  * `:` as `#` and `/` as `$`, the config key being `<type>.<name>` once unescaped. A
- * file that doesn't parse is treated as empty (the plugin warns and skips it). This
- * is the file side of the diff; the database side needs Strapi.
+ * file that doesn't parse, is empty or isn't a JSON object is `invalid`. config-sync
+ * before 3.3.0 reads one that doesn't parse as missing (an import of its entry deletes it
+ * from the database), as every version does one holding `null`; 3.3.0 lists one that
+ * doesn't parse as invalid and refuses to import it. This is the file side of the diff;
+ * the database side needs Strapi.
  */
 
 import { type FileSystem, FileType } from '../fs/FileSystem';
@@ -18,7 +21,7 @@ export type SyncFileStatus =
   | 'ok'
   | 'excluded' // matched by `excludedTypes` / `excludedConfig`: the plugin ignores it
   | 'unknown-type' // no such type registered (a plugin may register it at runtime)
-  | 'invalid'; // empty or not JSON: the plugin warns and skips it
+  | 'invalid'; // not JSON, empty, or not an object: no entry the plugin can use (see the module doc)
 
 export interface SyncFileEntry {
   /** `<type>.<name>`, unescaped: what the admin page lists. */
@@ -56,8 +59,8 @@ export const syncFileName = (type: string, name: string): string => `${type}.${e
  * Whether config-sync's import and export handle this entry: its type isn't excluded,
  * and `excludedConfig` doesn't match its key with the plain name, as they (and the
  * database side) test it (`core-store.plugin_content_manager_configuration_content_types::api::…`).
- * The plugin tests the escaped name (`##`) only when reading the sync files, for its
- * diff: `detectConfigSync` warns about an option written in one form only.
+ * Before 3.3.0 the plugin tested the escaped name (`##`) when reading the sync files, for
+ * its diff: `detectConfigSync` warns about an option that version would match differently.
  */
 export function isTracked(options: ConfigSyncOptions, type: string, name: string): boolean {
   if (options.excludedTypes.includes(type)) return false;

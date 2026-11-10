@@ -196,13 +196,14 @@ describe('config-sync, the variants', () => {
     expect((await detectConfigSync(covered.fs, covered.project))!.warnings.join(' ')).not.toContain('no longer');
   });
 
-  it('an entry is excluded as the import and the export test it (plain name); an option in one form only is said', async () => {
+  describe('an entry is excluded as the import and the export test it (plain name); an option the installed version matches in one place only is said', () => {
     const view = 'core-store.plugin_content_manager_configuration_content_types##api##article.article.json';
-    const withOptions = async (opts: string[]) => {
+    const withOptions = async (opts: string[], version?: string) => {
       const { fs, project } = await load(
         app(v5, {
           [`${ROOT}/config/plugins.js`]: `module.exports = { 'config-sync': { config: { excludedConfig: ${JSON.stringify(opts)} } } };`,
           [`${ROOT}/config/sync/${view}`]: '{"key":"x"}',
+          ...(version ? { [`${ROOT}/node_modules/strapi-plugin-config-sync/package.json`]: j({ name: 'strapi-plugin-config-sync', version }) } : {}),
         }),
       );
       const d = (await detectConfigSync(fs, project))!;
@@ -210,18 +211,38 @@ describe('config-sync, the variants', () => {
     };
     const plain = 'core-store.plugin_content_manager_configuration_content_types::api::article';
     const escaped = 'core-store.plugin_content_manager_configuration_content_types##api##article';
-    // `::`: the import and the export skip it — but the plugin still reads the file for its diff.
-    const p = await withOptions([plain]);
-    expect(p.status).toBe('excluded');
-    expect(p.warnings).toContain(`excludedConfig \`${plain}\`: config-sync's import and export skip it, but the plugin reads the sync files by their escaped names, so the file stays in its diff. Add \`${escaped}\``);
-    // `##`: only the reading of the file is skipped — the import and the export still handle it.
-    const e = await withOptions([escaped]);
-    expect(e.status).toBe('ok');
-    expect(e.warnings).toContain(`excludedConfig \`${escaped}\` is written as a file name: config-sync skips reading that file, but its import and export test the plain name, so they still handle the entry. Add \`${plain}\`.`);
-    // Both forms: excluded everywhere, nothing to say.
-    const both = await withOptions([plain, escaped]);
-    expect(both.status).toBe('excluded');
-    expect(both.warnings).not.toContain('excludedConfig `core-store.plugin_content');
+
+    it('before 3.3.0 (1.x too): the reading of the files tests the escaped name, the rest the plain one', async () => {
+      for (const version of ['3.2.0', '1.2.6']) {
+        // `::`: the import and the export skip it — but the plugin still reads the file for its diff.
+        const p = await withOptions([plain], version);
+        expect(p.status).toBe('excluded');
+        expect(p.warnings).toContain(`excludedConfig \`${plain}\`: config-sync's import and export skip it, but the plugin reads the sync files by their escaped names, so the file stays in its diff. Add \`${escaped}\` to leave it out there too (config-sync 3.3.0 matches the plain name there as well).`);
+        // `##`: only the reading of the file is skipped — the import and the export still handle it.
+        const e = await withOptions([escaped], version);
+        expect(e.status).toBe('ok');
+        expect(e.warnings).toContain(`excludedConfig \`${escaped}\` is written as a file name: config-sync skips reading that file, but its import and export test the plain name, so they still handle the entry. Add \`${plain}\`.`);
+        // Both forms: excluded everywhere, nothing to say.
+        const both = await withOptions([plain, escaped], version);
+        expect(both.status).toBe('excluded');
+        expect(both.warnings).not.toContain('excludedConfig `core-store.plugin_content');
+      }
+    });
+
+    it('from 3.3.0: the plain name everywhere — `::` is all it takes, `##` alone excludes nothing', async () => {
+      const p = await withOptions([plain], '3.3.0');
+      expect(p.status).toBe('excluded');
+      expect(p.warnings).not.toContain('excludedConfig `core-store.plugin_content');
+      const e = await withOptions([escaped], '3.3.0');
+      expect(e.status).toBe('ok');
+      expect(e.warnings).toContain(`excludedConfig \`${escaped}\` is written as a file name: config-sync 3.3.0 matches the plain name only, so it excludes nothing. Write \`${plain}\` instead.`);
+      expect((await withOptions([plain, escaped], '3.3.0')).warnings).not.toContain('excludedConfig `core-store.plugin_content');
+    });
+
+    it('not installed: only what is wrong whatever the version is said', async () => {
+      expect((await withOptions([plain])).warnings).not.toContain(`excludedConfig \`${plain}\``);
+      expect((await withOptions([escaped])).warnings).toContain(`excludedConfig \`${escaped}\` is written as a file name: config-sync's import and export test the plain name (from 3.3.0, its reading of the files too). Add \`${plain}\`.`);
+    });
   });
 
   it("says when it can't read the options, and assumes the plugin defaults", async () => {
