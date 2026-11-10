@@ -38,8 +38,9 @@ suite('No Strapi project in the workspace', () => {
       assert.strictEqual(await presence.mcpServers(), 1);
       assert.strictEqual(presence.statusShown(), true);
     } finally {
-      // The whole folder at once, as a user removes an app.
-      fs.rmSync(dir, { recursive: true, force: true });
+      // The whole folder at once, as a user removes an app. Windows can refuse the emptied
+      // folder for a moment (ENOTEMPTY while a watcher holds it): Node retries.
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
     const after = presence.mcpRefreshes();
     const gone = await until(() => presence.mcpRefreshes(), (n) => n > after);
