@@ -28,7 +28,12 @@ DevKit also warns about:
 - a plugin major that doesn't match the project's Strapi (config-sync 1.x is for
   Strapi 4, 2.x and 3.x for Strapi 5);
 - `config/env/<env>/plugins.*` files, which may change the options for that
-  environment (DevKit lists them, it doesn't merge them).
+  environment (DevKit lists them, it doesn't merge them);
+- an `excludedConfig` entry for a name with `:` or `/` that the installed version
+  doesn't match everywhere. Before 3.3.0, config-sync tested the name as written in
+  the file names (`##`) when reading the files, and the real name (`::`) everywhere
+  else: an entry needed both forms. From 3.3.0, the real name is all it takes, and
+  the `##` form alone excludes nothing.
 
 ## The files
 
@@ -38,7 +43,10 @@ Public", "Upload settings") and its status:
 - **ok**: config-sync reads it;
 - **excluded** by the options (`excludedTypes`, `excludedConfig`): the import and the
   export ignore it;
-- **invalid**: not valid JSON, or empty — config-sync can't read it;
+- **invalid**: not valid JSON, empty, or not a JSON object — no entry config-sync can
+  use. A file that isn't valid JSON is read as missing before 3.3.0, so importing its
+  entry deletes it from the database; 3.3.0 refuses to import it. A file holding
+  `null` is still read as missing by every version;
 - **unknown type**: no config type of that name is registered here (a plugin may
   register it when Strapi runs).
 
@@ -72,11 +80,15 @@ With Pro, DevKit asks **config-sync itself**: it loads your project's own Strapi
 way the plugin's CLI does — no server, no port, no admin account — and calls the
 plugin. The answers are the plugin's, whatever the versions of Strapi and config-sync.
 Checked on Strapi 5.54 with config-sync 3.2.0 (JavaScript and TypeScript, on SQLite
-and PostgreSQL) and on Strapi 4.26 with 1.2.6 (JavaScript, on SQLite).
+and PostgreSQL) and 3.3.0 (JavaScript, on SQLite), and on Strapi 4.26 with 1.2.6
+(JavaScript, on SQLite).
 
 - **Compare with the database**: the diff config-sync's admin page shows — each
   entry *different*, *only in the database* or *only in config/sync*, with what
-  differs in a few words. A click opens VS Code's diff editor: the database on the
+  differs in a few words. An invalid file (see [the files](#the-files)) is listed
+  apart, with what is wrong with it, whatever the plugin's version — config-sync may
+  read it as missing, and its import would then delete the entry. DevKit never imports
+  it, and an export replaces it with the database's entry only when you pick it. A click opens VS Code's diff editor: the database on the
   left, the file on the right. What a start of Strapi changes on its own is in it (a
   new field in a content-manager view, the super-admin's permissions…): after a
   change to a schema, a controller or a route, these are the entries to export.

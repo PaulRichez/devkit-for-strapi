@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+**config-sync 3.3.0**
+
+- **`excludedConfig` warnings follow the installed config-sync.** Before 3.3.0, an entry
+  for a name with `:` or `/` needed both forms (`::`, and `##` as in the file names);
+  from 3.3.0 the `::` form is all it takes, and a `##` entry alone excludes nothing:
+  DevKit now says what the installed version does.
+- **Pro: an invalid file is listed apart** in the comparison with the database
+  (*Invalid in config/sync*): not valid JSON, empty, or not a JSON object, with what is
+  wrong with it — whatever the plugin's version. config-sync may read such a file as
+  missing (before 3.3.0 for one that isn't valid JSON, in every version for one holding
+  `null`), and importing its entry then deletes it from the database. DevKit never
+  imports it, and replaces it with the database's entry only when you export it by name
+  (an "export everything" leaves it alone: it may be an edit in progress).
+  `config_sync_diff` gives it as `invalid-file`.
+
 **Links say where they come from**
 
 - The links to the DevKit site — from the extension's Pro messages and offer notice, the
