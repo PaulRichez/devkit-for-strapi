@@ -372,7 +372,7 @@ export class HealthProvider extends CachedTree<Node> {
       case 'startup':
         return ["Names Strapi won't find at startup", r?.startup.length ?? 0, 'warning', 'problemsErrorIcon.foreground', 'Policies and middlewares that exist, but not under the name Strapi looks up: Strapi throws at startup.'];
       case 'configSync':
-        return ['Unreadable config-sync files', r?.configSync.length ?? 0, 'sync', 'problemsErrorIcon.foreground', "Not valid JSON (or empty): config-sync can't read them. See the Config Sync view."];
+        return ['Unreadable config-sync files', r?.configSync.length ?? 0, 'sync', 'problemsErrorIcon.foreground', 'Not valid JSON, empty, or not a JSON object: no entry config-sync can use. See the Config Sync view.'];
       case 'unverified':
         return ['Refs DevKit cannot check', r?.info?.health.unverifiedPluginRefs ?? 0, 'question', 'descriptionForeground', 'Refs into plugins DevKit could not read completely: never reported as broken, never checked either.'];
       case 'unused':

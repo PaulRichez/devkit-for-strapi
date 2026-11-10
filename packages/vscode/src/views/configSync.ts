@@ -68,7 +68,7 @@ const GROUP_LABEL: Record<ConfigSyncGroup, string> = {
 export const STATUS_TEXT: Record<SyncFileEntry['status'], string> = {
   ok: 'Read by config-sync.',
   excluded: 'Excluded by the config-sync options: the import and the export ignore it.',
-  invalid: "Not valid JSON (or empty): config-sync can't read this file.",
+  invalid: 'Not valid JSON, empty, or not a JSON object: no entry config-sync can use.',
   'unknown-type': 'No config type of this name is registered here (a plugin may register it when Strapi runs).',
 };
 
@@ -88,10 +88,14 @@ type Node = TreeNode &
   );
 
 const DB_GROUP: Record<ConfigSyncDbState, string> = {
+  // First: no valid entry in these files — never imported (config-sync may read them as missing).
+  'invalid-file': 'Invalid in config/sync',
   different: 'Different',
   'only-in-db': 'Only in the database',
   'only-in-sync-dir': 'Only in config/sync',
 };
+
+const DB_ICON: Record<ConfigSyncDbState, string> = { 'invalid-file': 'error', different: 'diff-modified', 'only-in-db': 'diff-added', 'only-in-sync-dir': 'diff-removed' };
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
@@ -260,18 +264,22 @@ export class ConfigSyncProvider extends CachedTree<Node> {
       case 'dbGroup': {
         const item = new vscode.TreeItem(DB_GROUP[n.state], vscode.TreeItemCollapsibleState.Expanded);
         item.description = String(n.entries.length);
-        item.iconPath = new vscode.ThemeIcon(n.state === 'different' ? 'diff-modified' : n.state === 'only-in-db' ? 'diff-added' : 'diff-removed');
+        item.iconPath = new vscode.ThemeIcon(DB_ICON[n.state]);
         return item;
       }
       case 'dbEntry': {
         const e = n.entry;
         const item = new vscode.TreeItem(this.label(n.root, e.key), none);
         item.description = e.summary[0];
-        item.iconPath = new vscode.ThemeIcon(e.state === 'different' ? 'diff-modified' : e.state === 'only-in-db' ? 'diff-added' : 'diff-removed');
+        item.iconPath = new vscode.ThemeIcon(DB_ICON[e.state]);
         const md = markdown();
         md.appendMarkdown(`${code(e.key)}\n\n`);
         for (const line of e.summary) md.appendMarkdown(`- ${line}\n`);
-        md.appendMarkdown('\n_Click to compare: the database on the left, config/sync on the right._');
+        md.appendMarkdown(
+          e.state === 'invalid-file'
+            ? "\n_Never imported: fix the file, or export the database's entry over it. Click to open it._"
+            : '\n_Click to compare: the database on the left, config/sync on the right._',
+        );
         item.tooltip = md;
         item.command = { command: 'strapiDevkit.configSync.openDiff', title: 'Compare', arguments: [n.root, e, st.detection.syncDirPath] };
         item.contextValue = 'strapiConfigSyncDb.entry';

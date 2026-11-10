@@ -8,16 +8,19 @@ import type { RuntimeOptions, RuntimeResult } from '../runtime/types';
 const PRO_ONLY =
   'The DevKit for Strapi Pro engine (config-sync through your Strapi) is not included in the open-source build — get it at https://devkit-for-strapi.paulrichez.fr/pro/';
 
-export type ConfigSyncDbState = 'different' | 'only-in-db' | 'only-in-sync-dir';
+/** `invalid-file`: the file holds no valid entry — not JSON, empty (null), or not a JSON object. */
+export type ConfigSyncDbState = 'different' | 'only-in-db' | 'only-in-sync-dir' | 'invalid-file';
 
 export interface ConfigSyncDbEntry {
   /** `<type>.<name>`, as the admin page lists it. */
   key: string;
   state: ConfigSyncDbState;
-  /** The file's content as written (null: no file). */
+  /** The file's content as written (null: no file, or an invalid one). */
   file: unknown;
   /** The database side, as the plugin exports it (null: not in the database). */
   db: unknown;
+  /** `invalid-file`: what is wrong with the file (config-sync's own message when it gives one). */
+  invalid?: string;
   /** What differs, in a few words. */
   summary: string[];
   /** Every difference, one per line (an admin role's permissions can make it long). */

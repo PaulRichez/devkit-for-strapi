@@ -211,10 +211,27 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
 
   async export(root: string, entries: ConfigSyncDbEntry[] | undefined, noPrompt = false): Promise<RuntimeResult<ConfigSyncWriteData> | undefined> {
     if (!(await this.allowed(root, noPrompt))) return undefined;
-    const list = entries ?? (this.state(root)?.kind === 'done' ? (this.state(root) as Extract<DbState, { kind: 'done' }>).result.data.entries : []);
-    if (!list.length) return undefined;
+    // Every difference, but the invalid files: an edit in progress, replaced only when picked.
+    const list = entries ?? (this.state(root)?.kind === 'done' ? (this.state(root) as Extract<DbState, { kind: 'done' }>).result.data.entries.filter((e) => e.state !== 'invalid-file') : []);
+    if (!list.length) {
+      if (!entries && !noPrompt && this.entries(root).length) void vscode.window.showInformationMessage("DevKit for Strapi: the only differences are invalid files — export them one by one to replace them with the database's entries.");
+      return undefined;
+    }
     if (!noPrompt) {
-      const lines = list.map((e) => `${e.key} — ${e.state === 'only-in-sync-dir' ? 'file deleted (not in the database)' : e.state === 'only-in-db' ? 'file created' : 'file rewritten'}`);
+      const lines = list.map(
+        (e) =>
+          `${e.key} — ${
+            e.state === 'only-in-sync-dir'
+              ? 'file deleted (not in the database)'
+              : e.state === 'only-in-db'
+                ? 'file created'
+                : e.state === 'invalid-file'
+                  ? e.db === null
+                    ? 'not exported: nothing in the database to replace the invalid file with'
+                    : "invalid file replaced with the database's entry"
+                  : 'file rewritten'
+          }`,
+      );
       const dirty = unsavedSyncFiles(root, list.map((e) => e.key));
       const kept = dirty.length ? `\n\nUnsaved changes in ${names(dirty)} aren't saved: the export changes the file on disk, and the editor keeps them unsaved.` : '';
       const ok = await vscode.window.showWarningMessage(`Export ${list.length} entr${list.length === 1 ? 'y' : 'ies'} from the database into config/sync?`, { modal: true, detail: `${lines.join('\n')}${kept}` }, 'Export');
@@ -235,7 +252,18 @@ export class ConfigSyncDb implements vscode.TextDocumentContentProvider {
     const dirty = unsavedSyncFiles(root, entries.map((e) => e.key));
     if (!noPrompt) {
       const env = runtimeSettings().env ?? 'development';
-      const lines = entries.map((e) => `${e.key} — ${e.state === 'only-in-db' ? 'DELETED from the database (no file)' : e.state === 'only-in-sync-dir' ? 'created in the database' : 'updated in the database'}`);
+      const lines = entries.map(
+        (e) =>
+          `${e.key} — ${
+            e.state === 'only-in-db'
+              ? 'DELETED from the database (no file)'
+              : e.state === 'only-in-sync-dir'
+                ? 'created in the database'
+                : e.state === 'invalid-file'
+                  ? 'not imported: its file is invalid'
+                  : 'updated in the database'
+          }`,
+      );
       const saved = dirty.length ? `\n\nUnsaved changes in ${names(dirty)} are saved first.` : '';
       const ok = await vscode.window.showWarningMessage(`Import ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} into the ${env} database?`, { modal: true, detail: `${lines.join('\n')}${saved}\n\nAfterwards, the entries still different are exported back in the database's own form.` }, 'Import');
       if (ok !== 'Import') return undefined;
@@ -366,7 +394,8 @@ export function registerConfigSyncDb(context: vscode.ExtensionContext, db: Confi
       const file = vscode.Uri.file(paths.join(syncDir ?? paths.join(root, 'config/sync'), `${escapeName(entry.key)}.json`));
       const left = dbUri(root, entry.key, file.fsPath);
       if (entry.state === 'only-in-db') await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(left), { preview: true });
-      else if (entry.state === 'only-in-sync-dir') {
+      // An invalid file: next to the database's entry when there is one, alone otherwise — to fix it.
+      else if (entry.state === 'only-in-sync-dir' || (entry.state === 'invalid-file' && entry.db === null)) {
         await vscode.window.showTextDocument(file, { preview: true });
         // Once its tab is there: a tab change before it would drop it as closed.
         openedFiles.set(paths.normalize(file.fsPath), { root: paths.normalize(root), key: entry.key });

@@ -107,4 +107,39 @@ suite('Config Sync through Strapi (Pro, a real app)', () => {
     assert.deepStrictEqual(JSON.parse(readFileSync(view, 'utf8')), JSON.parse(before));
     assert.deepStrictEqual(ext.configSyncDb.entries(root), []);
   });
+
+  test('an invalid file: its own group, never imported, left out of an export of everything, replaced when picked', async function () {
+    const first = await compare();
+    if (first.kind === 'failed' && /not included in the open-source build/.test(first.failure.message)) this.skip();
+    const c = ext.views.configSync as AnyProvider;
+    const database = async (): Promise<unknown> => child(c, undefined, 'Database');
+    const role = syncFile('user-role.public.json');
+    const good = readFileSync(role, 'utf8');
+    const broken = '{ "name": "Public", ';
+    try {
+      writeFileSync(role, broken);
+      await compare();
+      const group = await child(c, await database(), 'Invalid in config/sync');
+      const node = await child(c, group, 'Role Public');
+      assert.match(String((c.getTreeItem(node) as vscode.TreeItem).description), /user-role\.public\.json'? is not valid JSON/);
+      const entry = ext.configSyncDb.entries(root).find((e) => e.key === 'user-role.public')!;
+      assert.strictEqual(entry.state, 'invalid-file');
+      // Never imported: config-sync before 3.3.0 would have deleted the role.
+      const imported = await ext.configSyncDb.import(root, [entry], true);
+      assert.ok(imported?.ok, JSON.stringify(imported));
+      assert.deepStrictEqual(imported.data.done, []);
+      assert.match(imported.warnings.join(' '), /Not imported: user-role\.public — the file is invalid/);
+      // An export of everything leaves it — nothing else differs, so nothing runs.
+      assert.strictEqual(await ext.configSyncDb.export(root, undefined, true), undefined);
+      assert.strictEqual(readFileSync(role, 'utf8'), broken);
+      // Picked: replaced with the database's entry, and the diff is empty.
+      const exported = await ext.configSyncDb.export(root, [ext.configSyncDb.entries(root).find((e) => e.key === 'user-role.public')!], true);
+      assert.ok(exported?.ok, JSON.stringify(exported));
+      assert.deepStrictEqual(exported.data.done, ['user-role.public']);
+      assert.deepStrictEqual(JSON.parse(readFileSync(role, 'utf8')), JSON.parse(good));
+      assert.deepStrictEqual(ext.configSyncDb.entries(root), []);
+    } finally {
+      writeFileSync(role, good);
+    }
+  });
 });

@@ -1011,7 +1011,7 @@ export function registerTools(
     'config_sync_diff',
     {
       title: 'config-sync: the real diff between config/sync and the database',
-      description: `The diff config-sync's admin page shows, from the real plugin: each entry that differs between config/sync and the database (\`different\`, \`only-in-db\`, \`only-in-sync-dir\`), what differs in a few words, and its \`likelyDirection\` (import | export | unknown) from the file's git history. It includes what a Strapi start changes by itself: after changing a schema, a controller or a route, export those entries and commit them with the code. ${RUNS_PROJECT} A few seconds.`,
+      description: `The diff config-sync's admin page shows, from the real plugin: each entry that differs between config/sync and the database (\`different\`, \`only-in-db\`, \`only-in-sync-dir\`, \`invalid-file\`: not JSON, empty or not an object), what differs in a few words, and its \`likelyDirection\` (import | export | unknown) from the file's git history. It includes what a Strapi start changes by itself: after changing a schema, a controller or a route, export those entries and commit them with the code. ${RUNS_PROJECT} A few seconds.`,
       inputSchema: {
         key: z.string().max(400).optional().describe('One entry, `<type>.<name>`: every difference, and both sides when they fit.'),
         type: z.string().max(200).optional().describe('Only one type (`admin-role`, `user-role`, `core-store`…).'),
@@ -1079,7 +1079,7 @@ export function registerTools(
     'config_sync_export',
     {
       title: 'config-sync: export entries from the database into config/sync',
-      description: `Write entries from the database into config/sync with the plugin's own export, in the exact form config-sync compares. Only entries that differ; one only in config/sync has its file deleted. Commit the files with the code that caused them. ${RUNS_PROJECT}`,
+      description: `Write entries from the database into config/sync with the plugin's own export, in the exact form config-sync compares. Only entries that differ; one only in config/sync has its file deleted; an \`invalid-file\` is replaced only when named. Commit the files with the code that caused them. ${RUNS_PROJECT}`,
       inputSchema: { keys: z.array(z.string().max(400)).max(500).optional().describe('The entries to export (default: every difference).'), env: envArg, ...selector },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
@@ -1090,7 +1090,7 @@ export function registerTools(
     'config_sync_import',
     {
       title: 'config-sync: import entries from config/sync into the database',
-      description: `Apply config/sync entries to the database with the plugin's own import (a role, a content-manager view, a setting). \`keys\` is required, never everything; an entry only in the database is deleted from it. The entries still different afterwards are exported back (\`reexport\`), so the diff converges. Refused with NODE_ENV=production. ${RUNS_PROJECT}`,
+      description: `Apply config/sync entries to the database with the plugin's own import (a role, a content-manager view, a setting). \`keys\` is required, never everything; an entry only in the database is deleted from it; an \`invalid-file\` is never imported. The entries still different afterwards are exported back (\`reexport\`), so the diff converges. Refused with NODE_ENV=production. ${RUNS_PROJECT}`,
       inputSchema: {
         keys: z.array(z.string().max(400)).min(1).max(500).describe('The entries to import, `<type>.<name>`.'),
         reexport: z.boolean().optional().describe('Export back the entries still different afterwards (default true).'),
